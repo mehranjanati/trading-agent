@@ -4,7 +4,7 @@ check: lint validate secrets
 lint:
 	@./scripts/check.sh
 validate:
-	@python3 scripts/validate-backlog.py
+	@node scripts/validate-backlog.mjs
 secrets:
 	@./scripts/secret-scan.sh
 dev:

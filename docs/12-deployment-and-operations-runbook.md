@@ -1,13 +1,24 @@
 # 12 — Deployment & Operations Runbook
 
-## Envs
-`dev` (testnet/paper) / `staging` / `prod` (paper-only until gate). Separate D1 DBs, separate Toobit keys, separate Redis. Prod deploys require approval + green gates.
+## 12.1 Environments (separate everything)
+| | dev | staging | prod (paper-only until gate) |
+|---|---|---|---|
+| D1 | `trading_dev` | `trading_stg` | `trading_prod` |
+| Toobit keys | testnet/paper | testnet | testnet until signed gate |
+| Redis | local/docker | Hetzner small | Hetzner prod |
+| Deploy | auto on PR merge | manual | manual + two-person + green P0 |
+Prod deploys blocked while kill switch engaged or P0 gates red.
 
-## Deploy
-- Go: systemd/docker on Hetzner, health-gated rollout, rollback to prior binary. Workers: `wrangler deploy` per env with D1 migrations preview. Dashboard: Pages.
+## 12.2 Deploy procedures
+- **Go (Hetzner):** build binary → health-gated rolling restart (systemd/docker) → `/readyz` 200 → announce. Rollback: previous binary + `recovery_log` entry, <5min.
+- **Workers:** `wrangler deploy --env <env>` after `d1 migrations apply --preview`; D1 migrate first, code second. Rollback: redeploy prior version (migrations forward-fix only).
+- **Dashboard:** Pages auto-deploy per env; verify badges on staging before prod.
 
-## Backup/rollback
-- D1: point-in-time per Cloudflare docs (record date); Redis RDB+AOF; configs versioned. Rollback: binary + migration forward-fix (no destructive down).
+## 12.3 Backup & restore
+D1 PITR per Cloudflare docs (record RPO proof quarterly); Redis RDB+AOF snapshots hourly; `strategy_configs` export per change. Restore drill quarterly (E12).
 
-## Incident
-1. Kill switch if risk. 2. Badge mode. 3. Triage per §06. 4. Reconcile unknowns. 5. Postmortem → `recovery_log` + ADR if needed.
+## 12.4 Incident response (1-2-3-4-5)
+1. Engage kill switch if any risk of unapproved/duplicate orders. 2. Set mode banner + open incident in `recovery_log`. 3. Triage per §06 playbooks. 4. Reconcile all non-terminal intents. 5. Postmortem within 48h → ADR update if design gap.
+
+## 12.5 Key rotation
+Rotate Toobit keys every 90d: create new → dual-run reconcile → revoke old → log. Approval-token secret rotation needs deploy + 10-min overlap (expiry window).

@@ -1,26 +1,46 @@
-# 04 — Data Model & Persistence (D1 canonical, Redis cache, DO coordination)
+# 04 — Data Model & Persistence (D1 canonical · Redis cache · DO coordination)
 
-## D1 tables (proposed, owner: Workers)
-- `watches(id TEXT PK, symbol, direction, trigger_json, invalidation_json, status, version, created_by, expires_at, created_at, updated_at)` idx(symbol,status).
-- `watch_transitions(id, watch_id FK, from_s, to_s, reason, actor, at)` idx(watch_id,at).
-- `signals(id PK, watch_id, kind, payload_json, source, at)` kinds: DIVERGENCE_TRIPLE|ORDER_BLOCK|OB_OS|MTF|REGIME.
-- `events(id PK `evt_<ulid>`, type, entity_id, payload_json, dedupe_key UNIQUE, at)` — append-only log.
-- `analysis_runs(id, watch_id, model, input_ref, output_json, confidence, at)`.
-- `approvals(id, watch_id, analysis_id, decision, reason, approver, single_use, expires_at, at)`.
-- `order_intents(id PK `intent_<ulid>`, watch_id, approval_id, side, qty, leverage, client_order_id UNIQUE, status, at)`.
-- `orders(client_order_id PK, exchange_order_id, status, fills_json, last_reconciled_at)` statuses per §05.
-- `positions(symbol PK, size, entry_px, leverage, updated_at)` snapshots from reconciled fills.
-- `outbox(id, aggregate, payload_json, claimed_by, attempts, next_retry, done)` transactional outbox.
-- `health_snapshots(id, component, status, detail_json, at)` + `recovery_log(id, incident, action, actor, at)`.
-- `strategy_configs(version PK, config_json, activated_by, at)` versioned.
+## 4.1 D1 DDL (E04-T01 implements; forward-only migrations)
+```sql
+CREATE TABLE watches(id TEXT PRIMARY KEY, symbol TEXT NOT NULL, direction TEXT NOT NULL,
+ trigger_json TEXT NOT NULL, invalidation_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'DRAFT',
+ version INTEGER NOT NULL DEFAULT 1, created_by TEXT NOT NULL, expires_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX idx_watches_sym_status ON watches(symbol,status);
+CREATE TABLE watch_transitions(id TEXT PRIMARY KEY, watch_id TEXT NOT NULL REFERENCES watches(id),
+ from_s TEXT, to_s TEXT NOT NULL, reason TEXT, actor TEXT, at TEXT NOT NULL);
+CREATE INDEX idx_trans_watch_at ON watch_transitions(watch_id,at);
+CREATE TABLE signals(id TEXT PRIMARY KEY, watch_id TEXT REFERENCES watches(id), kind TEXT NOT NULL,
+ payload_json TEXT NOT NULL, source TEXT NOT NULL, at TEXT NOT NULL);
+CREATE TABLE events(id TEXT PRIMARY KEY, type TEXT NOT NULL, entity_id TEXT NOT NULL,
+ payload_json TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, at TEXT NOT NULL);
+CREATE INDEX idx_events_entity ON events(entity_id,at);
+CREATE TABLE analysis_runs(id TEXT PRIMARY KEY, watch_id TEXT NOT NULL REFERENCES watches(id),
+ model TEXT NOT NULL, input_hash TEXT NOT NULL, output_json TEXT NOT NULL, confidence REAL, at TEXT NOT NULL);
+CREATE TABLE approvals(id TEXT PRIMARY KEY, watch_id TEXT NOT NULL, analysis_id TEXT NOT NULL,
+ decision TEXT NOT NULL, reason TEXT, approver TEXT NOT NULL, single_use INTEGER DEFAULT 1,
+ used_at TEXT, expires_at TEXT NOT NULL, at TEXT NOT NULL);
+CREATE TABLE order_intents(id TEXT PRIMARY KEY, watch_id TEXT NOT NULL, approval_id TEXT NOT NULL,
+ side TEXT NOT NULL, qty TEXT NOT NULL, leverage INTEGER NOT NULL, client_order_id TEXT NOT NULL UNIQUE,
+ status TEXT NOT NULL DEFAULT 'INTENT', at TEXT NOT NULL);
+CREATE TABLE orders(client_order_id TEXT PRIMARY KEY, exchange_order_id TEXT, status TEXT NOT NULL,
+ fills_json TEXT DEFAULT '[]', last_reconciled_at TEXT, at TEXT NOT NULL);
+CREATE TABLE positions(symbol TEXT PRIMARY KEY, size TEXT NOT NULL, entry_px TEXT, leverage INTEGER, updated_at TEXT NOT NULL);
+CREATE TABLE outbox(id TEXT PRIMARY KEY, aggregate TEXT NOT NULL, payload_json TEXT NOT NULL,
+ claimed_by TEXT, attempts INTEGER DEFAULT 0, next_retry TEXT, done INTEGER DEFAULT 0);
+CREATE TABLE health_snapshots(id TEXT PRIMARY KEY, component TEXT NOT NULL, status TEXT NOT NULL, detail_json TEXT, at TEXT NOT NULL);
+CREATE TABLE recovery_log(id TEXT PRIMARY KEY, incident TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL);
+CREATE TABLE strategy_configs(version TEXT PRIMARY KEY, config_json TEXT NOT NULL, activated_by TEXT NOT NULL, at TEXT NOT NULL);
+```
+Key relationships: watches 1—N transitions/signals/runs/intents; approvals 1—1 intents (single-use enforced by `used_at`); intents 1—1 orders by `client_order_id`.
 
-## Retention/migrations
-- Ticks: never in D1. Events/audit: retain ≥2y (or per policy). Positions snapshots 1y. Migrations: versioned SQL in `migrations/`, forward-only, tested rollback plan.
+## 4.2 Retention & migrations
+- Ticks: never in D1. Events/audit ≥2y; positions snapshots 1y; health 90d. Migrations `migrations/NNNN_*.sql`, forward-only, `wrangler d1 migrations apply` per env; failed migration → forward fix, never edit applied files.
 
-## Redis structures — see §03. TTL px 30s; watch cache no TTL (explicit invalidate). Streams MAXLEN ~100k.
+## 4.3 Redis structures (operational, recoverable)
+`px:{sym}` HASH TTL30s · `watch:active:{id}` HASH · Streams `events:*` MAXLEN 100k · `cg-workers` group · `hb:go:{id}` 15s TTL. Cold start: `GET /api/watches/active-snapshot` → repopulate → resume from last ack.
 
-## DO storage
-- `ExecutionAuthority`: `{holder, epoch, expires_at}`. Shards: `{cursor_stream_id, active_watch_ids}`. Fanout: ephemeral sockets only.
+## 4.4 DO storage
+`ExecutionAuthority`: `{holder, epoch, expires_at}` only. Shards: `{cursor, active_ids[]}`. Fanout: none durable. DO is coordination, not truth — D1 remains canonical.
 
-## Recovery data requirements
-- Go+Redis restart reloads active Watches from `GET /api/watches/active-snapshot` (D1 truth). Redis loss ≠ business loss; replay Streams from last acked ID where configured.
+## 4.5 Recovery data requirements (checklist)
+R-01 ACTIVE watches reloadable from D1. R-02 Stream resume from last ack. R-03 All non-terminal intents reconcilable by `client_order_id`. R-04 Lease re-acquirable with bumped epoch. R-05 Dashboard serves last-known + badges without D1 writes.

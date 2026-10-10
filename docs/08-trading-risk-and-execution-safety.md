@@ -1,17 +1,35 @@
-# 08 — Trading Risk & Execution Safety
+# 08 — Trading Risk & Execution Safety (normative — overrides all other docs on conflict)
 
-## Safety reqs (SAFE-001..)
-- SAFE-001 Fail closed on uncertain price/approval/state/order outcome.
-- SAFE-002 Human approval (single-use, expiring) before every new order in initial mode.
-- SAFE-003 Deterministic risk gates independent of AI: max leverage, max notional, max concurrent, allowlisted symbols, freshness, kill-switch off.
-- SAFE-004 Idempotent submit (`clientOrderId=intent_id`), reconcile-to-terminal, never blind retry.
-- SAFE-005 Kill switch halts new orders <5s.
-- SAFE-006 No withdrawals; trade-only keys.
-- SAFE-007 Paper/testnet validation required before any live enablement.
-- SAFE-008 No profitability guarantees from backtests.
+## 8.1 Safety requirements (SAFE-001..SAFE-010)
+- **SAFE-001 Fail closed:** uncertain price freshness, approval validity, durable state or order outcome → no new order, record reason, alert.
+- **SAFE-002 Human approval:** every new order in initial mode needs single-use, expiring (10m default, Q-05) human approval. No batch pre-approvals.
+- **SAFE-003 Deterministic gates:** risk runs in code with fixed limits; AI output is advisory input only and can never widen limits.
+- **SAFE-004 Idempotency:** `client_order_id = intent_id`; retries reuse it; duplicates rejected by UNIQUE constraint.
+- **SAFE-005 Reconcile-to-terminal:** every intent reaches `FILLED|REJECTED|CANCELLED|EXPIRED` via exchange truth; `SUBMIT_UNKNOWN` reconciles only.
+- **SAFE-006 Kill switch:** halts new orders <5s, logs actor+reason, survives restarts (persisted flag).
+- **SAFE-007 Paper/testnet proof:** ≥14-day paper run with zero unapproved orders before any live discussion.
+- **SAFE-008 No withdrawals:** trade-only keys; any withdrawal-scoped code is a P0 defect.
+- **SAFE-009 No profit guarantees:** backtests are not evidence of future returns; never displayed as such.
+- **SAFE-010 Separation of duties:** approver ≠ risk-config editor for the same order path.
 
-## Approval workflow
-Request → notify → approve/reject+reason → single-use token → risk → intent. Expiry default 10min.
+## 8.2 Risk gate table (codes are user-visible)
+| Code | Gate | Default | On reject |
+|---|---|---|---|
+| R-KILL | kill switch off | off=pass | halt + `kill.engaged` |
+| R-APPROVAL | approval valid+unused+unexpired | strict | 410/403 with reason |
+| R-SYM | symbol allowlisted | BTC/ETH/SOL allowlist (Q-03 sizes) | reject + suggest |
+| R-LEV | leverage ≤ max | 5x | reject with limit/asked |
+| R-NOT | notional ≤ max | $1,000/intent (tunable, Q) | reject |
+| R-EXP | total exposure ≤ cap | $5,000 | reject |
+| R-STALE | price age ≤ threshold | 5s | HOLD + refresh |
+| R-DUP | no live intent for same approval | strict | 409 |
+Limits live in versioned `strategy_configs`; changes need operator role + audit row.
 
-## Unknown outcome
-`SUBMIT_UNKNOWN` → poll `GET order` by clientOrderId with backoff → ACKED/FILLED/REJECTED; alert if >5min unresolved.
+## 8.3 Approval workflow (states)
+`requested → notified → granted|rejected → consumed|expired`. Grant creates token `{approval_id, watch_id, expires_at, nonce}`; consume sets `used_at` atomically (single flight wins, others 409).
+
+## 8.4 Unknown-outcome & duplicate prevention
+Timeout/no-response → `SUBMIT_UNKNOWN` → reconcile by `client_order_id` → terminal. Same approval can never mint two intents (UNIQUE on `approval_id` in intents where status != RISK_REJECTED). Same intent can never hit the exchange twice (client ID dedupe + lease epoch).
+
+## 8.5 Kill switch & exposure caps
+`POST /api/kill-switch {engaged, reason}` (operator+). Engaged persists in D1 + DO mirror; all submit paths check first. Release needs second human confirm + reason.

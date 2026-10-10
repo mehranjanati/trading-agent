@@ -1,53 +1,67 @@
-# 02 — System Architecture
+# 02 — System Architecture (context → containers → runtime → failures)
 
-## 2.1 Context (C4 L1)
+**Status:** APPROVED baseline | Diagrams: Mermaid, labelled. Conventions: `evt_<ulid>`, `intent_<ulid>`.
+
+## 2.1 System context (C4 L1)
 ```mermaid
 flowchart LR
-  TB[Toobit USDT-M Futures<br/>WS public + REST] <--> GO[Go Watcher<br/>Hetzner + Redis]
-  GO <--> CF[Cloudflare Control Plane<br/>Workers + D1 + DO]
-  CF <--> DASH[Dashboard<br/>Cloudflare Pages]
+  TB[Toobit USDT-M Futures<br/>public WS + signed REST] <--> GO[Go Watcher + Redis<br/>Hetzner persistent host]
+  GO <--> CF[Cloudflare Control Plane<br/>Workers + D1 + Durable Objects]
+  CF <--> DASH[SvelteKit Dashboard<br/>Cloudflare Pages]
   H[Human Trader] <--> CF
-  EXT[Signal System] --> CF
+  EXT[External Signal System] --> CF
 ```
-Primary path: Toobit WS → Go → Redis Streams → Workers → D1. Fallback: Workers → D1 Watches → REST poll.
+Primary flow (solid): Toobit WS → Go normalize → Redis Streams → Workers consumer → D1 (outbox) → analysis → approval → risk → submit → reconcile. Fallback flow (dashed in §2.5): Workers → D1 Watches → rate-limited REST poll.
 
-## 2.2 Containers (C4 L2) & responsibilities
-| Container | Owns | Must NOT |
-|---|---|---|
-| Go Watcher | WS conn, normalize, in-memory last price, trigger eval, heartbeat, outbox→Redis | Sole-holder of business state |
-| Redis | last-price cache, Watch cache, Streams buffer, consumer acks | Durable record (recoverable from D1) |
-| Workers | Control API, lifecycle, orchestration, risk, approval, recovery, dashboard API | Tick storage, unlimited WS |
-| D1 | Canonical Watches, signals, runs, approvals, intents, orders, positions, audit | Tick prices |
-| Durable Objects | leases, failover state, live fan-out, fallback coordination | Persistent WS |
+## 2.2 Containers (C4 L2) — responsibilities & hard boundaries
+| Container | Owns | Must NOT | Recovery |
+|---|---|---|---|
+| Go Watcher (Hetzner) | Outbound WS, normalize `{symbol,px,ts,src}`, in-memory last-px, trigger eval, heartbeat 5s, exp-backoff reconnect 1s→60s+jitter, stale detector, Fiber/plain HTTP `/healthz /readyz /watches/cache` (ops only) | Hold canonical business state, write D1 directly | Reload ACTIVE Watches from `GET /api/watches/active-snapshot` |
+| Redis | `px:{sym}` hashes (TTL 30s), `watch:active:{id}`, Streams `events:*` (MAXLEN ~100k, 24h), consumer group `cg-workers` with acks | Durable record | RDB+AOF; Streams replay from last ack |
+| Workers | Control API (§10), lifecycle, signal/analysis orchestration, approval, deterministic risk, execution+reconcile, recovery cron, dashboard BFF | Store ticks, hold WS | Stateless; state in D1 |
+| D1 | Canonical: watches, transitions, signals, events, runs, approvals, intents, orders, positions, outbox, health, recovery log, strategy versions (§04) | Tick prices | Point-in-time restore; forward-only migrations |
+| Durable Objects | `ExecutionAuthority` lease `{holder,epoch,expires}`; `WatchCoordinator-{shard}` fallback eval; `DashboardFanout` live push | Persistent WS, tick store | Lease state + shard cursors persisted |
+| Dashboard (SvelteKit) | 11 views + LIVE/STALE/CACHED/UNAVAILABLE badges, degraded banner, audit timelines | Submit orders directly (always via Workers) | Static Pages; works bannered when backend degraded |
 
-## 2.3 Trust boundaries
-T1 Internet→Go WS (public data only). T2 Go→Redis (VPC/private). T3 Workers→D1/DO (Cloudflare). T4 Human→Workers (auth). T5 Workers→Toobit REST (signed, IP-allowlisted, no-withdraw keys).
+## 2.3 Trust boundaries (T1..T5)
+- T1 Internet→Go: public market data only, no secrets, egress-allowlisted WS host.
+- T2 Go↔Redis: private VPC, no public bind, AUTH + TLS where available.
+- T3 Cloudflare internals: Workers→D1/DO via bindings (no public tokens).
+- T4 Human→Workers: OIDC/JWT + RBAC (trader/operator/admin), approval requires step-up confirm.
+- T5 Workers→Toobit REST: HMAC trade-only keys (no withdrawals), IP allowlist, per-key rate budget, signed `recvWindow=5000`.
 
-## 2.4 Data flow (happy path)
-1. Go normalizes tick → Redis `px:{sym}` + Stream `events:market`. 2. Watch trigger → Stream `events:watch` (stable ID `evt_<ulid>`). 3. Worker consumes, writes D1 `events`+`watch_transitions` (outbox). 4. Analysis run → approval request → risk check → intent → submit → reconcile.
+## 2.4 Happy-path data flow (numbered)
+1. Tick → Go normalize → `HSET px:{sym}` + `XADD events:market {evt_id, sym, px, ts}`.
+2. Trigger match → `XADD events:watch {type:watch.triggered_v1, ...}` with stable `evt_<ulid>`.
+3. Workers consumer (`cg-workers`) reads → D1 batch: `INSERT events + watch_transitions + outbox`.
+4. Analysis run row → approval request → human decision → single-use token.
+5. Risk gates (code) → intent row (`client_order_id=intent_id`) → signed submit → reconcile-to-terminal → position snapshot.
 
-## 2.5 Deployment diagram
+## 2.5 Deployment diagram (primary solid, fallback dashed)
 ```mermaid
 flowchart TB
-  subgraph Hetzner[Primary - Hetzner]
-    G[Go service] --- R[(Redis)]
+  subgraph HZ[Hetzner — primary]
+    G[Go service<br/>:8080 /healthz] --- R[(Redis<br/>cache + streams)]
   end
-  subgraph CF2[Cloudflare]
-    W[Workers] --- D[(D1)] --- O[Durable Objects]
+  subgraph CF[Cloudflare]
+    W[Workers<br/>control + reconcile cron] --- D[(D1<br/>canonical)] --- O[DOs<br/>lease + shards + fanout]
+    P[SvelteKit Pages] --- W
   end
+  TB[(Toobit<br/>WS + REST)] --> G
   G --> W
-  W -.fallback REST.-> TB[(Toobit)]
-  G --> TB
+  W -. fallback REST poll .-> TB
 ```
-Fallback path dashed; bannered degraded in dashboard.
 
-## 2.6 Failure boundaries & D1 limits
-- D1 unavailable → fail-closed for orders; serve cached reads bannered stale; queue writes via outbox retry, never invent state.
-- DO partitioning: one `ExecutionAuthority` DO (single lease) + sharded `WatchCoordinator-{N}` + `DashboardFanout`. Single global DO would bottleneck; partition by symbol-hash.
-- Unhealthy definition: missed 3 heartbeats (15s) OR Redis stream lag >30s OR price staleness > threshold. Lease expiry 30s, fencing token (monotonic `epoch`) required for execution authority.
-- Trigger during failover: refresh via REST first; if uncertain → hold + record `HELD_UNCERTAIN`, no order.
-- Unknown submit outcome: mark `SUBMIT_UNKNOWN`, poll reconcile with same `clientOrderId`, never resubmit blindly.
-- Dashboard availability ≠ execution availability (separate badges).
-- REST adequacy: NOT assumed; requires math (symbols × interval vs limits) in ADR-004.
+## 2.6 Failure boundaries & consistency limits
+- **D1 unavailable:** fail closed for orders; serve last-known reads bannered CACHED/STALE; queue mutations via outbox retry; pause reconcile submits, keep polling read-only.
+- **DO partitioning:** one global `ExecutionAuthority` (single lease, 30s TTL, 10s renew, monotonic `epoch` fencing) + N `WatchCoordinator-{shard}` by `hash(symbol) % N` + `DashboardFanout`. A single global coordinator would bottleneck — sharding is mandatory.
+- **Unhealthy definition (all recorded):** 3 missed Go heartbeats (15s) OR Redis stream lag >30s OR price staleness > per-symbol threshold. Workers cron (10s) evaluates and writes `health_snapshots` + `recovery_log`.
+- **Trigger during failover:** refresh symbol via REST first; if refresh fails or is stale → record `HELD_UNCERTAIN`, notify, no order (SAFE-001).
+- **Ack lost after submit:** mark `SUBMIT_UNKNOWN`, reconcile by `client_order_id` with backoff; never Blind-resubmit; alert if unresolved >5min.
+- **Reconciliation scope:** all intents in `SUBMITTED | SUBMIT_UNKNOWN | ACKED | PARTIAL` must be reconciled with Toobit on every recovery.
+- **Go+Redis restart:** must reload ACTIVE Watches from D1 snapshot; Redis loss alone is not business loss.
+- **Dashboard ≠ execution:** separate badges; dashboard may be green while execution is halted (kill switch) and vice versa.
+- **REST adequacy:** NOT assumed. Required math in ADR-004: `poll_interval ≥ symbols × reqs_per_symbol / rate_limit × 2`. Until proven, claim only "best-effort degraded quotes".
 
-## 2.7 Key sequences — see 05-events-and-state-machines.md for full diagrams.
+## 2.7 Interface to other docs
+Components §03 · Data §04 · Events/FSM §05 · Failover §06 · Security §07 · Risk §08 · APIs §10.

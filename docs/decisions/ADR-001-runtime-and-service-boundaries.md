@@ -1,18 +1,23 @@
 # ADR-001 — Runtime & Service Boundaries
 
-Status: PROPOSED | Date: 2026-10-10
+Status: ACCEPTED (2026-10-10) | Deciders: human + architect | Relates: §02, §03, E02/E03/E05
 
 ## Context
-Need persistent outbound Toobit WS + fast triggers + durable business state + dashboard.
+We need a persistent outbound connection to Toobit's public market WebSocket (24/7, auto-reconnect), sub-second trigger evaluation, a replayable event buffer, durable business state, and an incident-usable dashboard. No single runtime does all of this well: Workers/DOs must not be assumed to hold long-lived outbound sockets; a VPS-held database is an ops liability.
 
 ## Decision
-Go on Hetzner holds WS + Price Watcher; Redis caches + Streams; Workers/D1/DO own canonical state + coordination; Fiber (if used) only for Go HTTP control API, never the WS client (use nhooyr/gorilla).
+- **Go on a persistent Hetzner host** owns the outbound WS, normalization, in-memory last-price map, trigger evaluation, heartbeats and reconnect with bounded exponential backoff. Its HTTP surface (Fiber or stdlib per Q-02) is ops-only (`/healthz /readyz /watches/cache`).
+- **Redis (same host/VPC)** owns fast state: last-price cache, ACTIVE-watch cache, Streams buffer with consumer groups.
+- **Cloudflare Workers + D1 + Durable Objects** own canonical state, APIs, orchestration, leases and the dashboard BFF.
+- **Fiber, if used, is only the Go HTTP control API** — never the WS client (use `nhooyr.io/websocket` or `gorilla/websocket`).
 
-## Alternatives
-A: Workers-only WS — rejected (no durable outbound socket guarantee). B: Go holds business state — rejected (recovery risk). C: Python watcher — rejected (Go better for long-lived conn + ops simplicity).
+## Alternatives considered
+- A: Workers-only (no Go) — rejected: no durable outbound-WS guarantee; tick fan-in risk; VERIFY_REQUIRED against Cloudflare docs showed no basis for 24/7 socket hold.
+- B: Go holds business state (SQLite/Postgres on Hetzner) — rejected: split-brain with D1, backup burden, harder incident UX.
+- C: Python watcher — rejected: weaker long-lived-connection ergonomics and higher tail-latency variance for this team's ops profile.
 
 ## Consequences
-+ Clean failure boundaries; − two runtimes to operate.
++ Clear failure boundaries (Go/Redis can die without losing business truth). + Independent scaling (add shards/hosts). − Two runtimes to deploy/monitor (mitigated by §12 runbooks).
 
 ## Verification
-Heartbeat + reconnect tests in E02/E03; review vs Cloudflare docs (URL+date recorded).
+E02 24h soak + flap test; E03 replay determinism; review Cloudflare WS guidance with URL + date recorded in E02-T01 evidence.

@@ -1,0 +1,973 @@
+{
+  "version": "1.0.0",
+  "generated": "2026-10-10",
+  "project": "AI Trading Agent (Toobit USDT-M)",
+  "counts": {
+    "epics": 13,
+    "tasks": 21
+  },
+  "tasks": [
+    {
+      "id": "E00-T01",
+      "epic_id": "E00",
+      "title": "Repo layout, lint, CI, migrations harness",
+      "objective": "Establish conventions before code",
+      "scope": "Create go-watcher/,workers/,dashboard/,migrations/,Makefiles,CI",
+      "out_of_scope": "No feature code",
+      "priority": "P0",
+      "risk_level": "low",
+      "dependencies": [],
+      "affected_components": [
+        "repo",
+        "ci"
+      ],
+      "implementation_steps": [
+        "scaffold dirs",
+        "add lint",
+        "CI docs+JSON validate",
+        "migration runner skeleton"
+      ],
+      "acceptance_criteria": [
+        "Given fresh clone When make check Then lint+JSON validate pass"
+      ],
+      "test_plan": [
+        "CI run green"
+      ],
+      "documentation_references": [
+        "docs/13-development-guide.md"
+      ],
+      "model_assignment": {
+        "primary": "MiMo-V2.6-Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "S",
+      "status": "DONE",
+      "blocking_decisions": [],
+      "subtasks": [
+        "scaffold dirs",
+        "CI workflow",
+        "migration harness"
+      ],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E00-T02",
+      "epic_id": "E00",
+      "title": "Branching, PR template, commit rules",
+      "objective": "Enforce review quality",
+      "scope": "PR template w/ risk label, commit prefix E.., CODEOWNERS",
+      "out_of_scope": "No deploy",
+      "priority": "P0",
+      "risk_level": "low",
+      "dependencies": [
+        "E00-T01"
+      ],
+      "affected_components": [
+        "repo"
+      ],
+      "implementation_steps": [
+        "add templates",
+        "protect main (docs)",
+        "verify"
+      ],
+      "acceptance_criteria": [
+        "Given PR without tests When opened Then template requires tests section"
+      ],
+      "test_plan": [
+        "manual review"
+      ],
+      "documentation_references": [
+        "docs/13-development-guide.md"
+      ],
+      "model_assignment": {
+        "primary": "MiMo-V2.6-Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "S",
+      "status": "IN_REVIEW",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E01-T01",
+      "epic_id": "E01",
+      "title": "Env separation + secrets handling",
+      "objective": "No secrets in repo, per-env config",
+      "scope": "dev/staging/prod config map, secret-store wiring docs, sample.env",
+      "out_of_scope": "No real keys",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E00-T01"
+      ],
+      "affected_components": [
+        "workers",
+        "go",
+        "ops"
+      ],
+      "implementation_steps": [
+        "config schema",
+        "secret-store docs",
+        "sample files",
+        "secret-scan CI"
+      ],
+      "acceptance_criteria": [
+        "Given secret-scan When dummy key committed Then CI fails"
+      ],
+      "test_plan": [
+        "secret-scan job"
+      ],
+      "documentation_references": [
+        "docs/07-security-and-threat-model.md",
+        "docs/12-deployment-and-operations-runbook.md"
+      ],
+      "model_assignment": {
+        "primary": "MiMo-V2.6-Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "security"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E01-T02",
+      "epic_id": "E01",
+      "title": "AuthN/Z + Toobit key restrictions",
+      "objective": "RBAC + least-privilege keys",
+      "scope": "JWT/OIDC, roles trader/operator/admin, key policy no-withdraw+IP allowlist",
+      "out_of_scope": "No live keys",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E01-T01"
+      ],
+      "affected_components": [
+        "workers",
+        "exchange"
+      ],
+      "implementation_steps": [
+        "auth middleware spec",
+        "RBAC matrix",
+        "key policy doc"
+      ],
+      "acceptance_criteria": [
+        "Given trader role When calling admin endpoint Then 403"
+      ],
+      "test_plan": [
+        "authz matrix test"
+      ],
+      "documentation_references": [
+        "docs/07-security-and-threat-model.md"
+      ],
+      "model_assignment": {
+        "primary": "Muse Spark 1.3",
+        "reviewer": "GLM-5.3"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "security"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E02-T01",
+      "epic_id": "E02",
+      "title": "Verify Toobit WS/REST docs + record limits",
+      "objective": "Ground integration in official docs",
+      "scope": "Capture WS URL, channels, rate limits with source URL+date",
+      "out_of_scope": "No code yet",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": [
+        "E04-T01"
+      ],
+      "affected_components": [
+        "exchange"
+      ],
+      "implementation_steps": [
+        "fetch official docs",
+        "record limits",
+        "write ADR-004 math inputs"
+      ],
+      "acceptance_criteria": [
+        "Given official docs When reviewed Then URL+date recorded in ADR-004"
+      ],
+      "test_plan": [
+        "doc review"
+      ],
+      "documentation_references": [
+        "docs/decisions/ADR-004-market-data-fallback.md",
+        "docs/10-api-and-integration-contracts.md"
+      ],
+      "model_assignment": {
+        "primary": "MiMo-V2.6-Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "S",
+      "status": "BLOCKED",
+      "blocking_decisions": [
+        "A-01",
+        "A-02"
+      ],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "VERIFY_TOOBIT"
+      ]
+    },
+    {
+      "id": "E02-T02",
+      "epic_id": "E02",
+      "title": "Go WS connector + normalizer + soak",
+      "objective": "Reliable tick intake",
+      "scope": "dial/subscribe/reconnect backoff, normalize, metrics",
+      "out_of_scope": "No triggers",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": [
+        "E02-T01"
+      ],
+      "affected_components": [
+        "go-watcher"
+      ],
+      "implementation_steps": [
+        "implement client",
+        "normalize",
+        "backoff+jitter",
+        "soak 24h"
+      ],
+      "acceptance_criteria": [
+        "Given WS drop When reconnecting Then resubscribes with backoff and no panic"
+      ],
+      "test_plan": [
+        "flap test + soak"
+      ],
+      "documentation_references": [
+        "docs/03-components-and-responsibilities.md"
+      ],
+      "model_assignment": {
+        "primary": "DeepSeek V4.1 Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "L",
+      "status": "BLOCKED",
+      "blocking_decisions": [
+        "A-01"
+      ],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "VERIFY_TOOBIT"
+      ]
+    },
+    {
+      "id": "E03-T01",
+      "epic_id": "E03",
+      "title": "Price Watcher trigger eval + Redis Streams",
+      "objective": "Deterministic trigger events",
+      "scope": "in-memory px, trigger eval, XADD evt ids, consumer group",
+      "out_of_scope": "No D1 writes",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": [
+        "E02-T02"
+      ],
+      "affected_components": [
+        "go-watcher",
+        "redis"
+      ],
+      "implementation_steps": [
+        "trigger engine",
+        "streams emit",
+        "trim policy",
+        "heartbeat"
+      ],
+      "acceptance_criteria": [
+        "Given price crosses When watcher evals Then single evt_<ulid> in stream"
+      ],
+      "test_plan": [
+        "replay determinism test"
+      ],
+      "documentation_references": [
+        "docs/05-events-and-state-machines.md"
+      ],
+      "model_assignment": {
+        "primary": "DeepSeek V4.1 Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E03-T02",
+      "epic_id": "E03",
+      "title": "Stale detection + snapshot reload",
+      "objective": "Restart-safe cache",
+      "scope": "staleness detector, snapshot endpoint client, lag metrics",
+      "out_of_scope": "No business truth",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": [
+        "E03-T01",
+        "E04-T01"
+      ],
+      "affected_components": [
+        "go-watcher",
+        "redis"
+      ],
+      "implementation_steps": [
+        "stale detector",
+        "reload from snapshot",
+        "lag dashboard metric"
+      ],
+      "acceptance_criteria": [
+        "Given Redis flush When Go reboots Then active watch count matches D1"
+      ],
+      "test_plan": [
+        "restart test"
+      ],
+      "documentation_references": [
+        "docs/06-failover-and-recovery.md"
+      ],
+      "model_assignment": {
+        "primary": "DeepSeek V4.1 Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E04-T01",
+      "epic_id": "E04",
+      "title": "D1 schema + migrations + outbox relay",
+      "objective": "Canonical persistence RPO-zero",
+      "scope": "all tables per \u00a704, forward-only migrations, outbox relay",
+      "out_of_scope": "No ticks",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E01-T01"
+      ],
+      "affected_components": [
+        "d1",
+        "workers"
+      ],
+      "implementation_steps": [
+        "write migrations",
+        "dedupe constraints",
+        "outbox relay",
+        "retention doc"
+      ],
+      "acceptance_criteria": [
+        "Given duplicate dedupe_key When inserted Then rejected exactly once"
+      ],
+      "test_plan": [
+        "migration up/down test, dedupe test"
+      ],
+      "documentation_references": [
+        "docs/04-data-model-and-persistence.md"
+      ],
+      "model_assignment": {
+        "primary": "DeepSeek V4.1 Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "L",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E04-T02",
+      "epic_id": "E04",
+      "title": "Watch/signal/event repos + audit trail",
+      "objective": "Complete audit coverage",
+      "scope": "CRUD + transitions + signals + events append",
+      "out_of_scope": "No WS",
+      "priority": "P0",
+      "risk_level": "medium",
+      "dependencies": [
+        "E04-T01"
+      ],
+      "affected_components": [
+        "d1"
+      ],
+      "implementation_steps": [
+        "repos",
+        "transition guards",
+        "audit query"
+      ],
+      "acceptance_criteria": [
+        "Given ACTIVE watch When trigger stored Then transition row exists"
+      ],
+      "test_plan": [
+        "integration test"
+      ],
+      "documentation_references": [
+        "docs/04-data-model-and-persistence.md",
+        "docs/05-events-and-state-machines.md"
+      ],
+      "model_assignment": {
+        "primary": "DeepSeek V4.1 Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E05-T01",
+      "epic_id": "E05",
+      "title": "Control API CRUD + contracts",
+      "objective": "Lifecycle API per \u00a710",
+      "scope": "watches/signals/analysis/approvals/health endpoints, error envelope",
+      "out_of_scope": "No execution",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": [
+        "E04-T02"
+      ],
+      "affected_components": [
+        "workers"
+      ],
+      "implementation_steps": [
+        "implement routes",
+        "auth",
+        "idempotency",
+        "contract tests"
+      ],
+      "acceptance_criteria": [
+        "Given duplicate POST with same Idempotency-Key When sent Then single resource"
+      ],
+      "test_plan": [
+        "contract snapshot tests"
+      ],
+      "documentation_references": [
+        "docs/10-api-and-integration-contracts.md"
+      ],
+      "model_assignment": {
+        "primary": "DeepSeek V4.1 Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "L",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E05-T02",
+      "epic_id": "E05",
+      "title": "DO ExecutionAuthority + sharded coordinators + fanout",
+      "objective": "Single submitter + fallback eval",
+      "scope": "lease acquire/renew/epoch, shard by symbol hash, fanout",
+      "out_of_scope": "No tick store",
+      "priority": "P1",
+      "risk_level": "high",
+      "dependencies": [
+        "E05-T01"
+      ],
+      "affected_components": [
+        "durable-objects"
+      ],
+      "implementation_steps": [
+        "lease DO",
+        "shard coordinators",
+        "fanout",
+        "partition test"
+      ],
+      "acceptance_criteria": [
+        "Given two claimants When racing Then one fenced by epoch"
+      ],
+      "test_plan": [
+        "split-brain unit test"
+      ],
+      "documentation_references": [
+        "docs/02-system-architecture.md",
+        "docs/06-failover-and-recovery.md"
+      ],
+      "model_assignment": {
+        "primary": "Muse Spark 1.3",
+        "reviewer": "GLM-5.3"
+      },
+      "estimated_complexity": "L",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E06-T01",
+      "epic_id": "E06",
+      "title": "Health monitor + degradation state",
+      "objective": "Detect Go/Redis loss in 15s",
+      "scope": "cron checks, health_snapshots, incident log, mode badge",
+      "out_of_scope": "No auto-recovery of funds",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E05-T02"
+      ],
+      "affected_components": [
+        "workers",
+        "d1"
+      ],
+      "implementation_steps": [
+        "cron",
+        "thresholds",
+        "incident rows"
+      ],
+      "acceptance_criteria": [
+        "Given 3 missed heartbeats When cron runs Then incident + DEGRADED badge"
+      ],
+      "test_plan": [
+        "heartbeat-loss test"
+      ],
+      "documentation_references": [
+        "docs/06-failover-and-recovery.md"
+      ],
+      "model_assignment": {
+        "primary": "GLM-5.3",
+        "reviewer": "Qwen3.8 Max"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "trading-safety"
+      ],
+      "verify_tags": [
+        "VERIFY_TOOBIT"
+      ]
+    },
+    {
+      "id": "E06-T02",
+      "epic_id": "E06",
+      "title": "Failover drills: Go/Redis/both + return-to-primary",
+      "objective": "Prove safe recovery, no dup orders",
+      "scope": "fallback REST poll, lease handoff, reconcile unknowns, rejoin",
+      "out_of_scope": "No live orders",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E06-T01"
+      ],
+      "affected_components": [
+        "workers",
+        "go-watcher",
+        "redis"
+      ],
+      "implementation_steps": [
+        "drill scripts",
+        "handoff",
+        "reconcile check",
+        "runbook"
+      ],
+      "acceptance_criteria": [
+        "Given Go+Redis dead When drill runs Then watches restored and zero duplicate intents"
+      ],
+      "test_plan": [
+        "failure-injection suite"
+      ],
+      "documentation_references": [
+        "docs/06-failover-and-recovery.md"
+      ],
+      "model_assignment": {
+        "primary": "GLM-5.3",
+        "reviewer": "Qwen3.8 Max"
+      },
+      "estimated_complexity": "XL",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "trading-safety"
+      ],
+      "verify_tags": [
+        "VERIFY_TOOBIT"
+      ]
+    },
+    {
+      "id": "E07-T01",
+      "epic_id": "E07",
+      "title": "Signal ingestion (5 kinds) + strategy config versions",
+      "objective": "Versioned strategy inputs",
+      "scope": "ingest endpoint, schema per kind, config version table",
+      "out_of_scope": "No auto-trade",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": [
+        "E05-T01"
+      ],
+      "affected_components": [
+        "workers",
+        "d1"
+      ],
+      "implementation_steps": [
+        "schemas",
+        "ingest",
+        "versioning"
+      ],
+      "acceptance_criteria": [
+        "Given v2 config When activated Then runs reference v2"
+      ],
+      "test_plan": [
+        "schema validation tests"
+      ],
+      "documentation_references": [
+        "docs/03-components-and-responsibilities.md"
+      ],
+      "model_assignment": {
+        "primary": "Muse Spark 1.3",
+        "reviewer": "GLM-5.3-Flash"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E08-T01",
+      "epic_id": "E08",
+      "title": "Deterministic risk engine gates",
+      "objective": "AI never overrides risk",
+      "scope": "leverage/notional/concurrent/allowlist/freshness/killswitch gates with codes",
+      "out_of_scope": "No AI logic",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E06-T01"
+      ],
+      "affected_components": [
+        "workers"
+      ],
+      "implementation_steps": [
+        "gate impl",
+        "unit matrix",
+        "reason codes"
+      ],
+      "acceptance_criteria": [
+        "Given over-leverage intent When validated Then REJECT with code R-LEV"
+      ],
+      "test_plan": [
+        "100% reject-path coverage"
+      ],
+      "documentation_references": [
+        "docs/08-trading-risk-and-execution-safety.md"
+      ],
+      "model_assignment": {
+        "primary": "GLM-5.3",
+        "reviewer": "Qwen3.8 Max"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "trading-safety"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E08-T02",
+      "epic_id": "E08",
+      "title": "Human approval center workflow",
+      "objective": "Single-use expiring approvals",
+      "scope": "request/notify/approve-reject, expiry 10m, one-time token",
+      "out_of_scope": "No auto-approve",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E08-T01"
+      ],
+      "affected_components": [
+        "workers",
+        "d1",
+        "dashboard"
+      ],
+      "implementation_steps": [
+        "approval API",
+        "expiry sweeper",
+        "audit"
+      ],
+      "acceptance_criteria": [
+        "Given expired approval When used Then 410 GONE and no intent"
+      ],
+      "test_plan": [
+        "expiry + replay tests"
+      ],
+      "documentation_references": [
+        "docs/08-trading-risk-and-execution-safety.md"
+      ],
+      "model_assignment": {
+        "primary": "Muse Spark 1.3",
+        "reviewer": "Qwen3.8 Max"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "trading-safety"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E09-T01",
+      "epic_id": "E09",
+      "title": "Idempotent submit + reconcile-to-terminal (testnet)",
+      "objective": "No blind retry, no dup orders",
+      "scope": "clientOrderId=intent, SUBMIT_UNKNOWN handling, poll loop",
+      "out_of_scope": "No live trading",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E08-T02"
+      ],
+      "affected_components": [
+        "workers",
+        "exchange"
+      ],
+      "implementation_steps": [
+        "submit",
+        "reconcile",
+        "killswitch hook"
+      ],
+      "acceptance_criteria": [
+        "Given ack lost When reconciling Then exactly one exchange order exists"
+      ],
+      "test_plan": [
+        "ack-loss drill on testnet"
+      ],
+      "documentation_references": [
+        "docs/08-trading-risk-and-execution-safety.md"
+      ],
+      "model_assignment": {
+        "primary": "GLM-5.3",
+        "reviewer": "Qwen3.8 Max"
+      },
+      "estimated_complexity": "L",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "trading-safety"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E10-T01",
+      "epic_id": "E10",
+      "title": "Dashboard 11 views + freshness badges",
+      "objective": "Useful during incidents",
+      "scope": "SvelteKit decision (Q-01), routes, LIVE/STALE/CACHED/UNAVAILABLE, timelines",
+      "out_of_scope": "No trade execution UI beyond approve",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": [
+        "E05-T01"
+      ],
+      "affected_components": [
+        "dashboard"
+      ],
+      "implementation_steps": [
+        "frontend scaffold",
+        "API hooks",
+        "badges",
+        "timelines"
+      ],
+      "acceptance_criteria": [
+        "Given fallback mode When viewing Then banner + stale badges shown"
+      ],
+      "test_plan": [
+        "degraded-UX test"
+      ],
+      "documentation_references": [
+        "docs/09-dashboard-and-observability.md"
+      ],
+      "model_assignment": {
+        "primary": "Muse Spark 1.3",
+        "reviewer": "GLM-5.3-Flash"
+      },
+      "estimated_complexity": "L",
+      "status": "BLOCKED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E11-T01",
+      "epic_id": "E11",
+      "title": "Full test suites + 14d paper-trading gate",
+      "objective": "Evidence before any live talk",
+      "scope": "unit/integration/contract/replay/load/security/recovery suites + paper report",
+      "out_of_scope": "No live enable",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E09-T01",
+        "E10-T01",
+        "E12-T01"
+      ],
+      "affected_components": [
+        "all"
+      ],
+      "implementation_steps": [
+        "suites",
+        "paper run",
+        "gate report"
+      ],
+      "acceptance_criteria": [
+        "Given 14d paper When complete Then zero unapproved orders and report filed"
+      ],
+      "test_plan": [
+        "gate checklist"
+      ],
+      "documentation_references": [
+        "docs/11-testing-and-validation-strategy.md"
+      ],
+      "model_assignment": {
+        "primary": "Qwen3.8 Max",
+        "reviewer": "human"
+      },
+      "estimated_complexity": "XL",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    },
+    {
+      "id": "E12-T01",
+      "epic_id": "E12",
+      "title": "Envs, deploy, monitoring, runbooks",
+      "objective": "Operable + rollback-safe",
+      "scope": "wrangler envs, Hetzner rollout, alerts, backup, incident drill",
+      "out_of_scope": "No live trade",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": [
+        "E05-T01"
+      ],
+      "affected_components": [
+        "ops"
+      ],
+      "implementation_steps": [
+        "env configs",
+        "deploy scripts",
+        "alerts",
+        "runbook drill"
+      ],
+      "acceptance_criteria": [
+        "Given failed deploy When rolled back Then health green in 5min"
+      ],
+      "test_plan": [
+        "rollback drill"
+      ],
+      "documentation_references": [
+        "docs/12-deployment-and-operations-runbook.md"
+      ],
+      "model_assignment": {
+        "primary": "DeepSeek V4.1 Flash",
+        "reviewer": "Muse Spark 1.3"
+      },
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "subtasks": [],
+      "safety_tags": [
+        "none"
+      ],
+      "verify_tags": [
+        "none"
+      ]
+    }
+  ]
+}

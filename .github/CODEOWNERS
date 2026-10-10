@@ -1,0 +1,8 @@
+# E00-T02 — review routing
+/docs/08* @human-reviewer
+/docs/06* @human-reviewer
+/workers/src/*risk* @human-reviewer
+/workers/src/*execution* @human-reviewer
+/workers/src/*approval* @human-reviewer
+/migrations/ @human-reviewer
+* @human-reviewer

@@ -1,0 +1,4 @@
+name = "trading-agent-control"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+# D1 + DO bindings land in E04/E05. No bindings committed here.

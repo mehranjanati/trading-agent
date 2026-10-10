@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "event-envelope-v1",
+  "type": "object",
+  "required": ["id", "type", "v", "entity_id", "ts", "dedupe_key", "payload"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^evt_" },
+    "type": { "type": "string" },
+    "v": { "const": 1 },
+    "entity_id": { "type": "string" },
+    "ts": { "type": "string" },
+    "dedupe_key": { "type": "string" },
+    "payload": { "type": "object" }
+  }
+}

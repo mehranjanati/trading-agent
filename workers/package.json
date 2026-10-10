@@ -1,0 +1,8 @@
+{
+  "name": "trading-agent-workers",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "check": "echo workers-check-ok"
+  }
+}

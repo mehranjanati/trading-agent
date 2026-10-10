@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.build/
+.svelte-kit/
+*.local
+coverage/
+bin/
+*.log
+.DS_Store
+wrangler/.cache
+.dev.vars

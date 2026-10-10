@@ -1,4 +1,14 @@
 name = "trading-agent-control"
-main = "src/index.ts"
+main = "src/index.mjs"
 compatibility_date = "2026-10-01"
-# D1 + DO bindings land in E04/E05. No bindings committed here.
+
+# E05-T01: D1 binding (per-env database_id set at deploy; local uses --local).
+[[d1_databases]]
+binding = "DB"
+database_name = "trading_dev"
+database_id = "local-dev-placeholder"
+
+[vars]
+ENV = "dev"
+HUMAN_APPROVAL_REQUIRED = "true"
+

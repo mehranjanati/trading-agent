@@ -1,8 +1,11 @@
 {
   "name": "trading-agent-workers",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "check": "echo workers-check-ok"
+    "check": "node --test src/*.test.mjs",
+    "dev": "wrangler dev --local"
   }
 }
+

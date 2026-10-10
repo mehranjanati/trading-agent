@@ -237,7 +237,7 @@
         "reviewer": "GLM-5.3"
       },
       "estimated_complexity": "M",
-      "status": "PROPOSED",
+      "status": "DONE",
       "blocking_decisions": [],
       "safety_tags": [
         "security"

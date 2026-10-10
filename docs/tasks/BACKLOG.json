@@ -1,19 +1,21 @@
 {
-  "version": "1.0.0",
+  "version": "2.0.0",
   "generated": "2026-10-10",
   "project": "AI Trading Agent (Toobit USDT-M)",
+  "stack": "TypeScript + Go only (no Python)",
   "counts": {
     "epics": 13,
-    "tasks": 21
+    "tasks": 21,
+    "subtasks": 54
   },
   "tasks": [
     {
       "id": "E00-T01",
       "epic_id": "E00",
       "title": "Repo layout, lint, CI, migrations harness",
-      "objective": "Establish conventions before code",
-      "scope": "Create go-watcher/,workers/,dashboard/,migrations/,Makefiles,CI",
-      "out_of_scope": "No feature code",
+      "objective": "Green CI before any feature code.",
+      "scope": "Dirs, skeletons, scripts (Node-only), CI, schema placeholder.",
+      "out_of_scope": "No feature logic.",
       "priority": "P0",
       "risk_level": "low",
       "dependencies": [],
@@ -22,16 +24,16 @@
         "ci"
       ],
       "implementation_steps": [
-        "scaffold dirs",
-        "add lint",
-        "CI docs+JSON validate",
-        "migration runner skeleton"
+        "Scaffold dirs",
+        "Add scripts",
+        "Add CI",
+        "Add placeholders"
       ],
       "acceptance_criteria": [
-        "Given fresh clone When make check Then lint+JSON validate pass"
+        "Given fresh clone When make check runs Then lint+validate+scan pass"
       ],
       "test_plan": [
-        "CI run green"
+        "CI green"
       ],
       "documentation_references": [
         "docs/13-development-guide.md"
@@ -43,25 +45,40 @@
       "estimated_complexity": "S",
       "status": "DONE",
       "blocking_decisions": [],
-      "subtasks": [
-        "scaffold dirs",
-        "CI workflow",
-        "migration harness"
-      ],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E00-T01-S1",
+          "title": "Scaffold dirs+skeletons",
+          "output": "6 dirs + skeleton files",
+          "acceptance": "Given clone When listing Then dirs exist"
+        },
+        {
+          "id": "E00-T01-S2",
+          "title": "Node-only scripts",
+          "output": "check.sh, secret-scan.sh, validate-backlog.mjs",
+          "acceptance": "Given BACKLOG When validator runs Then exit 0"
+        },
+        {
+          "id": "E00-T01-S3",
+          "title": "CI workflow",
+          "output": "ci.yml on setup-node",
+          "acceptance": "Given push When CI runs Then green"
+        }
       ]
     },
     {
       "id": "E00-T02",
       "epic_id": "E00",
       "title": "Branching, PR template, commit rules",
-      "objective": "Enforce review quality",
-      "scope": "PR template w/ risk label, commit prefix E.., CODEOWNERS",
-      "out_of_scope": "No deploy",
+      "objective": "Review quality via risk labels + CODEOWNERS.",
+      "scope": "PR template, CODEOWNERS, CONTRIBUTING, dev-guide wiring.",
+      "out_of_scope": "No deploys.",
       "priority": "P0",
       "risk_level": "low",
       "dependencies": [
@@ -71,15 +88,17 @@
         "repo"
       ],
       "implementation_steps": [
-        "add templates",
-        "protect main (docs)",
-        "verify"
+        "PR template",
+        "CODEOWNERS",
+        "CONTRIBUTING",
+        "Wire docs/13"
       ],
       "acceptance_criteria": [
-        "Given PR without tests When opened Then template requires tests section"
+        "Given PR without tests When opened Then template demands tests + risk label"
       ],
       "test_plan": [
-        "manual review"
+        "Template render check",
+        "make check green"
       ],
       "documentation_references": [
         "docs/13-development-guide.md"
@@ -91,21 +110,34 @@
       "estimated_complexity": "S",
       "status": "IN_REVIEW",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E00-T02-S1",
+          "title": "PR template",
+          "output": "risk labels + safety checklist",
+          "acceptance": "Given template When read Then risk mandatory"
+        },
+        {
+          "id": "E00-T02-S2",
+          "title": "CODEOWNERS+CONTRIBUTING",
+          "output": "routing + branch rules",
+          "acceptance": "Given risk path When PR opens Then human requested"
+        }
       ]
     },
     {
       "id": "E01-T01",
       "epic_id": "E01",
       "title": "Env separation + secrets handling",
-      "objective": "No secrets in repo, per-env config",
-      "scope": "dev/staging/prod config map, secret-store wiring docs, sample.env",
-      "out_of_scope": "No real keys",
+      "objective": "Per-env config, zero secrets in repo.",
+      "scope": "Config matrix, secret-store docs, .env.example, scan fixtures.",
+      "out_of_scope": "No real keys.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -113,20 +145,22 @@
       ],
       "affected_components": [
         "workers",
-        "go",
+        "go-watcher",
         "ops"
       ],
       "implementation_steps": [
-        "config schema",
-        "secret-store docs",
-        "sample files",
-        "secret-scan CI"
+        "Config schema",
+        "Secret-store docs",
+        "Samples",
+        "Scan fixture"
       ],
       "acceptance_criteria": [
-        "Given secret-scan When dummy key committed Then CI fails"
+        "Given dummy key committed When CI runs Then secret-scan fails",
+        "Given .env.example When read Then placeholders only"
       ],
       "test_plan": [
-        "secret-scan job"
+        "Fixture-key red test",
+        "Sample review"
       ],
       "documentation_references": [
         "docs/07-security-and-threat-model.md",
@@ -139,21 +173,40 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "security"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E01-T01-S1",
+          "title": "Config matrix",
+          "output": "dev/staging/prod vars+defaults doc",
+          "acceptance": "Given matrix When E04 starts Then names unambiguous"
+        },
+        {
+          "id": "E01-T01-S2",
+          "title": "Secret-store wiring",
+          "output": "store names, rotation, env/binding reads",
+          "acceptance": "Given doc When followed Then no secret in repo"
+        },
+        {
+          "id": "E01-T01-S3",
+          "title": "Scan fixture",
+          "output": "fixture key asserts red",
+          "acceptance": "Given fixture When scan runs Then exit 1"
+        }
       ]
     },
     {
       "id": "E01-T02",
       "epic_id": "E01",
       "title": "AuthN/Z + Toobit key restrictions",
-      "objective": "RBAC + least-privilege keys",
-      "scope": "JWT/OIDC, roles trader/operator/admin, key policy no-withdraw+IP allowlist",
-      "out_of_scope": "No live keys",
+      "objective": "RBAC APIs + least-privilege keys.",
+      "scope": "JWT/OIDC spec, roles, key policy trade-only no-withdraw IP-allowlist.",
+      "out_of_scope": "No live keys.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -164,15 +217,17 @@
         "exchange"
       ],
       "implementation_steps": [
-        "auth middleware spec",
         "RBAC matrix",
-        "key policy doc"
+        "Key policy doc",
+        "Step-up rule"
       ],
       "acceptance_criteria": [
-        "Given trader role When calling admin endpoint Then 403"
+        "Given trader token When admin route Then 403+trace_id",
+        "Given policy When audited Then no-withdraw+allowlist required"
       ],
       "test_plan": [
-        "authz matrix test"
+        "Authz matrix test",
+        "Policy review"
       ],
       "documentation_references": [
         "docs/07-security-and-threat-model.md"
@@ -184,21 +239,34 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "security"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E01-T02-S1",
+          "title": "RBAC matrix+spec",
+          "output": "route x role + envelopes",
+          "acceptance": "Given matrix When E05 starts Then roles cover routes"
+        },
+        {
+          "id": "E01-T02-S2",
+          "title": "Key policy",
+          "output": "trade-only, rotation 90d",
+          "acceptance": "Given policy When E09 starts Then request matches"
+        }
       ]
     },
     {
       "id": "E02-T01",
       "epic_id": "E02",
-      "title": "Verify Toobit WS/REST docs + record limits",
-      "objective": "Ground integration in official docs",
-      "scope": "Capture WS URL, channels, rate limits with source URL+date",
-      "out_of_scope": "No code yet",
+      "title": "Verify Toobit WS/REST docs, record limits",
+      "objective": "Official-doc grounding with URL+date.",
+      "scope": "WS URL/channels/heartbeat, REST paths/limits, clientOrderId support, ADR-004 inputs.",
+      "out_of_scope": "No code.",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -208,15 +276,16 @@
         "exchange"
       ],
       "implementation_steps": [
-        "fetch official docs",
-        "record limits",
-        "write ADR-004 math inputs"
+        "Fetch official docs",
+        "Record facts URL+date",
+        "ADR-004 inputs"
       ],
       "acceptance_criteria": [
-        "Given official docs When reviewed Then URL+date recorded in ADR-004"
+        "Given official docs When reviewed Then WS+limits in ADR-004 with URL+date"
       ],
       "test_plan": [
-        "doc review"
+        "Evidence links",
+        "Q-03+Q-10 recorded"
       ],
       "documentation_references": [
         "docs/decisions/ADR-004-market-data-fallback.md",
@@ -232,21 +301,40 @@
         "A-01",
         "A-02"
       ],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "VERIFY_TOOBIT"
+      ],
+      "subtasks": [
+        {
+          "id": "E02-T01-S1",
+          "title": "WS facts",
+          "output": "URL+channel+tick JSON+URL/date",
+          "acceptance": "Given capture When E02-T02 starts Then channel known"
+        },
+        {
+          "id": "E02-T01-S2",
+          "title": "REST facts+limits",
+          "output": "paths+auth+limits+clientOrderId",
+          "acceptance": "Given limits When math runs Then cited"
+        },
+        {
+          "id": "E02-T01-S3",
+          "title": "Q-03+Q-10",
+          "output": "symbols+testnet in doc14",
+          "acceptance": "Given answers When fallback planned Then count known"
+        }
       ]
     },
     {
       "id": "E02-T02",
       "epic_id": "E02",
       "title": "Go WS connector + normalizer + soak",
-      "objective": "Reliable tick intake",
-      "scope": "dial/subscribe/reconnect backoff, normalize, metrics",
-      "out_of_scope": "No triggers",
+      "objective": "Reliable tick intake.",
+      "scope": "Dial/subscribe, normalize, backoff 1s-60s, metrics, 24h soak.",
+      "out_of_scope": "No triggers.",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -256,16 +344,19 @@
         "go-watcher"
       ],
       "implementation_steps": [
-        "implement client",
-        "normalize",
-        "backoff+jitter",
-        "soak 24h"
+        "WS client (not Fiber)",
+        "Normalizer",
+        "Backoff+metrics",
+        "Soak+flap"
       ],
       "acceptance_criteria": [
-        "Given WS drop When reconnecting Then resubscribes with backoff and no panic"
+        "Given WS drop When reconnecting Then resubscribe clean, no panic",
+        "Given 24h soak When done Then log attached, zero unhandled drops"
       ],
       "test_plan": [
-        "flap test + soak"
+        "Flap test",
+        "Soak review",
+        "go vet"
       ],
       "documentation_references": [
         "docs/03-components-and-responsibilities.md"
@@ -279,21 +370,40 @@
       "blocking_decisions": [
         "A-01"
       ],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "VERIFY_TOOBIT"
+      ],
+      "subtasks": [
+        {
+          "id": "E02-T02-S1",
+          "title": "WS client",
+          "output": "conn pkg, env config",
+          "acceptance": "Given URL When dialing Then sub-ack logged"
+        },
+        {
+          "id": "E02-T02-S2",
+          "title": "Normalizer+bounds",
+          "output": "drop malformed+count",
+          "acceptance": "Given bad tick When in Then dropped"
+        },
+        {
+          "id": "E02-T02-S3",
+          "title": "Reconnect+soak",
+          "output": "backoff, readyz, soak log",
+          "acceptance": "Given 10 drops When flapped Then 10 resubscribes"
+        }
       ]
     },
     {
       "id": "E03-T01",
       "epic_id": "E03",
-      "title": "Price Watcher trigger eval + Redis Streams",
-      "objective": "Deterministic trigger events",
-      "scope": "in-memory px, trigger eval, XADD evt ids, consumer group",
-      "out_of_scope": "No D1 writes",
+      "title": "Watcher triggers + Redis Streams",
+      "objective": "Deterministic trigger events.",
+      "scope": "Last-px map, ACTIVE eval, XADD evt IDs, cg-workers, trim.",
+      "out_of_scope": "No D1 writes from Go.",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -304,16 +414,18 @@
         "redis"
       ],
       "implementation_steps": [
-        "trigger engine",
-        "streams emit",
-        "trim policy",
-        "heartbeat"
+        "Trigger engine",
+        "Streams emit",
+        "Trim+metrics",
+        "Fixtures"
       ],
       "acceptance_criteria": [
-        "Given price crosses When watcher evals Then single evt_<ulid> in stream"
+        "Given cross When evaluated Then one evt ID in stream",
+        "Given fixture When run twice Then identical sequences"
       ],
       "test_plan": [
-        "replay determinism test"
+        "Replay determinism",
+        "Golden files"
       ],
       "documentation_references": [
         "docs/05-events-and-state-machines.md"
@@ -325,21 +437,40 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E03-T01-S1",
+          "title": "Trigger engine",
+          "output": "eval pkg deterministic",
+          "acceptance": "Given JSON When eval Then deterministic"
+        },
+        {
+          "id": "E03-T01-S2",
+          "title": "Streams wiring",
+          "output": "XADD+group+trim",
+          "acceptance": "Given trigger When emitted Then readable"
+        },
+        {
+          "id": "E03-T01-S3",
+          "title": "Replay fixtures",
+          "output": "testdata+golden",
+          "acceptance": "Given fixture When replayed Then matches"
+        }
       ]
     },
     {
       "id": "E03-T02",
       "epic_id": "E03",
       "title": "Stale detection + snapshot reload",
-      "objective": "Restart-safe cache",
-      "scope": "staleness detector, snapshot endpoint client, lag metrics",
-      "out_of_scope": "No business truth",
+      "objective": "Restart-safe, never stale-eval.",
+      "scope": "Staleness detector, HELD_STALE, snapshot reload, lag metrics.",
+      "out_of_scope": "No business truth in Redis.",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -351,15 +482,17 @@
         "redis"
       ],
       "implementation_steps": [
-        "stale detector",
-        "reload from snapshot",
-        "lag dashboard metric"
+        "Detector",
+        "Snapshot client",
+        "Metrics"
       ],
       "acceptance_criteria": [
-        "Given Redis flush When Go reboots Then active watch count matches D1"
+        "Given flush+reboot When done Then ACTIVE count matches D1",
+        "Given stale When trigger fires Then HELD_STALE not evaluated"
       ],
       "test_plan": [
-        "restart test"
+        "Restart test",
+        "Stale injection"
       ],
       "documentation_references": [
         "docs/06-failover-and-recovery.md"
@@ -371,21 +504,34 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E03-T02-S1",
+          "title": "Staleness detector",
+          "output": "per-symbol thresholds",
+          "acceptance": "Given old tick When eval Then HELD_STALE"
+        },
+        {
+          "id": "E03-T02-S2",
+          "title": "Snapshot reload",
+          "output": "active-snapshot client",
+          "acceptance": "Given empty When boot Then counts match"
+        }
       ]
     },
     {
       "id": "E04-T01",
       "epic_id": "E04",
       "title": "D1 schema + migrations + outbox relay",
-      "objective": "Canonical persistence RPO-zero",
-      "scope": "all tables per \u00a704, forward-only migrations, outbox relay",
-      "out_of_scope": "No ticks",
+      "objective": "Canonical persistence RPO-zero.",
+      "scope": "13 tables per doc04 DDL, forward-only migrations, relay+DLQ.",
+      "out_of_scope": "No ticks.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -396,16 +542,19 @@
         "workers"
       ],
       "implementation_steps": [
-        "write migrations",
-        "dedupe constraints",
-        "outbox relay",
-        "retention doc"
+        "0002_schema.sql",
+        "UNIQUE dedupe",
+        "Relay",
+        "Retention"
       ],
       "acceptance_criteria": [
-        "Given duplicate dedupe_key When inserted Then rejected exactly once"
+        "Given dup dedupe_key When inserted Then rejected, one row",
+        "Given write When committed Then outbox row same batch"
       ],
       "test_plan": [
-        "migration up/down test, dedupe test"
+        "Scratch migrate",
+        "Dedupe test",
+        "Relay kill test"
       ],
       "documentation_references": [
         "docs/04-data-model-and-persistence.md"
@@ -417,39 +566,61 @@
       "estimated_complexity": "L",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E04-T01-S1",
+          "title": "DDL migrations",
+          "output": "tables+indexes",
+          "acceptance": "Given scratch When applied Then exist"
+        },
+        {
+          "id": "E04-T01-S2",
+          "title": "Outbox relay",
+          "output": "claim/publish/ack+backoff+DLQ",
+          "acceptance": "Given kill When restart Then dedupe"
+        },
+        {
+          "id": "E04-T01-S3",
+          "title": "Seed+retention",
+          "output": "default strategy version",
+          "acceptance": "Given seed When applied Then readable"
+        }
       ]
     },
     {
       "id": "E04-T02",
       "epic_id": "E04",
-      "title": "Watch/signal/event repos + audit trail",
-      "objective": "Complete audit coverage",
-      "scope": "CRUD + transitions + signals + events append",
-      "out_of_scope": "No WS",
+      "title": "Watch/signal/event repos + audit",
+      "objective": "Every transition audited.",
+      "scope": "CRUD+guards, signals, events append, timeline query.",
+      "out_of_scope": "No WS.",
       "priority": "P0",
       "risk_level": "medium",
       "dependencies": [
         "E04-T01"
       ],
       "affected_components": [
-        "d1"
+        "d1",
+        "workers"
       ],
       "implementation_steps": [
-        "repos",
-        "transition guards",
-        "audit query"
+        "Repos+guards",
+        "Timeline query",
+        "Audit tests"
       ],
       "acceptance_criteria": [
-        "Given ACTIVE watch When trigger stored Then transition row exists"
+        "Given ACTIVE trigger When stored Then transition+event rows exist",
+        "Given illegal edge When tried Then 409"
       ],
       "test_plan": [
-        "integration test"
+        "FSM edge tests",
+        "Timeline test"
       ],
       "documentation_references": [
         "docs/04-data-model-and-persistence.md",
@@ -462,21 +633,34 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E04-T02-S1",
+          "title": "Watch repo+guards",
+          "output": "version-checked transitions",
+          "acceptance": "Given stale ver When write Then 409"
+        },
+        {
+          "id": "E04-T02-S2",
+          "title": "Append+timeline",
+          "output": "events+signals+query",
+          "acceptance": "Given entity When queried Then ordered history"
+        }
       ]
     },
     {
       "id": "E05-T01",
       "epic_id": "E05",
       "title": "Control API CRUD + contracts",
-      "objective": "Lifecycle API per \u00a710",
-      "scope": "watches/signals/analysis/approvals/health endpoints, error envelope",
-      "out_of_scope": "No execution",
+      "objective": "Versioned lifecycle API.",
+      "scope": "watches/signals/analysis/approvals/health routes, auth, idempotency, envelopes.",
+      "out_of_scope": "No submits.",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -486,16 +670,17 @@
         "workers"
       ],
       "implementation_steps": [
-        "implement routes",
-        "auth",
-        "idempotency",
-        "contract tests"
+        "v1 routes",
+        "Auth+idempotency",
+        "Contract tests"
       ],
       "acceptance_criteria": [
-        "Given duplicate POST with same Idempotency-Key When sent Then single resource"
+        "Given dup Idempotency-Key When resent Then single resource+sames ID",
+        "Given bad body When posted Then 400+trace_id"
       ],
       "test_plan": [
-        "contract snapshot tests"
+        "Snapshot tests",
+        "Replay test"
       ],
       "documentation_references": [
         "docs/10-api-and-integration-contracts.md"
@@ -507,21 +692,40 @@
       "estimated_complexity": "L",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E05-T01-S1",
+          "title": "Watch+snapshot routes",
+          "output": "CRUD+snapshot",
+          "acceptance": "Given 3 ACTIVE When snapshot Then 3"
+        },
+        {
+          "id": "E05-T01-S2",
+          "title": "Signal/analysis/approval",
+          "output": "ingest+runs+approvals",
+          "acceptance": "Given reuse When grant reused Then 409"
+        },
+        {
+          "id": "E05-T01-S3",
+          "title": "Auth+errors",
+          "output": "RBAC+envelopes",
+          "acceptance": "Given trader on admin Then 403"
+        }
       ]
     },
     {
       "id": "E05-T02",
       "epic_id": "E05",
-      "title": "DO ExecutionAuthority + sharded coordinators + fanout",
-      "objective": "Single submitter + fallback eval",
-      "scope": "lease acquire/renew/epoch, shard by symbol hash, fanout",
-      "out_of_scope": "No tick store",
+      "title": "DO lease + shards + fanout",
+      "objective": "One fenced submitter + fallback shards.",
+      "scope": "Lease epoch, 8 hash shards, fanout, split-brain test.",
+      "out_of_scope": "No tick store.",
       "priority": "P1",
       "risk_level": "high",
       "dependencies": [
@@ -531,16 +735,18 @@
         "durable-objects"
       ],
       "implementation_steps": [
-        "lease DO",
-        "shard coordinators",
-        "fanout",
-        "partition test"
+        "Lease DO",
+        "Shards",
+        "Fanout",
+        "Split-brain test"
       ],
       "acceptance_criteria": [
-        "Given two claimants When racing Then one fenced by epoch"
+        "Given racers When acquiring Then one holds, other fenced",
+        "Given symbols When mapped Then hash%8 owns"
       ],
       "test_plan": [
-        "split-brain unit test"
+        "Split-brain test",
+        "Shard test"
       ],
       "documentation_references": [
         "docs/02-system-architecture.md",
@@ -548,26 +754,39 @@
       ],
       "model_assignment": {
         "primary": "Muse Spark 1.3",
-        "reviewer": "GLM-5.3"
+        "reviewer": "Qwen3.8 Max"
       },
       "estimated_complexity": "L",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E05-T02-S1",
+          "title": "Lease DO",
+          "output": "acquire/renew/verify+epoch",
+          "acceptance": "Given expiry When renew Then rejected"
+        },
+        {
+          "id": "E05-T02-S2",
+          "title": "Shards+fanout",
+          "output": "cursors+sockets",
+          "acceptance": "Given fallback When sharded Then no double-own"
+        }
       ]
     },
     {
       "id": "E06-T01",
       "epic_id": "E06",
-      "title": "Health monitor + degradation state",
-      "objective": "Detect Go/Redis loss in 15s",
-      "scope": "cron checks, health_snapshots, incident log, mode badge",
-      "out_of_scope": "No auto-recovery of funds",
+      "title": "Health monitor + degradation",
+      "objective": "Detect loss in 15s.",
+      "scope": "10s cron, heartbeat/lag/stale eval, snapshots+incidents, badges.",
+      "out_of_scope": "No fund moves.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -578,15 +797,17 @@
         "d1"
       ],
       "implementation_steps": [
-        "cron",
-        "thresholds",
-        "incident rows"
+        "Cron+thresholds",
+        "Incidents+modes",
+        "Badge API"
       ],
       "acceptance_criteria": [
-        "Given 3 missed heartbeats When cron runs Then incident + DEGRADED badge"
+        "Given 3 missed beats When cron runs Then incident+DEGRADED",
+        "Given 60s healthy When recovered Then event exists"
       ],
       "test_plan": [
-        "heartbeat-loss test"
+        "Beat-loss test",
+        "Lag injection"
       ],
       "documentation_references": [
         "docs/06-failover-and-recovery.md"
@@ -598,21 +819,34 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "trading-safety"
       ],
       "verify_tags": [
-        "VERIFY_TOOBIT"
+        "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E06-T01-S1",
+          "title": "Evaluator cron",
+          "output": "thresholds doc06.1",
+          "acceptance": "Given lag35s When eval Then LAG"
+        },
+        {
+          "id": "E06-T01-S2",
+          "title": "Incident+mode API",
+          "output": "log writes+GET health",
+          "acceptance": "Given incident When polled Then banner data"
+        }
       ]
     },
     {
       "id": "E06-T02",
       "epic_id": "E06",
-      "title": "Failover drills: Go/Redis/both + return-to-primary",
-      "objective": "Prove safe recovery, no dup orders",
-      "scope": "fallback REST poll, lease handoff, reconcile unknowns, rejoin",
-      "out_of_scope": "No live orders",
+      "title": "Failover drills + rejoin",
+      "objective": "Zero-dup recovery proof.",
+      "scope": "REST poll in budget, handoff, reconcile sweep, checklist, chaos.mjs.",
+      "out_of_scope": "No live orders.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -624,19 +858,21 @@
         "redis"
       ],
       "implementation_steps": [
-        "drill scripts",
-        "handoff",
-        "reconcile check",
-        "runbook"
+        "chaos.mjs",
+        "3 kill drills",
+        "Rejoin+budget verify"
       ],
       "acceptance_criteria": [
-        "Given Go+Redis dead When drill runs Then watches restored and zero duplicate intents"
+        "Given Go+Redis dead When drilled Then restore+zero dup intents",
+        "Given rejoin When returning Then non-terminals reconciled pre-PRIMARY"
       ],
       "test_plan": [
-        "failure-injection suite"
+        "Injection suite",
+        "No-429 poll test"
       ],
       "documentation_references": [
-        "docs/06-failover-and-recovery.md"
+        "docs/06-failover-and-recovery.md",
+        "docs/decisions/ADR-004-market-data-fallback.md"
       ],
       "model_assignment": {
         "primary": "GLM-5.3",
@@ -645,21 +881,40 @@
       "estimated_complexity": "XL",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "trading-safety"
       ],
       "verify_tags": [
         "VERIFY_TOOBIT"
+      ],
+      "subtasks": [
+        {
+          "id": "E06-T02-S1",
+          "title": "chaos.mjs (Node)",
+          "output": "kill/pause+assert modes",
+          "acceptance": "Given dry-run When run Then no prod touched"
+        },
+        {
+          "id": "E06-T02-S2",
+          "title": "3 kill drills",
+          "output": "logs+rows+counts",
+          "acceptance": "Given each kill When drilled Then rows complete"
+        },
+        {
+          "id": "E06-T02-S3",
+          "title": "Rejoin+budget",
+          "output": "handoff+429-free proof",
+          "acceptance": "Given N syms When polling Then ADR math holds"
+        }
       ]
     },
     {
       "id": "E07-T01",
       "epic_id": "E07",
-      "title": "Signal ingestion (5 kinds) + strategy config versions",
-      "objective": "Versioned strategy inputs",
-      "scope": "ingest endpoint, schema per kind, config version table",
-      "out_of_scope": "No auto-trade",
+      "title": "Signals (5 kinds) + strategy versions",
+      "objective": "Versioned inputs linked to watches.",
+      "scope": "Per-kind schemas, ingest, version activation, HMAC webhook.",
+      "out_of_scope": "No auto-trade.",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -670,15 +925,17 @@
         "d1"
       ],
       "implementation_steps": [
-        "schemas",
-        "ingest",
-        "versioning"
+        "Schemas",
+        "Ingest+versions",
+        "Webhook auth"
       ],
       "acceptance_criteria": [
-        "Given v2 config When activated Then runs reference v2"
+        "Given v2 active When runs start Then v2 ref, old keep v1",
+        "Given bad OB_OS When posted Then 400+schema path"
       ],
       "test_plan": [
-        "schema validation tests"
+        "Schema tests",
+        "Pinning test"
       ],
       "documentation_references": [
         "docs/03-components-and-responsibilities.md"
@@ -690,21 +947,34 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E07-T01-S1",
+          "title": "5 schemas",
+          "output": "signals/*.json+validate",
+          "acceptance": "Given each kind When valid Then stored"
+        },
+        {
+          "id": "E07-T01-S2",
+          "title": "Versions+webhook",
+          "output": "activate+HMAC",
+          "acceptance": "Given bad sig When posted Then 401"
+        }
       ]
     },
     {
       "id": "E08-T01",
       "epic_id": "E08",
-      "title": "Deterministic risk engine gates",
-      "objective": "AI never overrides risk",
-      "scope": "leverage/notional/concurrent/allowlist/freshness/killswitch gates with codes",
-      "out_of_scope": "No AI logic",
+      "title": "Deterministic risk gates",
+      "objective": "Limits AI cannot widen.",
+      "scope": "validate() 8 codes + versioned limits.",
+      "out_of_scope": "No AI.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -714,15 +984,17 @@
         "workers"
       ],
       "implementation_steps": [
-        "gate impl",
-        "unit matrix",
-        "reason codes"
+        "Gate table",
+        "Reject matrix",
+        "Limits versioning"
       ],
       "acceptance_criteria": [
-        "Given over-leverage intent When validated Then REJECT with code R-LEV"
+        "Given over-lev When validated Then R-LEV+limit+asked",
+        "Given gates When tested Then 100pct reject coverage"
       ],
       "test_plan": [
-        "100% reject-path coverage"
+        "8-code matrix",
+        "Version test"
       ],
       "documentation_references": [
         "docs/08-trading-risk-and-execution-safety.md"
@@ -734,21 +1006,34 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "trading-safety"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E08-T01-S1",
+          "title": "Gate impl",
+          "output": "pure TS no network",
+          "acceptance": "Given intent When validated Then PASS/coded REJECT"
+        },
+        {
+          "id": "E08-T01-S2",
+          "title": "Matrix tests",
+          "output": "8 codes x bounds",
+          "acceptance": "Given suite When run Then red paths green"
+        }
       ]
     },
     {
       "id": "E08-T02",
       "epic_id": "E08",
-      "title": "Human approval center workflow",
-      "objective": "Single-use expiring approvals",
-      "scope": "request/notify/approve-reject, expiry 10m, one-time token",
-      "out_of_scope": "No auto-approve",
+      "title": "Human approval workflow",
+      "objective": "Single-use expiring approvals.",
+      "scope": "Request/grant/consume/expire, 10m TTL, atomic used_at, sweeper.",
+      "out_of_scope": "No auto-approve.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -760,15 +1045,18 @@
         "dashboard"
       ],
       "implementation_steps": [
-        "approval API",
-        "expiry sweeper",
-        "audit"
+        "Approval API",
+        "Consume+sweeper",
+        "Queue hooks"
       ],
       "acceptance_criteria": [
-        "Given expired approval When used Then 410 GONE and no intent"
+        "Given expired When used Then 410, no intent",
+        "Given race When consumed Then one wins, rest 409"
       ],
       "test_plan": [
-        "expiry + replay tests"
+        "Expiry",
+        "Race",
+        "Audit rows"
       ],
       "documentation_references": [
         "docs/08-trading-risk-and-execution-safety.md"
@@ -780,21 +1068,34 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "trading-safety"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E08-T02-S1",
+          "title": "API+single-use",
+          "output": "grant/consume guard",
+          "acceptance": "Given used When reused Then 409"
+        },
+        {
+          "id": "E08-T02-S2",
+          "title": "Sweeper+audit",
+          "output": "60s cron+events",
+          "acceptance": "Given old grant When swept Then expired"
+        }
       ]
     },
     {
       "id": "E09-T01",
       "epic_id": "E09",
-      "title": "Idempotent submit + reconcile-to-terminal (testnet)",
-      "objective": "No blind retry, no dup orders",
-      "scope": "clientOrderId=intent, SUBMIT_UNKNOWN handling, poll loop",
-      "out_of_scope": "No live trading",
+      "title": "Idempotent submit + reconcile (testnet)",
+      "objective": "One exchange order per intent.",
+      "scope": "Signed submit clientOrderId, UNKNOWN-only reconcile, 15s sweep, kill hook, snapshots.",
+      "out_of_scope": "No live.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -805,18 +1106,22 @@
         "exchange"
       ],
       "implementation_steps": [
-        "submit",
-        "reconcile",
-        "killswitch hook"
+        "Submit path",
+        "Reconcile loop",
+        "Kill+positions"
       ],
       "acceptance_criteria": [
-        "Given ack lost When reconciling Then exactly one exchange order exists"
+        "Given lost ack When reconciled Then one order per clientOrderId",
+        "Given kill When submitting Then halt <5s logged"
       ],
       "test_plan": [
-        "ack-loss drill on testnet"
+        "Ack-loss drill",
+        "Kill latency",
+        "Dup submit"
       ],
       "documentation_references": [
-        "docs/08-trading-risk-and-execution-safety.md"
+        "docs/08-trading-risk-and-execution-safety.md",
+        "docs/05-events-and-state-machines.md"
       ],
       "model_assignment": {
         "primary": "GLM-5.3",
@@ -825,21 +1130,40 @@
       "estimated_complexity": "L",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "trading-safety"
       ],
       "verify_tags": [
-        "none"
+        "VERIFY_TOOBIT"
+      ],
+      "subtasks": [
+        {
+          "id": "E09-T01-S1",
+          "title": "Submit path",
+          "output": "kill+lease+approval+risk then POST",
+          "acceptance": "Given no lease When submit Then fenced"
+        },
+        {
+          "id": "E09-T01-S2",
+          "title": "Reconcile loop",
+          "output": "poll+backoff+terminal map",
+          "acceptance": "Given UNKNOWN When polled Then terminal or paged"
+        },
+        {
+          "id": "E09-T01-S3",
+          "title": "Positions+kill",
+          "output": "fills-only snapshots+halt",
+          "acceptance": "Given fill When reconciled Then snapshot"
+        }
       ]
     },
     {
       "id": "E10-T01",
       "epic_id": "E10",
-      "title": "Dashboard 11 views + freshness badges",
-      "objective": "Useful during incidents",
-      "scope": "SvelteKit decision (Q-01), routes, LIVE/STALE/CACHED/UNAVAILABLE, timelines",
-      "out_of_scope": "No trade execution UI beyond approve",
+      "title": "Dashboard 11 views + freshness",
+      "objective": "Incident-usable SvelteKit UI.",
+      "scope": "Scaffold+adapter-cloudflare, 11 routes doc09, badges, timelines, queue, drills.",
+      "out_of_scope": "No direct submits.",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -849,16 +1173,17 @@
         "dashboard"
       ],
       "implementation_steps": [
-        "frontend scaffold",
-        "API hooks",
-        "badges",
-        "timelines"
+        "Scaffold",
+        "Routes+badges",
+        "Degraded tests"
       ],
       "acceptance_criteria": [
-        "Given fallback mode When viewing Then banner + stale badges shown"
+        "Given fallback When viewing Then banner+STALE/CACHED badges",
+        "Given uncertain When approving Then disabled+tooltip"
       ],
       "test_plan": [
-        "degraded-UX test"
+        "Degraded-UX",
+        "Badge coverage"
       ],
       "documentation_references": [
         "docs/09-dashboard-and-observability.md"
@@ -868,23 +1193,42 @@
         "reviewer": "GLM-5.3-Flash"
       },
       "estimated_complexity": "L",
-      "status": "BLOCKED",
+      "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E10-T01-S1",
+          "title": "Scaffold",
+          "output": "adapter-cloudflare+TS strict+client",
+          "acceptance": "Given build When preview Then renders"
+        },
+        {
+          "id": "E10-T01-S2",
+          "title": "Views+badges",
+          "output": "11 routes+badges+timelines",
+          "acceptance": "Given stale When viewed Then amber"
+        },
+        {
+          "id": "E10-T01-S3",
+          "title": "Queue+failover views",
+          "output": "countdowns+drills+epochs",
+          "acceptance": "Given pending When expiring Then live countdown"
+        }
       ]
     },
     {
       "id": "E11-T01",
       "epic_id": "E11",
-      "title": "Full test suites + 14d paper-trading gate",
-      "objective": "Evidence before any live talk",
-      "scope": "unit/integration/contract/replay/load/security/recovery suites + paper report",
-      "out_of_scope": "No live enable",
+      "title": "Suites + 14-day paper gate",
+      "objective": "Evidence pack pre-live.",
+      "scope": "All suites+CI, 14d paper, signed gate report.",
+      "out_of_scope": "No live.",
       "priority": "P0",
       "risk_level": "high",
       "dependencies": [
@@ -896,18 +1240,20 @@
         "all"
       ],
       "implementation_steps": [
-        "suites",
-        "paper run",
-        "gate report"
+        "Suites+CI",
+        "14d paper",
+        "Gate report"
       ],
       "acceptance_criteria": [
-        "Given 14d paper When complete Then zero unapproved orders and report filed"
+        "Given 14d paper When done Then zero unapproved+report filed",
+        "Given red P0 When gated Then closed"
       ],
       "test_plan": [
-        "gate checklist"
+        "Gate checklist"
       ],
       "documentation_references": [
-        "docs/11-testing-and-validation-strategy.md"
+        "docs/11-testing-and-validation-strategy.md",
+        "docs/tasks/TEST-AND-RELEASE-GATES.md"
       ],
       "model_assignment": {
         "primary": "Qwen3.8 Max",
@@ -916,21 +1262,40 @@
       "estimated_complexity": "XL",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
-        "none"
+        "trading-safety"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E11-T01-S1",
+          "title": "Suite assembly",
+          "output": "CI runnable suites",
+          "acceptance": "Given CI When run Then all report"
+        },
+        {
+          "id": "E11-T01-S2",
+          "title": "14d paper",
+          "output": "nightly+count 0",
+          "acceptance": "Given day14 When closed Then signed"
+        },
+        {
+          "id": "E11-T01-S3",
+          "title": "Gate report",
+          "output": "evidence+signature",
+          "acceptance": "Given report When filed Then decision explicit"
+        }
       ]
     },
     {
       "id": "E12-T01",
       "epic_id": "E12",
       "title": "Envs, deploy, monitoring, runbooks",
-      "objective": "Operable + rollback-safe",
-      "scope": "wrangler envs, Hetzner rollout, alerts, backup, incident drill",
-      "out_of_scope": "No live trade",
+      "objective": "Operable+rollback-safe.",
+      "scope": "Wrangler envs, Hetzner rollout, alerts, backups, drills.",
+      "out_of_scope": "No live trade.",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -940,16 +1305,17 @@
         "ops"
       ],
       "implementation_steps": [
-        "env configs",
-        "deploy scripts",
-        "alerts",
-        "runbook drill"
+        "Envs+scripts",
+        "Alerts+backups",
+        "Drills"
       ],
       "acceptance_criteria": [
-        "Given failed deploy When rolled back Then health green in 5min"
+        "Given failed deploy When rolled back Then green <5min",
+        "Given alert When fired Then routes+runbook link"
       ],
       "test_plan": [
-        "rollback drill"
+        "Rollback drill",
+        "Alert test"
       ],
       "documentation_references": [
         "docs/12-deployment-and-operations-runbook.md"
@@ -961,12 +1327,31 @@
       "estimated_complexity": "M",
       "status": "PROPOSED",
       "blocking_decisions": [],
-      "subtasks": [],
       "safety_tags": [
         "none"
       ],
       "verify_tags": [
         "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E12-T01-S1",
+          "title": "Env+deploy",
+          "output": "wrangler envs+rollout",
+          "acceptance": "Given staging When deployed Then green"
+        },
+        {
+          "id": "E12-T01-S2",
+          "title": "Alerts+backups",
+          "output": "metric alerts+PITR/RDB",
+          "acceptance": "Given backup When scratch Then verified"
+        },
+        {
+          "id": "E12-T01-S3",
+          "title": "Drills",
+          "output": "rollback+game-day",
+          "acceptance": "Given drill When run Then postmortem"
+        }
       ]
     }
   ]

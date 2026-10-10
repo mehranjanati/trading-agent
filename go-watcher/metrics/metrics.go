@@ -9,21 +9,36 @@ import (
 
 // Counters holds lifetime connector stats for soak-log review.
 type Counters struct {
-	Connects     atomic.Int64
-	Disconnects  atomic.Int64
-	Resubscribes atomic.Int64
-	Ticks        atomic.Int64
-	Dropped      atomic.Int64
-	Pings        atomic.Int64
-	Pongs        atomic.Int64
-	BackoffsMs   atomic.Int64 // cumulative reconnect sleep, for soak analysis
+	Connects      atomic.Int64
+	Disconnects   atomic.Int64
+	Resubscribes  atomic.Int64
+	Ticks         atomic.Int64
+	Dropped       atomic.Int64
+	Pings         atomic.Int64
+	Pongs         atomic.Int64
+	BackoffsMs    atomic.Int64 // cumulative reconnect sleep, for soak analysis
+	HeldStale     atomic.Int64 // triggers held for staleness (E03-T02-S1)
+	HeldUncertain atomic.Int64 // triggers held for uncertain state (failover)
+	Reloads       atomic.Int64 // snapshot reloads completed (E03-T02-S2)
+	MaxTickLagMs  atomic.Int64 // high-water recv-ts lag, for SLO review
 }
 
 // Render returns a human + scrape-friendly summary.
 func (c *Counters) Render() string {
 	return fmt.Sprintf(
-		"connects=%d disconnects=%d resubscribes=%d ticks=%d dropped=%d pings=%d pongs=%d backoff_ms=%d\n",
+		"connects=%d disconnects=%d resubscribes=%d ticks=%d dropped=%d pings=%d pongs=%d backoff_ms=%d held_stale=%d held_uncertain=%d reloads=%d max_lag_ms=%d\n",
 		c.Connects.Load(), c.Disconnects.Load(), c.Resubscribes.Load(),
 		c.Ticks.Load(), c.Dropped.Load(), c.Pings.Load(), c.Pongs.Load(), c.BackoffsMs.Load(),
+		c.HeldStale.Load(), c.HeldUncertain.Load(), c.Reloads.Load(), c.MaxTickLagMs.Load(),
 	)
+}
+
+// ObserveLag records recv-ts lag and tracks the high-water mark.
+func (c *Counters) ObserveLag(lagMs int64) {
+	for {
+		cur := c.MaxTickLagMs.Load()
+		if lagMs <= cur || c.MaxTickLagMs.CompareAndSwap(cur, lagMs) {
+			return
+		}
+	}
 }

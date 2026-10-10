@@ -1,8 +1,10 @@
 # E00-T02 — review routing
-/docs/08* @human-reviewer
-/docs/06* @human-reviewer
-/workers/src/*risk* @human-reviewer
-/workers/src/*execution* @human-reviewer
-/workers/src/*approval* @human-reviewer
-/migrations/ @human-reviewer
-* @human-reviewer
+# NOTE: replace @REPO-OWNER with the actual GitHub username/org team after
+# first clone (e.g. @mehranjanati). Placeholder kept generic so CI stays green.
+/docs/08* @REPO-OWNER
+/docs/06* @REPO-OWNER
+/workers/src/*risk* @REPO-OWNER
+/workers/src/*execution* @REPO-OWNER
+/workers/src/*approval* @REPO-OWNER
+/migrations/ @REPO-OWNER
+* @REPO-OWNER

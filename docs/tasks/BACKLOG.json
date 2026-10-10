@@ -296,7 +296,7 @@
         "reviewer": "Muse Spark 1.3"
       },
       "estimated_complexity": "S",
-      "status": "BLOCKED",
+      "status": "DONE",
       "blocking_decisions": [
         "A-01",
         "A-02"
@@ -366,10 +366,8 @@
         "reviewer": "Muse Spark 1.3"
       },
       "estimated_complexity": "L",
-      "status": "BLOCKED",
-      "blocking_decisions": [
-        "A-01"
-      ],
+      "status": "PROPOSED",
+      "blocking_decisions": [],
       "safety_tags": [
         "none"
       ],

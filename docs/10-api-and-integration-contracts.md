@@ -18,7 +18,7 @@ Base `/api/v1` (alias `/api` → v1). Auth: `Authorization: Bearer <jwt>`; mutat
 {"id":"evt_01J9Z...","type":"approval.granted_v1","v":1,"entity_id":"w_abc","seq":5,"ts":"...","actor":"trader:meh","dedupe_key":"approval.granted_v1:w_abc:5","payload":{"approval_id":"ap_123","expires_at":"..."}}
 ```
 
-## 10.4 Exchange integration boundary (VERIFY_REQUIRED)
-- Public WS: subscribe channel + heartbeat + limits to be recorded in E02-T01 with source URL + access date (ADR-004 inputs).
-- Signed REST: HMAC-SHA256, `recvWindow=5000`, `clientOrderId` passthrough, rate budget per key; reconcile uses `GET order?clientOrderId=` (exact path verified in E02-T01).
-- Never exceed documented limits; fallback poller enforces token-bucket + jitter.
+## 10.4 Exchange integration boundary (VERIFIED 2026-10-10, E02-T01)
+- Public WS: `wss://stream.toobit.com/quote/ws/v1`; topics `trade` (ticks: `v`=tx id, `t`=ms, `p`=price, `q`=qty) + `markPrice` + `bookTicker`; ping/pong or disconnect ≤5min; WS symbol form `BTC-SWAP-USDT` (normalizer maps ↔ `BTCUSDT`). Source: official docs, full capture in `docs/ops/TOOBIT-API-FACTS.md`.
+- Signed REST: base `https://api.toobit.com`; `timestamp` mandatory, `recvWindow` default 5000 max 60000; `clientOrderId` supported (confirmed on flashClose — E09 re-confirms on order endpoint); limits 3000 weight/min + 60 orders/2s; 5xx = UNKNOWN outcome (our SUBMIT_UNKNOWN).
+- Fallback poll: `GET /quote/v1/contract/ticker/price` (weight 1), 5s cadence proven for ≤100 symbols (ADR-004). Token-bucket + jitter enforced.

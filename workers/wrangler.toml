@@ -2,6 +2,9 @@ name = "trading-agent-control"
 main = "src/index.mjs"
 compatibility_date = "2026-10-01"
 
+[triggers]
+crons = ["*/10 * * * * *"] # E06-T01: health evaluator tick
+
 # E05-T01: D1 binding (per-env database_id set at deploy; local uses --local).
 [[d1_databases]]
 binding = "DB"

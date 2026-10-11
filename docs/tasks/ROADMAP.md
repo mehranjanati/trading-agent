@@ -12,6 +12,9 @@
 ## Wave 3 — Ops & proof (P1/P0)
 13. **E10-T01** SvelteKit dashboard (Q-01 decided). 14. **E11-T01** full suites + 14-day paper → signed gate report.
 
+## Wave 4 — Go/WASM strategy runtime (PLAN ONLY, WASM-only, no Web3)
+15. **E13-T01 DONE** (contract v1 schemas + golden fixtures + validator in `make check`). 16. **E13-T02** host boundary + lifecycle design, and **E13-T03** compat matrix (parallel) → **E13-T04** persistence/ops → **E13-T05** MVP slice → **E13-T06** safety sign-off. Paper-only; no runtime code until E13-T06 signed.
+
 ## Critical path
 E00 → E01 → E04 → E05 → E06 → E08 → E09 → E11. E02/E03 join after A-01 clears. E10/E12 parallelize after E05-T01.
 

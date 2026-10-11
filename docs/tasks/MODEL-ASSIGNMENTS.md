@@ -9,5 +9,8 @@
 | E06-T01/T02, E08-T01, E09-T01 | GLM-5.3 | Qwen3.8 Max | high-impact safety reasoning | switch to Max for review | drills green (kill/ack-loss/fencing) | GLM-5.3 |
 | E02-T01 (research) | MiMo-V2.6-Flash | Muse Spark 1.3 | doc capture + citation | select Flash | URL+date in ADR-004 | Spark |
 | E11-T01 (gate) | Qwen3.8 Max | human | independence | switch to Max | 14-day report + sign-off | — |
+| E13-T01 (contract docs) | Muse Spark 1.3 | GLM-5.3-Flash | context + iteration on specs | select per task | schema tests | Flash |
+| E13-T02/T03/T04/T05 | DeepSeek V4.1 Flash | Muse Spark 1.3 | focused multi-step design | select per task | doc review + compat evidence | Spark |
+| E13-T06 (safety) | GLM-5.3 | Qwen3.8 Max | high-impact safety reasoning | switch to Max for review | threat table signed | GLM-5.3 |
 
-Rules: author ≠ reviewer on E06/E08/E09; record `author-model / reviewer-model / date` in safety PRs; reputation is never evidence.
+Rules: author ≠ reviewer on E06/E08/E09/E13-T06; record `author-model / reviewer-model / date` in safety PRs; reputation is never evidence.

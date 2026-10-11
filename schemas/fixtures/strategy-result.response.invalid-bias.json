@@ -1,0 +1,18 @@
+{
+  "contract_version": "1",
+  "strategy_id": "sma-cross",
+  "strategy_version": "0.1.0",
+  "invocation_id": "inv_01J9Z6Q0M4T7V8X2B3C5D7E9F1",
+  "status": "SIGNAL",
+  "decision": {
+    "bias": "UP",
+    "confidence": 0.62
+  },
+  "signals": [],
+  "proposed_state": {},
+  "diagnostics": {
+    "reason": "deliberately invalid bias must be rejected",
+    "code": "OK",
+    "logs": []
+  }
+}

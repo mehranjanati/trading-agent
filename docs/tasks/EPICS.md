@@ -15,5 +15,6 @@
 | E10 | Dashboard & Audit Timeline | P1 | SvelteKit 11 views + freshness | Degraded-UX test; badge coverage | E10-T01 (3, Q-01 decided) |
 | E11 | Testing, Simulation & Paper Trading | P0 | Suites + 14d paper + gate report | Zero unapproved; signed report | E11-T01 (3) |
 | E12 | Deployment, Monitoring & Readiness | P1 | Envs, alerts, backups, drills | Rollback <5min; alert routing | E12-T01 (3) |
+| E13 | Go/WASM Strategy Runtime (PLAN ONLY) | P0/P1 | Versioned WASM strategies w/o rebuild | Contract frozen; compat matrix; MVP backlog | E13-T01 DONE, E13-T02..T06 (11) |
 
-Total: 21 tasks, 54 subtasks. Source of truth: `BACKLOG.json`.
+Total: 27 tasks, 67 subtasks. Source of truth: `BACKLOG.json`.

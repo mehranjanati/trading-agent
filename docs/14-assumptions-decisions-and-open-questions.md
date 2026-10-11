@@ -26,3 +26,7 @@
 - **Q-08** Hetzner sizing/region/backups? Owner: operator · Close: E12 · Proposal: FSN1, daily snapshots.
 - **Q-09** Cloudflare plan limits (D1 rows/writes, DO requests)? Owner: operator · Close: E04 · Verify on dashboard + docs.
 - **Q-10 CLOSED → no testnet** (D-06 above). E09/E11 use paper-simulator.
+- **Q-11** wazero version vs go1.23 + wasip1 stdlib coverage? Owner: implementer · Close: E13-T03 · Needed for ADR-006 verification (URL+date).
+- **Q-12** Artifact store location/quota (Hetzner vol path + backup)? Owner: operator · Close: E13-T04 · Proposal: volume dir + hourly snapshot.
+- **Q-13** WASM invocation budget SLO (p95 ms, mem MB)? Owner: trader+operator · Close: E13-T03 bench · Proposal: 500ms deadline, measure first.
+- **Q-14** `WASM_PROPOSAL` signal kind + RBAC for activation? Owner: signal owner+admin · Close: E13-T02 · Proposal: kind added, admin-only activation.

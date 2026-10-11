@@ -1,6 +1,6 @@
 # Tasks — How to use this backlog
 
-- Source of truth: `BACKLOG.json` v2.0.0 — 21 tasks, 54 subtasks, stack TS+Go only.
+- Source of truth: `BACKLOG.json` v2.1.0 — 27 tasks, 67 subtasks, stack TS+Go only.
 - Human views: `ROADMAP.md` (waves), `EPICS.md` (exits), `DEPENDENCY-GRAPH.md` (mermaid), `MODEL-ASSIGNMENTS.md`, `TEST-AND-RELEASE-GATES.md`.
 - Task fields: id, epic, title, objective, scope, out_of_scope, priority, risk, dependencies, affected_components, implementation_steps, acceptance_criteria (Given/When/Then), test_plan, documentation_references, model_assignment, estimated_complexity (S/M/L/XL + justification in epic), status, blocking_decisions, subtasks[] (each: id, title, output, acceptance).
 - Subtask rules: independently reviewable, concrete verifiable output, no bare research/improve/fix without stated artifact.

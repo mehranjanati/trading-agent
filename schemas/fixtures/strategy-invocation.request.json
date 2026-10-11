@@ -1,0 +1,31 @@
+{
+  "contract_version": "1",
+  "strategy_id": "sma-cross",
+  "strategy_version": "0.1.0",
+  "invocation_id": "inv_01J9Z6Q0M4T7V8X2B3C5D7E9F1",
+  "market_snapshot": {
+    "symbol": "BTCUSDT",
+    "px": "67234.5",
+    "ts": "2026-10-11T12:00:00Z",
+    "src": "toobit-ws",
+    "prev_px": "67200.0",
+    "stale_s": 1
+  },
+  "strategy_configuration": {
+    "max_leverage": 5,
+    "max_notional_usd": "1000",
+    "max_exposure_usd": "5000",
+    "allowlist": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "stale_s_seconds": 5,
+    "min_confidence": 0.55
+  },
+  "previous_state": {
+    "window": ["67190.0", "67200.0", "67234.5"],
+    "last_bias": "FLAT"
+  },
+  "execution_context": {
+    "asof_ts": "2026-10-11T12:00:00Z",
+    "deadline_ms": 500,
+    "trace_id": "evt_01J9Z6Q0M4T7V8X2B3C5D7E9F1"
+  }
+}

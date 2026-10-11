@@ -19,6 +19,9 @@ export { recordIncident };
 const HB_ID = "hb_go";
 // Fixed row id: the authority lease (E06-T02-S3b) — upserted, never appended.
 const LEASE_ID = "lease_authority";
+// Fixed row id: first moment of the current continuous PRIMARY-plane health streak
+// (E06-T02-S3, §6.3 condition 1) — upserted, never appended.
+const HEALTHY_ID = "healthy_since";
 
 export function healthRoutes() {
   const safe = (fn) => async (req, env) => {
@@ -219,32 +222,75 @@ export async function lastModeRow(env) {
   return { status: last.status, at: last.at, reasons };
 }
 
-async function lastNonPrimaryModeAt(env) {
+/** E06-T02-S3 (§6.3 condition 1): the PRIMARY plane is healthy — Go heartbeating within
+ *  the 15s rule, Redis reachable, stream lag inside 30s and D1 answering. Separate from
+ *  "mode is PRIMARY": the mode is exactly what the gate decides, so deriving the streak
+ *  from mode rows is circular (a blocked tick writes non-PRIMARY and resets it). */
+export function primaryPlaneHealthy(sig) {
+  const goOk = (sig.go_heartbeat_ms ?? 0) > 0 && (sig.now_ms - sig.go_heartbeat_ms) <= TH.HEARTBEAT_MS * TH.MISSES;
+  return !sig.d1_down && goOk && sig.redis_reachable !== false && (sig.stream_lag_ms ?? Infinity) <= TH.STREAM_LAG_MS;
+}
+
+/** Read the start of the current continuous-healthy streak (null = never recorded). */
+export async function readHealthySince(env) {
   const row = await env.DB.prepare(
-    "SELECT at FROM health_snapshots WHERE component='mode' AND status <> 'PRIMARY' ORDER BY at DESC, rowid DESC LIMIT 1",
+    "SELECT at, detail_json FROM health_snapshots WHERE id='" + HEALTHY_ID + "'",
   ).all();
-  return row.results?.[0]?.at ?? null;
+  const last = row.results?.[0];
+  if (!last) return null;
+  let d = {};
+  try { d = JSON.parse(last.detail_json ?? "{}"); } catch { d = {}; }
+  const atMs = Number.isFinite(d.at_ms) ? d.at_ms : Date.parse(last.at);
+  return Number.isFinite(atMs) ? { at_ms: atMs } : null;
+}
+
+async function writeHealthySince(env, atMs, healthy) {
+  await env.DB.prepare(
+    "INSERT INTO health_snapshots(id,component,status,detail_json,at) VALUES(?,'healthy_since',?,?,?) " +
+      "ON CONFLICT(id) DO UPDATE SET status=excluded.status, detail_json=excluded.detail_json, at=excluded.at",
+  ).bind(HEALTHY_ID, healthy ? "HEALTHY" : "UNHEALTHY", JSON.stringify({ at_ms: atMs }), new Date(atMs).toISOString()).run();
+}
+
+/** Continuous healthy time in ms: the marker is reset on every unhealthy observation and
+ *  kept untouched while health holds, so a gate-blocked tick no longer resets it. */
+export async function healthyContigMs(env, sig) {
+  const healthy = primaryPlaneHealthy(sig);
+  if (!healthy) {
+    await writeHealthySince(env, sig.now_ms, false); // the streak restarts from now
+    return 0;
+  }
+  const since = await readHealthySince(env);
+  if (!since) {
+    await writeHealthySince(env, sig.now_ms, true); // first healthy observation starts it
+    return 0;
+  }
+  return Math.max(0, sig.now_ms - since.at_ms);
 }
 
 /** assembleSignals — the seam index.mjs used to hardcode (W0.2). Derives the cron
  *  signals from the heartbeat row, the mode history and the authority lease row (S3b).
  *  Unknown sources stay null so health.mjs treats them as worst-case; per-symbol
- *  fallback price freshness lands with the S3c poller. */
+ *  fallback price freshness comes from the S3c poller status row. */
 export async function assembleSignals(env, nowMs = Date.now()) {
   let d1Down = false;
   let hb = null;
   let prevMode = null;
-  let lastDownAt = null;
   let lease = null;
   try {
     hb = await readHeartbeat(env);
     prevMode = await lastModeRow(env);
-    lastDownAt = await lastNonPrimaryModeAt(env);
     lease = await readLease(env);
   } catch { d1Down = true; }
 
   const goHealthy = !d1Down && (hb?.go_heartbeat_ms ?? 0) > 0 && nowMs - hb.go_heartbeat_ms <= TH.HEARTBEAT_MS * TH.MISSES;
   const fallbackActive = !!prevMode && prevMode.status !== "PRIMARY" && !goHealthy;
+  const sig = {
+    now_ms: nowMs,
+    go_heartbeat_ms: hb?.go_heartbeat_ms ?? 0,
+    stream_lag_ms: hb?.stream_lag_ms ?? null,
+    redis_reachable: hb?.redis_reachable ?? true,
+    d1_down: d1Down,
+  };
   // §6.2 S1: in fallback the only price source is the REST poller, so its snapshot age
   // IS the price freshness. With no fallback quote yet that is "stale", never fresh.
   let priceLagMs = 0; // PRIMARY: the WS/Go path owns price freshness (stream lag)
@@ -253,6 +299,12 @@ export async function assembleSignals(env, nowMs = Date.now()) {
       const poll = await pollStatus(env, nowMs);
       priceLagMs = poll.quote_lag_ms;
     } catch { priceLagMs = TH.PRICE_STALE_MS + 1; }
+  }
+  // §6.3 condition 1, tracked on its own marker (never derived from the mode we are
+  // deciding): a gate-blocked tick must not reset the 60s streak.
+  let contigMs = 0;
+  if (!d1Down) {
+    try { contigMs = await healthyContigMs(env, sig); } catch { contigMs = 0; }
   }
   return {
     now_ms: nowMs,
@@ -263,8 +315,7 @@ export async function assembleSignals(env, nowMs = Date.now()) {
     d1_down: d1Down,
     // §6.2 S1: once the system is already degraded, the fallback path is engaged.
     fallback_active: fallbackActive,
-    // §6.3 condition 1: continuous healthy time since the last non-PRIMARY mode row.
-    healthy_contig_ms: goHealthy ? (lastDownAt ? Math.max(0, nowMs - Date.parse(lastDownAt)) : TH.RECOVER_CONTIG_MS) : 0,
+    healthy_contig_ms: contigMs,
     // §6.1: an aged authority lease is its own degradation input (renewed every 10s
     // while held; null until the first handoff, and until the DO binding at E12).
     lease_expires_ms: lease?.expires_ms ?? null,

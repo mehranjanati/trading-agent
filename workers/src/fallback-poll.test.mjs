@@ -81,12 +81,22 @@ describe("E06-T02-S3c budget arithmetic + guards (pure)", () => {
     assert.equal(w.canSpend(60_000, 100), true);
   });
 
-  it("parses the price payload and the documented 429 shape", async () => {
-    const { parseQuotes, priceUrl, isRateLimited, resetAtFrom, nextBackoffMs, MAX_BACKOFF_MS } = await import("./fallback-poll.mjs");
-    assert.deepEqual(parseQuotes([{ s: "BTCUSDT", p: "100" }]), [{ symbol: "BTCUSDT", price: "100" }]);
+  it("parses the price payload (both live shapes) and the documented 429", async () => {
+    const { parseQuotes, priceUrl, canonicalSymbol, isRateLimited, resetAtFrom, nextBackoffMs, MAX_BACKOFF_MS } = await import("./fallback-poll.mjs");
+    // filtered live shape: canonical symbol, no dash form
+    assert.deepEqual(parseQuotes([{ s: "BTCUSDT", p: "83838" }]), [{ symbol: "BTCUSDT", price: "83838" }]);
+    // unfiltered live shape: dash form + si
+    assert.deepEqual(parseQuotes([{ s: "BTC-SWAP-USDT", si: "BTC-SWAP-USDT", p: "6.6" }]), [{ symbol: "BTCUSDT", price: "6.6" }]);
     assert.deepEqual(parseQuotes({ data: [{ symbol: "ETHUSDT", price: 2 }] }), [{ symbol: "ETHUSDT", price: "2" }]);
     assert.deepEqual(parseQuotes({ nope: true }), []);
-    assert.match(priceUrl("https://api.toobit.com/", ["BTCUSDT", "ETHUSDT"]), /symbols=BTCUSDT%2CETHUSDT$/);
+    // the unfiltered venue answer must never leak into the poll set
+    const list = [{ s: "ZEN-SWAP-USDT", p: "6.6" }, { s: "BTC-SWAP-USDT", p: "83838" }];
+    assert.deepEqual(parseQuotes(list, ["BTCUSDT"]), [{ symbol: "BTCUSDT", price: "83838" }]);
+    assert.deepEqual(parseQuotes(list, ["ETHUSDT"]), []);
+    assert.equal(canonicalSymbol("BTC-SWAP-USDT"), "BTCUSDT");
+    // one weight-1 filtered request per symbol (the `symbols=` form is ignored live)
+    assert.match(priceUrl("https://api.toobit.com/", "BTCUSDT"), /ticker\/price\?symbol=BTCUSDT$/);
+    assert.doesNotMatch(priceUrl("https://api.toobit.com/", "BTCUSDT"), /symbols=/);
     assert.equal(isRateLimited({ status: 429 }), true);
     assert.equal(isRateLimited({ status: 200, body: { code: -1003 } }), true);
     assert.equal(isRateLimited({ status: 200, body: { code: -1015 } }), true);
@@ -149,7 +159,7 @@ describe("E06-T02-S3c no-429 proof (stub exchange, simulated clock)", () => {
 
       assert.equal(ok, rounds, "every round polled");
       assert.equal(stub.stats.limited, 0, "zero 429s");
-      assert.equal(stub.stats.requests, rounds);
+      assert.equal(stub.stats.requests, rounds * n); // one filtered request per symbol
       assert.ok(stub.usage(simNow) <= 3000, `usage ${stub.usage(simNow)} within REQUEST_WEIGHT`);
       assert.ok(stub.stats.peak_usage <= 3000);
       assert.ok(POLL_MS >= floorMs(n), `cadence ${POLL_MS}ms < floor ${floorMs(n)}ms`);
@@ -157,9 +167,74 @@ describe("E06-T02-S3c no-429 proof (stub exchange, simulated clock)", () => {
       const weightPerMin = (60_000 / POLL_MS) * n;
       assert.ok(weightPerMin <= 3000, `weight/min ${weightPerMin} over budget`);
       assert.equal(store.peek().quotes.length, n);
+      assert.equal(store.peek().covered, n);
       assert.equal(store.peek().rounds, rounds);
     });
   }
+
+  it("a single transport failure is retried, and retries are weight-accounted", async () => {
+    const { tick, createWindow, memoryStore, POLL_RETRIES } = await import("./fallback-poll.mjs");
+    assert.equal(POLL_RETRIES, 1);
+    const window = createWindow();
+    const sleeps = [];
+    let calls = 0;
+    // first attempt on ETHUSDT dies (cold handshake), the retry succeeds
+    const get = async (url) => {
+      calls++;
+      const sym = new URL(url).searchParams.get("symbol");
+      if (sym === "ETHUSDT" && calls === 2) throw new Error("This operation was aborted");
+      return { status: 200, body: [{ s: sym, p: "1" }] };
+    };
+    const res = await tick({}, {
+      nowMs: 1_000, mode: "FALLBACK", store: memoryStore(), window, symbols: ["BTCUSDT", "ETHUSDT"],
+      baseUrl: "http://x", get, jitter: () => 0, env: {}, sleep: async (ms) => sleeps.push(ms),
+    });
+
+    assert.equal(res.reason, "ok");
+    assert.equal(res.covered, 2);
+    assert.equal(res.polls, 3); // 2 symbols + 1 retry
+    assert.equal(res.usage, 3); // the retry was counted against the budget
+    assert.deepEqual(sleeps, [300]);
+  });
+
+  it("a persistently dead transport fails the round after the retry budget", async () => {
+    const { tick, createWindow, memoryStore } = await import("./fallback-poll.mjs");
+    const window = createWindow();
+    let calls = 0;
+    const res = await tick({}, {
+      nowMs: 1_000, mode: "FALLBACK", store: memoryStore(), window, symbols: ["BTCUSDT", "ETHUSDT"],
+      baseUrl: "http://x", jitter: () => 0, env: {}, sleep: async () => {},
+      get: async () => { calls++; throw new Error("fetch failed"); },
+    });
+
+    assert.equal(res.reason, "transport-error");
+    assert.equal(res.error, "fetch failed");
+    assert.equal(calls, 2); // 1 attempt + 1 retry, then the round stops
+    assert.equal(res.polls, 2);
+    assert.equal(res.state.inflight, 0);
+    assert.equal(res.state.newest_at_ms, null); // a failed round never claims freshness
+    assert.equal(window.usage(1_000), 2); // both attempts accounted
+  });
+
+  it("an answer that covers none of our symbols is never counted as fresh", async () => {
+    const { tick, createWindow, memoryStore } = await import("./fallback-poll.mjs");
+    let simNow = 2_000_000;
+    // the venue ignoring our filter (documented live hazard) → only foreign markets back
+    const stub = createStubExchange({ now: () => simNow, ignoreFilter: true });
+    const port = await stub.listen(0);
+    const store = memoryStore();
+    const res = await tick({}, {
+      nowMs: simNow, mode: "FALLBACK", store, window: createWindow(), symbols: ["BTCUSDT", "ETHUSDT"],
+      baseUrl: `http://127.0.0.1:${port}`, jitter: () => 0, env: {},
+    });
+    await stub.close();
+
+    assert.equal(res.reason, "no-quotes");
+    assert.equal(res.quotes, 0);
+    assert.equal(store.peek().newest_at_ms, null); // no freshness claim
+    assert.equal(store.peek().covered, 0);
+    assert.equal(store.peek().inflight, 0);
+  });
 
   it("a shrunken venue budget forces one 429 → backoff incident, then the poller waits", async () => {
     const { tick, createWindow, memoryStore, BACKOFF_INCIDENT } = await import("./fallback-poll.mjs");
@@ -181,7 +256,6 @@ describe("E06-T02-S3c no-429 proof (stub exchange, simulated clock)", () => {
     assert.equal(limited.reason, "rate-limited");
     assert.equal(limited.status, 429);
     assert.ok(limited.backoff_until_ms > simNow);
-    await stub.close();
 
     assert.equal(stub.stats.limited, 1);
     assert.ok(stub.stats.weight <= 200, "the stub never served more than its budget");
@@ -191,14 +265,27 @@ describe("E06-T02-S3c no-429 proof (stub exchange, simulated clock)", () => {
     const held = await call(simNow);
     assert.equal(held.polls, 0);
     assert.equal(held.reason, "backoff");
-    // after the backoff expires the poller resumes (and the window has moved on)
+    // after the backoff expires the poller resumes: the window has moved on, so this round
+    // covers the whole poll set again and does NOT produce another 429
     simNow = limited.backoff_until_ms + 1;
-    assert.equal((await call(simNow)).polls, 1);
+    const resumed = await call(simNow);
+    await stub.close();
+    assert.equal(resumed.reason, "ok");
+    assert.equal(resumed.polls, symbols.length); // one filtered request per symbol
+    assert.equal(stub.stats.limited, 1); // no second 429 after waiting out the reset
     assert.equal(store.peek().inflight, 0); // never left in-flight
   });
 });
 
 describe("E06-T02-S3c D1 wiring + health/cron integration", () => {
+  /** Faithful price fake: echoes the requested symbol (canonical), like the live
+   *  filtered endpoint. An empty string means "this symbol is not quoted". */
+  const priceGet = (unquoted = []) => async (url) => {
+    const sym = new URL(url).searchParams.get("symbol") ?? "";
+    if (unquoted.includes(sym)) return { status: 200, body: [] };
+    return { status: 200, body: [{ s: sym, p: "1" }] };
+  };
+
   it("the status row is a single fixed-id upsert (no table growth)", async () => {
     const env = freshEnv();
     const { tick: pollOnce, d1Store, pollStatus } = await import("./fallback-poll.mjs");
@@ -209,15 +296,39 @@ describe("E06-T02-S3c D1 wiring + health/cron integration", () => {
     for (let i = 0; i < 3; i++) {
       await pollOnce(env, {
         nowMs: now + i * 5_000, mode: "DEGRADED", store: d1Store(env), symbols: ["BTCUSDT", "ETHUSDT"],
-        jitter: () => 0, baseUrl: "http://127.0.0.1:1", get: async () => ({ status: 200, body: [{ s: "BTCUSDT", p: "1" }] }),
+        jitter: () => 0, get: priceGet(),
       });
     }
     assert.equal(scalar("SELECT COUNT(*) FROM health_snapshots WHERE id='poll_quotes';"), 1);
     const status = await pollStatus(env, now + 10_000);
     assert.equal(status.drained, true);
     assert.equal(status.symbols, 2);
+    assert.equal(status.covered, 2);
     assert.equal(status.rounds, 3);
     assert.equal(status.quote_lag_ms, 0);
+  });
+
+  it("a partially answered round keeps freshness ageing (R-STALE, §6.2 S5)", async () => {
+    const env = freshEnv();
+    const { tick: pollOnce, d1Store, pollStatus } = await import("./fallback-poll.mjs");
+    const now = Date.now();
+    const store = d1Store(env);
+
+    const full = await pollOnce(env, {
+      nowMs: now, mode: "DEGRADED", store, symbols: ["BTCUSDT", "ETHUSDT"], jitter: () => 0, get: priceGet(),
+    });
+    assert.equal(full.reason, "ok");
+    assert.equal((await pollStatus(env, now)).quote_lag_ms, 0);
+
+    const partial = await pollOnce(env, {
+      nowMs: now + 5_000, mode: "DEGRADED", store, symbols: ["BTCUSDT", "ETHUSDT"],
+      jitter: () => 0, get: priceGet(["ETHUSDT"]),
+    });
+    assert.equal(partial.reason, "partial-quotes");
+    assert.equal(partial.covered, 1);
+    const status = await pollStatus(env, now + 5_000);
+    assert.equal(status.newest_at_ms, now); // the earlier snapshot, not the partial round
+    assert.equal(status.quote_lag_ms, 5_000); // it aged rather than refreshed
   });
 
   it("in fallback the poller's snapshot age is the price freshness (§6.2 S1)", async () => {

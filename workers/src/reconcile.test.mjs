@@ -226,20 +226,76 @@ describe("E06-T02-S3a idempotency + §6.4 no-resubmit", () => {
 });
 
 describe("E06-T02-S3a rejoin ordering + fail-closed", () => {
-  /** §6.3 setup: fresh heartbeat, ≥60s continuous since the last non-PRIMARY row,
+  /** §6.3 setup: fresh heartbeat, a 61s continuous-healthy streak already recorded,
    *  authority handed to primary, and one non-terminal intent to reconcile. */
-  async function rejoinEnv({ handoff = true } = {}) {
+  async function rejoinEnv({ handoff = true, healthySinceMs = 61_000 } = {}) {
     const env = freshEnv();
     const now = Date.now();
     const { recordHeartbeat, handoffLease } = await import("./health-route.mjs");
     await recordHeartbeat(env, { go_heartbeat_ms: now, stream_lag_ms: 0, redis_reachable: true });
     sql(`INSERT INTO health_snapshots(id,component,status,detail_json,at) VALUES('hs_prev','mode','DEGRADED','{}','${iso(now - 61_000)}');`);
+    if (healthySinceMs !== null) {
+      sql(`INSERT INTO health_snapshots(id,component,status,detail_json,at) VALUES('healthy_since','healthy_since','HEALTHY','{"at_ms":${now - healthySinceMs}}','${iso(now - healthySinceMs)}');`);
+    }
     if (handoff) await handoffLease(env, { holder: HOLDERS.PRIMARY, nowMs: now });
     seedIntent({ id: "i1", approval_id: "a1", client_order_id: "c1", status: "SUBMITTED", at: iso(now - 30_000) });
     return { env, now };
   }
 
   const jsonRows = (q) => JSON.parse(execSync(`sqlite3 -json ${dbFile} "${q}"`, { encoding: "utf8" }));
+
+  it("a degraded system is not locked out: the 60s healthy streak accumulates across blocked ticks", async () => {
+    // Regression (found by the first real drill run): the streak used to be derived from
+    // the last non-PRIMARY MODE row — but every gate-blocked tick writes one, so the streak
+    // reset to ~0 forever and §6.3 condition 1 could never be met.
+    const { env, now } = await rejoinEnv({ healthySinceMs: null }); // no prior streak
+    const { runCron } = await import("./index.mjs");
+    const { handoffLease, recordHeartbeat } = await import("./health-route.mjs");
+    const resolve = { intent: () => ({ status: "FILLED", exchange_order_id: "ex1" }) };
+    // Go heartbeats every 5s and the DO renews its lease every 10s; the test keeps
+    // both fresh before each tick so a stale-heartbeat lapse never fakes a fallback.
+    const refresh = (ms) => Promise.all([
+      recordHeartbeat(env, { go_heartbeat_ms: ms, stream_lag_ms: 0, redis_reachable: true }),
+      handoffLease(env, { holder: HOLDERS.PRIMARY, nowMs: ms }),
+    ]);
+    const missing = (tick) => (tick.reasons.find((r) => r.startsWith("rejoin_blocked(")) ?? "");
+
+    const t1 = await runCron(env, { nowMs: now, resolve });
+    assert.equal(t1.tick.mode, "DEGRADED");
+    assert.match(missing(t1.tick), /go_healthy_60s/);
+    assert.equal(t1.rejoin.non_terminal_intents, 0); // reconcile + drain + lease already fine
+
+    await refresh(now + 30_000);
+    const t2 = await runCron(env, { nowMs: now + 30_000, resolve });
+    assert.equal(t2.tick.mode, "DEGRADED");
+    assert.match(missing(t2.tick), /go_healthy_60s/);
+
+    // the streak kept running while blocked → the gate opens at +61s
+    await refresh(now + 61_000);
+    const t3 = await runCron(env, { nowMs: now + 61_000, resolve });
+    assert.equal(t3.tick.mode, "PRIMARY");
+    assert.ok(jsonRows("SELECT incident FROM recovery_log;").some((r) => r.incident === "health.recovered"));
+  });
+
+  it("an unhealthy observation restarts the streak", async () => {
+    const { env, now } = await rejoinEnv();
+    const { recordHeartbeat, handoffLease } = await import("./health-route.mjs");
+    const { runCron } = await import("./index.mjs");
+    const resolve = { intent: () => ({ status: "FILLED", exchange_order_id: "ex1" }) };
+
+    // Go goes silent → the marker is reset, the >=60s streak we seeded is gone
+    await recordHeartbeat(env, { go_heartbeat_ms: now - 30_000, stream_lag_ms: 0, redis_reachable: true });
+    const degraded = await runCron(env, { nowMs: now + 61_000, resolve });
+    assert.notEqual(degraded.tick.mode, "PRIMARY"); // DEGRADED, or FALLBACK once engaged (§6.2 S1)
+
+    // Go recovers; the DO still holds/renews its authority lease (every 10s), so the
+    // only thing that can block return-to-primary is the streak that just restarted.
+    await recordHeartbeat(env, { go_heartbeat_ms: now + 61_000, stream_lag_ms: 0, redis_reachable: true });
+    await handoffLease(env, { holder: HOLDERS.PRIMARY, nowMs: now + 61_000 });
+    const blocked = await runCron(env, { nowMs: now + 62_000, resolve });
+    assert.equal(blocked.tick.mode, "DEGRADED");
+    assert.match(blocked.tick.reasons.join(";"), /go_healthy_60s/);
+  });
 
   it("PRIMARY is written only after the reconcile sweep certifies (acceptance 2)", async () => {
     const { env, now } = await rejoinEnv();

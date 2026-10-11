@@ -25,6 +25,9 @@ export const BUDGET_PER_SEC = 50;
 export const POLL_MS = 5_000;             // ADR-004 chosen poll interval
 export const POLL_WEIGHT = 1;             // weight per symbol on the price endpoint
 export const MAX_BACKOFF_MS = 60_000;
+export const POLL_RETRIES = 1;            // one retry per symbol: a cold TLS handshake after
+                                          // the idle gap can exceed the per-request timeout
+export const RETRY_MS = 300;
 export const POLL_ID = "poll_quotes";     // fixed id → the status row never grows
 export const TOP_N_DEFAULT = 10;          // §6.2 S3 minimal top-N watch set
 export const RESET_HEADER = "x-api-limit-reset-timestamp";
@@ -67,21 +70,39 @@ export async function pollSet(env, { limit = TOP_N_DEFAULT } = {}) {
   return [...new Set(rows.map((r) => r.symbol))];
 }
 
-/** Parse the price endpoint. Toobit returns the latest `p` per `s`; `{symbol,price}` is
- *  tolerated too. Shape confirmed against the live endpoint at E12 (VERIFY_REQUIRED). */
-export function parseQuotes(body) {
-  const list = Array.isArray(body) ? body : (body?.data ?? []);
-  const out = [];
-  for (const r of list) {
-    const symbol = r?.s ?? r?.symbol;
-    const price = r?.p ?? r?.price;
-    if (symbol && price !== undefined && price !== null) out.push({ symbol, price: String(price) });
-  }
-  return out;
+/** Canonical symbol form (repo-wide): `BTC-SWAP-USDT` → `BTCUSDT`. Mirrors the Go
+ *  normalizer (go-watcher/normalize.ToCanonical) exactly — dashes and the SWAP infix
+ *  are removed — so both planes agree on one symbol identity. */
+export function canonicalSymbol(raw) {
+  return String(raw ?? "").toUpperCase().trim().replaceAll("-", "").replaceAll("SWAP", "");
 }
 
-export function priceUrl(baseUrl, symbols) {
-  return `${String(baseUrl).replace(/\/$/, "")}${PRICE_PATH}?symbols=${encodeURIComponent(symbols.join(","))}`;
+/** Request URL for one symbol. Live-verified 2026-10-11 (TOOBIT-API-FACTS S2a):
+ *  `?symbol=BTCUSDT` (singular) filters and answers in the canonical form, while
+ *  `?symbols=...` is IGNORED and returns all ~1022 markets (61KB, dash form). The poller
+ *  therefore issues one weight-1 request per symbol — the ADR-004 math as written. */
+export function priceUrl(baseUrl, symbol) {
+  return `${String(baseUrl).replace(/\/$/, "")}${PRICE_PATH}?symbol=${encodeURIComponent(symbol)}`;
+}
+
+/** Parse the price endpoint. Accepted shapes: the filtered canonical form
+ *  `{"s":"BTCUSDT","p":"83838"}` and the full-list dash form `{"s":"BTC-SWAP-USDT",
+ *  "si":...,"p":...}` (live-verified 2026-10-11). Symbols are canonicalised and, when
+ *  `wanted` is given, anything outside the poll set is dropped — the venue's unfiltered
+ *  answer must never leak into our quote snapshot. */
+export function parseQuotes(body, wanted = null) {
+  const list = Array.isArray(body) ? body : (body?.data ?? []);
+  const allow = wanted ? new Set(wanted.map(canonicalSymbol)) : null;
+  const out = [];
+  for (const r of list) {
+    const raw = r?.s ?? r?.symbol;
+    const price = r?.p ?? r?.price;
+    if (!raw || price === undefined || price === null) continue;
+    const symbol = canonicalSymbol(raw);
+    if (allow && !allow.has(symbol)) continue;
+    out.push({ symbol, price: String(price) });
+  }
+  return out;
 }
 
 async function defaultGet(url, timeoutMs = 4_000) {
@@ -201,7 +222,8 @@ export async function tick(env, opts = {}) {
   const symbols = opts.symbols ?? (await pollSet(env, { limit: opts.symbolLimit }));
   if (!symbols.length) return { polls: 0, reason: "no-active-watches", state };
 
-  // Weight is accounted per symbol (the conservative reading of A-02 / ADR-004 math).
+  // Weight is 1 per symbol (one filtered request each) — the conservative reading of
+  // A-02 / ADR-004, and the shape the live endpoint actually supports.
   const weight = symbols.length * POLL_WEIGHT;
   if (!window.canSpend(nowMs, weight)) {
     return { polls: 0, reason: "budget", weight, usage: window.usage(nowMs), state };
@@ -209,24 +231,38 @@ export async function tick(env, opts = {}) {
 
   await store.write(roundState(state, { inflight: 1, reason: "polling", at_ms: nowMs }));
 
-  let res;
-  try {
-    res = await httpGet(priceUrl(baseUrl, symbols), opts.timeoutMs);
-  } catch (e) {
-    const next = roundState(state, {
-      inflight: 0, reason: "transport-error", last_poll_ms: nowMs,
-      errors: (state.errors ?? 0) + 1, at_ms: nowMs,
-    });
-    await store.write(next);
-    return { polls: 1, reason: "transport-error", error: e.message, state: next };
+  const quotes = [];
+  let sent = 0;
+  let usage = window.usage(nowMs);
+  let rateLimited = null;
+  let failure = null;
+  const attempts = 1 + Math.max(0, opts.retries ?? POLL_RETRIES);
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  for (const symbol of symbols) {
+    let res = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      sent++;
+      try {
+        res = await httpGet(priceUrl(baseUrl, symbol), opts.timeoutMs);
+      } catch (e) {
+        res = null;
+        lastError = e.message;
+      }
+      // Every attempt that left the process was counted by the venue, retries included.
+      usage = window.spend(nowMs, POLL_WEIGHT);
+      if (res) break;
+      if (attempt + 1 < attempts) await sleep(opts.retryMs ?? RETRY_MS);
+    }
+    if (!res) { failure = { reason: "transport-error", error: lastError ?? "unknown" }; break; }
+    if (isRateLimited(res)) { rateLimited = res; break; }
+    if (res.status !== 200) { failure = { reason: `http-${res.status}`, status: res.status }; break; }
+    quotes.push(...parseQuotes(res.body, [symbol]));
   }
 
-  // The request was sent, so the venue counted it either way.
-  const usage = window.spend(nowMs, weight);
-
-  if (isRateLimited(res)) {
+  if (rateLimited) {
     const errors = (state.errors ?? 0) + 1;
-    const resetAt = resetAtFrom(res);
+    const resetAt = resetAtFrom(rateLimited);
     const backoff = nextBackoffMs(errors - 1, nowMs, resetAt, jitter());
     const next = roundState(state, {
       inflight: 0, symbols: symbols.length, last_poll_ms: nowMs, reason: "rate-limited",
@@ -234,27 +270,44 @@ export async function tick(env, opts = {}) {
     });
     await store.write(next);
     // The ADR-004 alert: this must never fire in the 5s/≤100-symbol envelope.
-    await recordIncident(env, BACKOFF_INCIDENT, `status=${res.status} backoff_ms=${backoff} reset=${resetAt ?? "none"}`, actor);
-    return { polls: 1, status: res.status, reason: "rate-limited", backoff_until_ms: next.backoff_until_ms, weight, state: next };
+    await recordIncident(env, BACKOFF_INCIDENT, `status=${rateLimited.status} backoff_ms=${backoff} reset=${resetAt ?? "none"} after=${sent}/${symbols.length}`, actor);
+    return { polls: sent, status: rateLimited.status, reason: "rate-limited", backoff_until_ms: next.backoff_until_ms, weight, usage, state: next };
   }
 
-  if (res.status !== 200) {
+  if (failure) {
     const next = roundState(state, {
-      inflight: 0, symbols: symbols.length, last_poll_ms: nowMs, reason: `http-${res.status}`,
+      inflight: 0, symbols: symbols.length, covered: quotes.length, quotes, last_poll_ms: nowMs,
+      reason: failure.reason, errors: (state.errors ?? 0) + 1, usage_per_min: usage,
+      rounds: (state.rounds ?? 0) + 1, at_ms: nowMs,
+    });
+    await store.write(next);
+    return { polls: sent, status: failure.status ?? null, reason: failure.reason, error: failure.error, covered: quotes.length, state: next };
+  }
+
+  // Every request that was answered covered none of our symbols (e.g. the venue changed
+  // shape or dropped the filter): that is NOT fresh data — never mark the snapshot as a
+  // quote we do not have.
+  if (quotes.length === 0) {
+    const next = roundState(state, {
+      inflight: 0, symbols: symbols.length, covered: 0, quotes: [], last_poll_ms: nowMs, reason: "no-quotes",
       errors: (state.errors ?? 0) + 1, usage_per_min: usage, rounds: (state.rounds ?? 0) + 1, at_ms: nowMs,
     });
     await store.write(next);
-    return { polls: 1, status: res.status, reason: `http-${res.status}`, state: next };
+    return { polls: sent, status: 200, reason: "no-quotes", quotes: 0, covered: 0, weight, usage, state: next };
   }
 
-  const quotes = parseQuotes(res.body);
+  // Partial coverage (some symbol unanswered) keeps freshness ageing: R-STALE says a
+  // partially-supervised watch is stale, never "probably fine" (§6.2 S5 → HELD_STALE).
+  const complete = quotes.length === symbols.length;
   const next = roundState(state, {
-    symbols: symbols.length, quotes, newest_at_ms: nowMs, last_poll_ms: nowMs, inflight: 0,
-    reason: "ok", backoff_until_ms: null, errors: 0, usage_per_min: usage,
-    rounds: (state.rounds ?? 0) + 1, at_ms: nowMs,
+    symbols: symbols.length, covered: quotes.length, quotes, last_poll_ms: nowMs, inflight: 0,
+    newest_at_ms: complete ? nowMs : state.newest_at_ms,
+    reason: complete ? "ok" : "partial-quotes",
+    backoff_until_ms: null, errors: complete ? 0 : (state.errors ?? 0) + 1,
+    usage_per_min: usage, rounds: (state.rounds ?? 0) + 1, at_ms: nowMs,
   });
   await store.write(next);
-  return { polls: 1, status: 200, reason: "ok", quotes: quotes.length, weight, usage, state: next };
+  return { polls: sent, status: 200, reason: next.reason, quotes: quotes.length, covered: quotes.length, weight, usage, state: next };
 }
 
 /** Poller status for the health plane: `drained` feeds §6.3 condition 3 and

@@ -755,7 +755,7 @@
         "reviewer": "Qwen3.8 Max"
       },
       "estimated_complexity": "L",
-      "status": "PROPOSED",
+      "status": "DONE",
       "blocking_decisions": [],
       "safety_tags": [
         "none"

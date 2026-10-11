@@ -4,12 +4,14 @@ import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { guardTransition, transitionSql, activeSnapshotSql, WATCH_EDGES } from "./watches.mjs";
 import { signalInsertSql, eventAppendSql, timelineSql } from "./timeline.mjs";
 
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql"]
-  .map((f) => readFileSync(f, "utf8")).join("\n");
+  .map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
 const tmp = join(tmpdir(), `e04t02-${Date.now()}.sql`);
 const run = (sql, expectFail = false) => {
   writeFileSync(tmp, sql);

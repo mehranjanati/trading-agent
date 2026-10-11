@@ -297,9 +297,9 @@ drills that assert them; drills last — they are the evidence, not the code.
 
 ## 10. DoD checklist (the "checklist" in scope)
 
-- [ ] W0 seams wired (heartbeat publisher/route, real cron signals,
-      `healthy_contig_ms`, Go ready/snapshot, redisx extraction)
-- [ ] S1 chaos.mjs + safety guards + injection suite + Makefile extension
+- [x] W0 seams wired (heartbeat publisher/route, real cron signals,
+      `healthy_contig_ms`, Go ready/snapshot, redisx extraction) — commit 1
+- [x] S1 chaos.mjs + safety guards + injection suite + Makefile extension — commit 2
 - [ ] S2 drills 1/2/3 executed; evidence JSON + logs committed
 - [ ] S3a reconcile sweep + tests; S3b rejoin/fencing sequence test;
       S3c poller + no-429 test + deferral note

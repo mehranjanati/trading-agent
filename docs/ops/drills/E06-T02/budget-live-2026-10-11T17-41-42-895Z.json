@@ -1,0 +1,114 @@
+{
+  "task": "E06-T02",
+  "drill": "budget-live",
+  "phase": "all",
+  "ok": false,
+  "target": "local",
+  "at": "2026-10-11T17:41:42.894Z",
+  "baselines": {
+    "symbols": 3,
+    "minutes": 1,
+    "rounds": 12,
+    "live": true,
+    "source": "https://api.toobit.com",
+    "stub": null,
+    "window_usage": 15
+  },
+  "checks": [
+    {
+      "name": "zero_429",
+      "ok": true,
+      "detail": {
+        "venue_limited": 0,
+        "poller_limited": 0
+      }
+    },
+    {
+      "name": "weight_within_budget",
+      "ok": true,
+      "detail": {
+        "peak_usage": 15,
+        "budget_per_min": 3000
+      }
+    },
+    {
+      "name": "cadence_floor",
+      "ok": true,
+      "detail": {
+        "poll_ms": 5000,
+        "floor_ms": 120
+      }
+    },
+    {
+      "name": "adr004_math",
+      "ok": true,
+      "detail": {
+        "symbols": 3,
+        "pollSec": 5,
+        "floor": 0.12,
+        "roundsPerMin": 12,
+        "weightPerMin": 36,
+        "budgetPerMin": 3000
+      }
+    },
+    {
+      "name": "rounds_attempted",
+      "ok": true,
+      "detail": {
+        "rounds": 12,
+        "polled": 9,
+        "transport_errors": 3,
+        "minutes": 1,
+        "live": true
+      }
+    },
+    {
+      "name": "quote_coverage",
+      "ok": true,
+      "detail": {
+        "full_rounds": 9,
+        "rounds": 12,
+        "transport_errors": 3,
+        "covered": 3,
+        "expected": 3
+      }
+    },
+    {
+      "name": "transport_error_rate",
+      "ok": false,
+      "detail": {
+        "transport_errors": 3,
+        "rounds": 12,
+        "rate": 0.25,
+        "budget": 0.2,
+        "samples": [
+          {
+            "round": 2,
+            "error": "This operation was aborted",
+            "after_requests": 1
+          },
+          {
+            "round": 9,
+            "error": "This operation was aborted",
+            "after_requests": 1
+          },
+          {
+            "round": 11,
+            "error": "This operation was aborted",
+            "after_requests": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "observed_request_latency_ms",
+      "ok": true,
+      "detail": {
+        "rounds": 12,
+        "requests": 36,
+        "mean_ms": 2873,
+        "max_ms": 5176
+      }
+    }
+  ]
+}

@@ -8,6 +8,7 @@
 - **D-05** At-least-once + dedupe + outbox + idempotent submit; no exactly-once claims (ADR-005). 2026-10-10.
 - **D-06 Q-10 CLOSED → no Toobit testnet found in official docs (2026-10-10).** E09/E11 use a Workers paper-simulator until a testnet is confirmed. Owner: researcher. Unblocks E09-T01 design.
 - **D-07 ADR-004 ACCEPTED** — fallback 5s REST poll proven for ≤100 symbols (3000 weight/min ÷ weight-1 ticker). Owner: architect.
+- **D-08 Execution plane is Cloudflare-only** — signed submit + reconcile run in Workers; orders, positions and approvals are canonical in D1; dashboard is read-only via Workers. Go Watcher is market-data + triggers only and MUST NOT submit orders, including fallback (docs/03 §3.3, ADR-003). Toobit trade keys live in the Cloudflare secret store only (T5). 2026-10-11. Owner: architect.
 
 ## 14.2 Assumptions (VERIFY_REQUIRED — each blocks backlog items)
 - **A-01 CLOSED 2026-10-10** — WS verified: `wss://stream.toobit.com/quote/ws/v1`, topics trade/markPrice/bookTicker, ping ≤5min, symbol form `BTC-SWAP-USDT`. Evidence: `docs/ops/TOOBIT-API-FACTS.md`. Unblocked E02-T02.
@@ -25,3 +26,7 @@
 - **Q-08** Hetzner sizing/region/backups? Owner: operator · Close: E12 · Proposal: FSN1, daily snapshots.
 - **Q-09** Cloudflare plan limits (D1 rows/writes, DO requests)? Owner: operator · Close: E04 · Verify on dashboard + docs.
 - **Q-10 CLOSED → no testnet** (D-06 above). E09/E11 use paper-simulator.
+- **Q-11** wazero version vs go1.23 + wasip1 stdlib coverage? Owner: implementer · Close: E13-T03 · Needed for ADR-006 verification (URL+date).
+- **Q-12** Artifact store location/quota (Hetzner vol path + backup)? Owner: operator · Close: E13-T04 · Proposal: volume dir + hourly snapshot.
+- **Q-13** WASM invocation budget SLO (p95 ms, mem MB)? Owner: trader+operator · Close: E13-T03 bench · Proposal: 500ms deadline, measure first.
+- **Q-14** `WASM_PROPOSAL` signal kind + RBAC for activation? Owner: signal owner+admin · Close: E13-T02 · Proposal: kind added, admin-only activation.

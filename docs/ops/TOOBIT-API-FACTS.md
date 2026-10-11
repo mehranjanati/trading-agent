@@ -27,4 +27,21 @@
 - **Q-10 (testnet):** **NO testnet/paper URL found anywhere in official docs** (introduction, basic-info, market, trading pages searched 2026-10-10). → Decision: E09/E11 use a **Workers paper-simulator** (records intents, simulates fills) until a testnet is confirmed. Recorded in doc 14 as D-06.
 - **IP restriction:** officially recommended on keys (introduction page) — matches our key policy.
 
+## S2a — Live REST probe (2026-10-11) — price endpoint filter + shape
+
+**Source:** live `https://api.toobit.com` from the dev machine (egress confirmed), read-only market data.
+
+- `GET /api/v1/time` → 200 `{"serverTime":1791738585088}` — the REST plane is reachable and unauthenticated reads work.
+- **`?symbol=<SYM>` (SINGULAR) is the working filter**: `GET /quote/v1/contract/ticker/price?symbol=BTCUSDT` → `[{"s":"BTCUSDT","p":"83999.27"}]` — one item, **canonical (dash-free) symbol form, no `si` field**. Verified for `BTCUSDT/ETHUSDT/SOLUSDT/DOGEUSDT/XRPUSDT`.
+- **`?symbols=` (PLURAL) IS IGNORED**: with no param, `?symbols=BTCUSDT`, `?symbols=BTC-SWAP-USDT` and `?symbols=BTCUSDT,ETHUSDT` the endpoint answers the **whole venue: 1022 markets, 60 929 bytes**, in the dash form + `si` → `{"s":"ZEN-SWAP-USDT","si":"ZEN-SWAP-USDT","p":"6.633"}`.
+- 200 responses carried **no** `X-Api-Limit-*` headers (the reset header appears on 429, per S2).
+
+**Design impact (implemented in `workers/src/fallback-poll.mjs`, E06-T02-S3c):**
+1. Fallback polling issues **one filtered request per symbol** → weight 1 each, the ADR-004 math exactly as written (`symbols × 1/50 × 2` floor, 5s cadence).
+2. Never request the batch form: it would return 1022 unrelated markets on every round.
+3. Any answer is **canonicalised and filtered against the poll set** before it can influence freshness; `BTC-SWAP-USDT` → `BTCUSDT` mirrors Go `normalize.ToCanonical` (dashes and the `SWAP` infix are removed), so both planes share one symbol identity.
+4. A round whose answer covers **none** of our symbols is recorded as `no-quotes` and never updates the snapshot age (no false freshness).
+
+**Egress note:** the earlier "no egress" statement in `go-watcher/SOAK-NOTE.md` concerned the Go WS soak path; HTTPS REST from the dev machine works (probe above), so the S3c no-429 proof now includes a **live** observation (`docs/ops/drills/E06-T02/budget-live-*.json`). The 24h WS soak + the extended live window still attach to the E11 gate report.
+
 Related: [ADR-004](../decisions/ADR-004-market-data-fallback.md) · [Contracts §10.4](../10-api-and-integration-contracts.md) · [Assumptions](../14-assumptions-decisions-and-open-questions.md).

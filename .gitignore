@@ -12,3 +12,10 @@ bin/
 .DS_Store
 wrangler/.cache
 .dev.vars
+
+# wrangler local dev state (build artifacts / local sqlite; never commit)
+.wrangler/
+workers/.wrangler/
+
+# Go command binaries built in-place (e.g. `go build ./cmd/restart-drill`)
+/go-watcher/restart-drill

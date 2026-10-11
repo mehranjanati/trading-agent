@@ -1,12 +1,12 @@
 {
-  "version": "2.0.0",
-  "generated": "2026-10-10",
+  "version": "2.1.0",
+  "generated": "2026-10-11",
   "project": "AI Trading Agent (Toobit USDT-M)",
   "stack": "TypeScript + Go only (no Python)",
   "counts": {
-    "epics": 13,
-    "tasks": 21,
-    "subtasks": 54
+    "epics": 14,
+    "tasks": 27,
+    "subtasks": 67
   },
   "tasks": [
     {
@@ -877,7 +877,7 @@
         "reviewer": "Qwen3.8 Max"
       },
       "estimated_complexity": "XL",
-      "status": "PROPOSED",
+      "status": "READY",
       "blocking_decisions": [],
       "safety_tags": [
         "trading-safety"
@@ -1092,7 +1092,7 @@
       "epic_id": "E09",
       "title": "Idempotent submit + reconcile (testnet)",
       "objective": "One exchange order per intent.",
-      "scope": "Signed submit clientOrderId, UNKNOWN-only reconcile, 15s sweep, kill hook, snapshots.",
+      "scope": "Signed submit clientOrderId, UNKNOWN-only reconcile, 15s sweep, kill hook, snapshots. Submit path lives in Workers only: Go Watcher never submits orders, including fallback (D-08).",
       "out_of_scope": "No live.",
       "priority": "P0",
       "risk_level": "high",
@@ -1350,6 +1350,163 @@
           "output": "rollback+game-day",
           "acceptance": "Given drill When run Then postmortem"
         }
+      ]
+    },
+    {
+      "id": "E13-T01",
+      "epic_id": "E13",
+      "title": "P0 contract schema + examples",
+      "objective": "Frozen v1 invocation/result schemas with golden fixtures.",
+      "scope": "schemas/strategy-*.schema.json, fixtures, doc 17.2 examples.",
+      "out_of_scope": "No host code, no wazero dep.",
+      "priority": "P0",
+      "risk_level": "medium",
+      "dependencies": ["E07-T01"],
+      "affected_components": ["schemas", "docs"],
+      "implementation_steps": ["Author schemas", "Add golden fixtures", "Sync doc 17 examples"],
+      "acceptance_criteria": ["Given golden req When validated Then schema pass", "Given bad bias When validated Then schema fail with path"],
+      "test_plan": ["JSON-schema tests", "Fixture lint in make check"],
+      "documentation_references": ["docs/17-go-wasm-strategy-runtime.md", "docs/decisions/ADR-007-strategy-contract-lifecycle.md"],
+      "model_assignment": {"primary": "Muse Spark 1.3", "reviewer": "GLM-5.3-Flash"},
+      "estimated_complexity": "S",
+      "status": "DONE",
+      "blocking_decisions": [],
+      "safety_tags": ["none"],
+      "verify_tags": ["none"],
+      "subtasks": [
+        {"id": "E13-T01-S1", "title": "Schemas + fixtures", "output": "2 schemas + golden files", "acceptance": "Given fixtures When checked Then valid", "status": "DONE"},
+        {"id": "E13-T01-S2", "title": "Doc examples sync", "output": "doc 17 matches schemas", "acceptance": "Given snippet When validated Then pass", "status": "DONE"}
+      ]
+    },
+    {
+      "id": "E13-T02",
+      "epic_id": "E13",
+      "title": "P1 host boundary + lifecycle design",
+      "objective": "Host API, FSM, D1 delta documented (no code).",
+      "scope": "go-watcher/strategy interface, lifecycle FSM, strategy_artifacts DDL, WASM_PROPOSAL mapping.",
+      "out_of_scope": "No implementation, no migration apply.",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": ["E13-T01"],
+      "affected_components": ["docs", "d1"],
+      "implementation_steps": ["Host interface doc", "Lifecycle FSM + DDL draft", "Ingest mapping doc"],
+      "acceptance_criteria": ["Given design When reviewed Then boundary explicit", "Given DDL draft When linted Then forward-only + UNIQUE(id,version)"],
+      "test_plan": ["Doc review", "DDL dry-run on scratch"],
+      "documentation_references": ["docs/17-go-wasm-strategy-runtime.md", "docs/decisions/ADR-006-wasm-strategy-runtime.md"],
+      "model_assignment": {"primary": "DeepSeek V4.1 Flash", "reviewer": "Muse Spark 1.3"},
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "safety_tags": ["none"],
+      "verify_tags": ["none"],
+      "subtasks": [
+        {"id": "E13-T02-S1", "title": "Host API doc", "output": "Compile/Invoke/Close sigs", "acceptance": "Given API When read Then budgets explicit"},
+        {"id": "E13-T02-S2", "title": "Lifecycle + DDL", "output": "FSM + artifacts DDL", "acceptance": "Given DDL When scratch Then tables exist"},
+        {"id": "E13-T02-S3", "title": "Ingest mapping", "output": "WASM_PROPOSAL mapping", "acceptance": "Given proposal When mapped Then valid"}
+      ]
+    },
+    {
+      "id": "E13-T03",
+      "epic_id": "E13",
+      "title": "P2 feasibility + PoC plan",
+      "objective": "Compat matrix + PoC scope + bench plan (no merge).",
+      "scope": "go1.23 x wasip1 x wazero matrix, WASI caps, sma-cross PoC plan, latency/mem bench.",
+      "out_of_scope": "No production code, no dep add.",
+      "priority": "P1",
+      "risk_level": "high",
+      "dependencies": ["E13-T01"],
+      "affected_components": ["docs"],
+      "implementation_steps": ["Compat matrix", "PoC scope + bars", "Bench plan"],
+      "acceptance_criteria": ["Given matrix When filled Then versions pinned with URLs+dates", "Given PoC plan When read Then bars numeric"],
+      "test_plan": ["Scratch-only builds (evidence, not merge)"],
+      "documentation_references": ["docs/decisions/ADR-006-wasm-strategy-runtime.md"],
+      "model_assignment": {"primary": "DeepSeek V4.1 Flash", "reviewer": "Muse Spark 1.3"},
+      "estimated_complexity": "M",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "safety_tags": ["none"],
+      "verify_tags": ["none"],
+      "subtasks": [
+        {"id": "E13-T03-S1", "title": "Compat matrix", "output": "go x wazero x WASI table", "acceptance": "Given table When checked Then URLs+dates present"},
+        {"id": "E13-T03-S2", "title": "PoC + bench plan", "output": "sma-cross scope + method", "acceptance": "Given plan When read Then bars numeric"}
+      ]
+    },
+    {
+      "id": "E13-T04",
+      "epic_id": "E13",
+      "title": "P3 persistence + ops plan",
+      "objective": "Redis keys, artifact store, recovery runbooks documented.",
+      "scope": "strat:* key specs, Lua CAS, artifact layout, snapshot extension, runbooks, metrics.",
+      "out_of_scope": "No key writes, no store provisioning.",
+      "priority": "P1",
+      "risk_level": "medium",
+      "dependencies": ["E13-T02"],
+      "affected_components": ["docs", "redis"],
+      "implementation_steps": ["Key specs + TTLs", "Store layout + verify", "Runbooks + metrics"],
+      "acceptance_criteria": ["Given spec When read Then TTLs + CAS explicit", "Given store-down When planned Then fail-closed path present"],
+      "test_plan": ["Doc review", "Drill plans for flush/store-down"],
+      "documentation_references": ["docs/17-go-wasm-strategy-runtime.md", "docs/decisions/ADR-008-wasm-persistence-isolation.md"],
+      "model_assignment": {"primary": "DeepSeek V4.1 Flash", "reviewer": "Muse Spark 1.3"},
+      "estimated_complexity": "S",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "safety_tags": ["none"],
+      "verify_tags": ["none"],
+      "subtasks": [
+        {"id": "E13-T04-S1", "title": "Keys + CAS", "output": "strat:* spec + Lua", "acceptance": "Given spec When read Then atomicity explicit"},
+        {"id": "E13-T04-S2", "title": "Store + runbooks", "output": "layout + recovery docs", "acceptance": "Given loss When drilled Then path green"}
+      ]
+    },
+    {
+      "id": "E13-T05",
+      "epic_id": "E13",
+      "title": "P4 MVP backlog (impl-ready)",
+      "objective": "Ordered solo-dev slice: sample strategy end-to-end paper-only.",
+      "scope": "sma-cross fixture, host impl plan, validate/activate/rollback, signals wiring, tests.",
+      "out_of_scope": "No live trade, no auto-trade, no Web3.",
+      "priority": "P1",
+      "risk_level": "high",
+      "dependencies": ["E13-T02", "E13-T03", "E13-T04"],
+      "affected_components": ["go-watcher", "workers", "d1"],
+      "implementation_steps": ["Sample strategy fixture", "Host tasks ordered", "E2E paper slice"],
+      "acceptance_criteria": ["Given slice When done Then proposal in /signals with zero unapproved", "Given bad module When fed Then ERROR + no downstream"],
+      "test_plan": ["go test ./strategy/...", "replay goldens unchanged", "paper drill"],
+      "documentation_references": ["docs/17-go-wasm-strategy-runtime.md", "docs/08-trading-risk-and-execution-safety.md"],
+      "model_assignment": {"primary": "DeepSeek V4.1 Flash", "reviewer": "Muse Spark 1.3"},
+      "estimated_complexity": "L",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "safety_tags": ["trading-safety"],
+      "verify_tags": ["none"],
+      "subtasks": [
+        {"id": "E13-T05-S1", "title": "Sample fixture", "output": "sma-cross req/resp goldens", "acceptance": "Given fixture When validated Then pass"},
+        {"id": "E13-T05-S2", "title": "Host slice", "output": "ordered impl subtasks", "acceptance": "Given tasks When sized Then each S/M"},
+        {"id": "E13-T05-S3", "title": "E2E paper path", "output": "trigger->proposal->signals plan", "acceptance": "Given run When paper Then audited"}
+      ]
+    },
+    {
+      "id": "E13-T06",
+      "epic_id": "E13",
+      "title": "Safety + risk register sign-off",
+      "objective": "Threat table, gates, SoD for WASM path approved.",
+      "scope": "T-W1..W9 threats, SAFE-001..006 mapping, RBAC activation, kill-switch interplay.",
+      "out_of_scope": "No code changes.",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": ["E13-T05"],
+      "affected_components": ["docs"],
+      "implementation_steps": ["Threat table", "Gate mapping", "Review sign-off"],
+      "acceptance_criteria": ["Given T-W5 When reviewed Then sandbox + human gate present", "Given R-W9 When traced Then proposals-only proven"],
+      "test_plan": ["Safety review checklist", "Boundary tests listed"],
+      "documentation_references": ["docs/07-security-and-threat-model.md", "docs/08-trading-risk-and-execution-safety.md"],
+      "model_assignment": {"primary": "GLM-5.3", "reviewer": "Qwen3.8 Max"},
+      "estimated_complexity": "S",
+      "status": "PROPOSED",
+      "blocking_decisions": [],
+      "safety_tags": ["trading-safety"],
+      "verify_tags": ["none"],
+      "subtasks": [
+        {"id": "E13-T06-S1", "title": "Threat + gates", "output": "signed table", "acceptance": "Given table When signed Then complete"}
       ]
     }
   ]

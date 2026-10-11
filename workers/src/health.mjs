@@ -20,14 +20,16 @@ export function evaluate(sig, killEngaged = false) {
   }
   const goStaleMs = sig.now_ms - (sig.go_heartbeat_ms ?? 0);
   const goHealthy = sig.go_heartbeat_ms > 0 && goStaleMs <= TH.HEARTBEAT_MS * TH.MISSES;
-  const streamOk = (sig.stream_lag_ms ?? Infinity) <= TH.STREAM_LAG_MS;
+  // E06-T02-W0.2: an unreachable Redis is its own failure, never a silent pass.
+  const redisReachable = sig.redis_reachable !== false;
+  const streamOk = redisReachable && (sig.stream_lag_ms ?? Infinity) <= TH.STREAM_LAG_MS;
   const leaseOk = !sig.lease_expires_ms || sig.lease_expires_ms > sig.now_ms;
   const pxOk = (sig.price_lag_ms ?? 0) <= TH.PRICE_STALE_MS;
   const d1Ok = !sig.d1_down;
 
   if (!d1Ok) { reasons.push("d1_unavailable"); }
   if (!goHealthy) reasons.push(`go_unhealthy(hb_age=${goStaleMs}ms)`);
-  if (!streamOk) reasons.push(`stream_lag=${sig.stream_lag_ms}ms`);
+  if (!streamOk) reasons.push(redisReachable ? `stream_lag=${sig.stream_lag_ms}ms` : "redis_unreachable");
   if (!pxOk) reasons.push(`price_stale=${sig.price_lag_ms}ms`);
   if (!leaseOk) reasons.push("lease_expired");
 
@@ -43,12 +45,18 @@ function componentRows(sig, halted) {
   const goAge = sig.go_heartbeat_ms ? sig.now_ms - sig.go_heartbeat_ms : null;
   return [
     { component: "go", status: goAge === null ? "DOWN" : goAge <= TH.HEARTBEAT_MS * TH.MISSES ? "UP" : "UNHEALTHY", detail: { hb_age_ms: goAge } },
-    { component: "redis", status: (sig.stream_lag_ms ?? Infinity) <= TH.STREAM_LAG_MS ? "UP" : "LAG", detail: { lag_ms: sig.stream_lag_ms ?? null } },
+    { component: "redis", status: redisStatus(sig), detail: { lag_ms: sig.stream_lag_ms ?? null } },
     { component: "d1", status: sig.d1_down ? "DOWN" : "UP", detail: {} },
     { component: "lease", status: !sig.lease_expires_ms || sig.lease_expires_ms > sig.now_ms ? "HELD" : "EXPIRED", detail: { holder: sig.lease_holder ?? null } },
     { component: "prices", status: (sig.price_lag_ms ?? 0) <= TH.PRICE_STALE_MS ? "FRESH" : "STALE", detail: { lag_ms: sig.price_lag_ms ?? null } },
     { component: "kill_switch", status: halted ? "ENGAGED" : "OFF", detail: {} },
   ];
+}
+
+/** Redis component status (E06-T02-W0.2): unreachable Redis is DOWN, not LAG. */
+function redisStatus(sig) {
+  if (sig.redis_reachable === false) return "DOWN";
+  return (sig.stream_lag_ms ?? Infinity) <= TH.STREAM_LAG_MS ? "UP" : "LAG";
 }
 
 /** Mode-change detection: returns the change to record or null (idempotent cron). */

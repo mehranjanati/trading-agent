@@ -1,0 +1,28 @@
+{
+  "title": "strategy-contract-fixtures-v1",
+  "note": "E13-T01-S1 golden fixtures. expect=ok fixtures must validate; expect=fail fixtures must be rejected with a schema path.",
+  "fixtures": [
+    {
+      "file": "strategy-invocation.request.json",
+      "schema": "strategy-invocation.schema.json",
+      "expect": "ok"
+    },
+    {
+      "file": "strategy-result.response.json",
+      "schema": "strategy-result.schema.json",
+      "expect": "ok"
+    },
+    {
+      "file": "strategy-result.response.invalid-bias.json",
+      "schema": "strategy-result.schema.json",
+      "expect": "fail",
+      "reason": "decision.bias must be LONG|SHORT|FLAT"
+    },
+    {
+      "file": "strategy-invocation.request.invalid-deadline.json",
+      "schema": "strategy-invocation.schema.json",
+      "expect": "fail",
+      "reason": "execution_context.deadline_ms must be <= 500"
+    }
+  ]
+}

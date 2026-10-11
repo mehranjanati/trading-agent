@@ -13,6 +13,8 @@ flowchart TB
   E05T01 --> E10T01[E10-T01]
   E06T01 --> E08T01[E08-T01] --> E08T02[E08-T02] --> E09T01[E09-T01]
   E09T01 & E10T01 & E12T01 --> E11T01[E11-T01 GATE]
+  E07T01 --> E13T01[E13-T01 DONE] --> E13T02[E13-T02] --> E13T04[E13-T04] --> E13T05[E13-T05] --> E13T06[E13-T06]
+  E13T01 --> E13T03[E13-T03] --> E13T05
 ```
 
 - P0 chain: E00→E01→E04→E06→E08→E09→E11. No cycles (validator asserts all deps resolve; wave order above is topological).

@@ -23,6 +23,10 @@ export const DRILLS = ["go", "redis", "both", "rejoin", "budget"];
 export const PHASES = ["preflight", "kill", "watch", "restore", "assert", "all"];
 export const EVIDENCE_DIR = "docs/ops/drills/E06-T02";
 export const GO_PATTERN = "trading-agent/go-watcher";
+/** Live-run endpoints and symbols. The budget `--live` mode reads ONLY the public
+ *  price endpoint (weight 1 per symbol, read-only) — never an order path. */
+export const LIVE_BASE = "https://api.toobit.com";
+export const LIVE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const SAFE_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0"]);
 const ENV_OK = ["dev", "test", "local"];
 
@@ -31,7 +35,8 @@ const ENV_OK = ["dev", "test", "local"];
 export function parseArgs(argv, env = process.env) {
   const flags = {
     drill: null, phase: "all", target: null, execute: false, hard: false,
-    json: false, help: false, pauseMs: 0, watchMs: 60_000, symbols: 10, minutes: 5, db: null,
+    json: false, help: false, pauseMs: 0, watchMs: 60_000, symbols: 10, minutes: 5, db: null, live: false,
+    recoverMs: 150_000, goPattern: GO_PATTERN,
     workers: env.WORKERS_URL || "http://127.0.0.1:8787",
     redis: env.REDIS_ADDR || "127.0.0.1:6379",
   };
@@ -41,14 +46,17 @@ export function parseArgs(argv, env = process.env) {
     if (a === "--execute") flags.execute = true;
     else if (a === "--hard") flags.hard = true;
     else if (a === "--json") flags.json = true;
+    else if (a === "--live") flags.live = true;
     else if (a === "--help" || a === "-h") flags.help = true;
     else if (a === "--phase") flags.phase = argv[++i];
     else if (a === "--target") flags.target = argv[++i];
     else if (a === "--workers") flags.workers = argv[++i];
+    else if (a === "--go-pattern") flags.goPattern = argv[++i];
     else if (a === "--redis") flags.redis = argv[++i];
     else if (a === "--db") flags.db = argv[++i];
     else if (a === "--pause-ms") flags.pauseMs = Number(argv[++i]);
     else if (a === "--watch-ms") flags.watchMs = Number(argv[++i]);
+    else if (a === "--recover-ms") flags.recoverMs = Number(argv[++i]);
     else if (a === "--symbols") flags.symbols = Number(argv[++i]);
     else if (a === "--minutes") flags.minutes = Number(argv[++i]);
     else rest.push(a);
@@ -78,6 +86,8 @@ export function guard(flags, env = process.env) {
     return "LIVE_TRADING_ENABLED is set — this repo must never enable live trading";
   }
   if (env.ENV && !ENV_OK.includes(env.ENV)) return `ENV=${env.ENV} is not one of ${ENV_OK.join("/")}`;
+  if (flags.live && flags.drill !== "budget") return "--live is only valid for the budget drill";
+  if (flags.live && flags.minutes > 15) return `--live refuses more than 15 minutes (got ${flags.minutes})`;
   if (!flags.execute) return null;
   if (flags.target !== "local") return "--execute requires --target local";
   const bad = [flags.workers, flags.redis].map(hostOf).filter((h) => !SAFE_HOSTS.has(h));
@@ -102,23 +112,25 @@ export function planFor(flags) {
     "assert: zero duplicate intents per approval_id, and no new evt_ ids for already-recorded triggers",
     "assert: restored ACTIVE set equals the D1 snapshot truth (both directions)",
     "assert: PRIMARY mode row never precedes the reconcile incident (acceptance 2)",
+    "assert: the lease handoff (epoch bump) was recorded before the PRIMARY row (§6.3 step 4)",
     "assert: no rate_limit_backoff incident in the window (ADR-004 budget proof)",
   ];
+  const recover = `restore: lease handoff (§6.3 step 4) then wait up to ${Math.round(flags.recoverMs / 1000)}s for PRIMARY`;
   const plans = {
     go: [...base,
-      `kill: ${killGo} (pgrep -f ${GO_PATTERN})`,
+      `kill: ${killGo} (pgrep -f ${flags.goPattern})`,
       "watch: poll /api/health until DEGRADED(go_unhealthy) then FALLBACK; blocked-approval probe must be rejected",
-      "restore: SIGCONT the pid (the --hard variant is already back up after the cold-start reload)",
+      `restore: SIGCONT the pid (the --hard variant is already back up after the cold-start reload); ${recover}`,
       ...asserts],
     redis: [...base,
       `kill: ${redisKill} (alternative with --hard: SIGSTOP redis-server)`,
       "watch: heartbeat reports redis_reachable=false -> /api/health DEGRADED(redis_unreachable) and Go /readyz 503",
-      "restore: CLIENT UNPAUSE; Go reloads the D1 snapshot and resumes from the last acked stream id (dedupe)",
+      `restore: CLIENT UNPAUSE; Go reloads the D1 snapshot, repopulates the ACTIVE set and resumes from the last acked stream id (dedupe); ${recover}`,
       ...asserts],
     both: [...base,
       `kill: ${killGo} + ${redisKill}`,
       "watch: DEGRADED -> FALLBACK with full reasons; poll set reduced to the top-N priority symbols; orders blocked",
-      "restore: Redis first, then Go (combined S1+S2 recovery path, docs/06 §6.2)",
+      `restore: Redis first, then Go (combined S1+S2 recovery path, docs/06 §6.2); ${recover}`,
       ...asserts],
     rejoin: [...base,
       `kill: ${killGo} + ${redisKill}`,
@@ -254,6 +266,18 @@ export async function probeBlockedApproval(workers) {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** §6.3 step 4 — hand authority back to the primary plane (operator role). Before the
+ *  ExecutionAuthority DO lands (E12) this route IS the handoff; the drill performs it
+ *  exactly like the operator runbook will. */
+export async function leaseHandoff(workers, holder = "primary", role = "operator") {
+  const r = await httpJson(`${workers.replace(/\/$/, "")}/api/lease:handoff`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-role": role },
+    body: JSON.stringify({ holder }),
+  });
+  return { ok: r.status === 200, status: r.status, body: r.body };
+}
+
 /** chaos.mjs budget — the ADR-004 no-429 proof, end to end against the local stub.
  *  The clock is simulated, so five minutes of 5s cadence costs milliseconds. No
  *  production endpoint is ever contacted: the only socket is the stub on 127.0.0.1. */
@@ -261,48 +285,102 @@ export async function runBudget(flags, io = defaultIo()) {
   const { tick, createWindow, memoryStore, floorMs, POLL_MS } = await import("../workers/src/fallback-poll.mjs");
   const { createStubExchange, syntheticSymbols } = await import("./stub-exchange.mjs");
 
-  const symbols = syntheticSymbols(flags.symbols);
+  const live = !!flags.live;
+  const symbols = live ? LIVE_SYMBOLS : syntheticSymbols(flags.symbols);
   const rounds = Math.max(1, Math.round((flags.minutes * 60_000) / POLL_MS));
   let simNow = Date.now();
-  const stub = createStubExchange({ now: () => simNow });
-  const port = await stub.listen(0);
+  const stub = live ? null : createStubExchange({ now: () => simNow });
+  const port = stub ? await stub.listen(0) : 0;
   const store = memoryStore();
   const window = createWindow();
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const baseUrl = live ? LIVE_BASE : `http://127.0.0.1:${port}`;
   const checks = [];
+  const gaps = [];
+  const errorSamples = [];
   let polled = 0;
   let limited = 0;
+  let transportErrors = 0;
+  let fullRounds = 0;
+
+  io.log(live
+    ? `budget: LIVE run against ${LIVE_BASE} for ${flags.minutes} min — public price endpoint only, read-only, no orders`
+    : `budget: stub exchange for ${flags.minutes} simulated min (N=${symbols.length})`);
 
   try {
     for (let i = 0; i < rounds; i++) {
-      simNow += i === 0 ? 0 : POLL_MS;
+      if (live && i > 0) await io.sleep(POLL_MS + 50); // real cadence: the observation IS the evidence
+      const nowMs = live ? Date.now() : (simNow += i === 0 ? 0 : POLL_MS);
+      if (stub) simNow = nowMs;
+      const started = Date.now();
       const res = await tick({}, {
-        nowMs: simNow, mode: "FALLBACK", store, window, symbols, baseUrl, jitter: () => 0, env: {},
+        nowMs, mode: "FALLBACK", store, window, symbols, baseUrl, jitter: () => 0, env: {},
       });
-      if (res.reason === "ok") polled++;
-      if (res.reason === "rate-limited") limited++;
-      io.log(`budget: round ${i + 1}/${rounds} → ${res.reason} (usage ${window.usage(simNow)}/${3000})`);
+      gaps.push(Date.now() - started);
+      if (res.reason === "ok") { polled++; fullRounds++; }
+      else if (res.reason === "rate-limited") limited++;
+      else if (res.reason === "transport-error") {
+        transportErrors++;
+        if (errorSamples.length < 5) errorSamples.push({ round: i + 1, error: res.error ?? "unknown", after_requests: res.polls ?? 0 });
+      }
+      io.log(`budget: round ${i + 1}/${rounds} → ${res.reason}${res.error ? ` (${res.error})` : ""} (usage ${window.usage(nowMs)}/3000, ${res.polls ?? 0} req)`);
     }
   } finally {
-    await stub.close();
+    if (stub) await stub.close();
   }
 
-  checks.push({ name: "zero_429", ok: stub.stats.limited === 0 && limited === 0, detail: { stub_limited: stub.stats.limited, poller_limited: limited } });
-  checks.push({ name: "weight_within_budget", ok: stub.stats.peak_usage <= 3000, detail: { peak_usage: stub.stats.peak_usage, budget_per_min: 3000 } });
+  const limitedCount = stub ? stub.stats.limited : limited;
+  const peak = stub ? stub.stats.peak_usage : window.usage(Date.now());
+  const attempted = polled + transportErrors;
+  checks.push({ name: "zero_429", ok: limitedCount === 0 && limited === 0, detail: { venue_limited: limitedCount, poller_limited: limited } });
+  checks.push({ name: "weight_within_budget", ok: peak <= 3000, detail: { peak_usage: peak, budget_per_min: 3000 } });
   checks.push({ name: "cadence_floor", ok: POLL_MS >= floorMs(symbols.length), detail: { poll_ms: POLL_MS, floor_ms: floorMs(symbols.length) } });
   checks.push({ name: "adr004_math", ...assertBudget({ symbols: symbols.length, pollSec: POLL_MS / 1000, pollsPerRound: symbols.length }) });
-  checks.push({ name: "rounds_completed", ok: polled === rounds, detail: { rounds, polled, minutes: flags.minutes } });
+  // Every round must have attempted a poll. On the stub that is exact; live, a transient
+  // transport error is a network fact, not a budget failure — so it is counted and bounded
+  // separately instead of being hidden.
+  checks.push({
+    name: live ? "rounds_attempted" : "rounds_completed",
+    ok: attempted === rounds,
+    detail: { rounds, polled, transport_errors: transportErrors, minutes: flags.minutes, live },
+  });
+  checks.push({
+    name: "quote_coverage",
+    ok: live ? fullRounds >= rounds - transportErrors : fullRounds === rounds,
+    detail: {
+      full_rounds: fullRounds, rounds, transport_errors: transportErrors,
+      covered: store.peek().covered ?? 0, expected: symbols.length,
+    },
+  });
+  if (live) {
+    const rate = transportErrors / rounds;
+    const total = gaps.reduce((a, b) => a + b, 0);
+    checks.push({
+      name: "transport_error_rate",
+      ok: rate <= 0.2,
+      detail: { transport_errors: transportErrors, rounds, rate: Number(rate.toFixed(3)), budget: 0.2, samples: errorSamples },
+    });
+    checks.push({
+      name: "observed_request_latency_ms",
+      ok: true,
+      detail: { rounds, requests: attempted * symbols.length, mean_ms: Math.round(total / gaps.length), max_ms: Math.max(...gaps) },
+    });
+  }
 
   const evidence = renderEvidence({
-    drill: "budget", phase: flags.phase, flags,
-    baselines: { symbols: symbols.length, minutes: flags.minutes, rounds, stub: stub.stats },
+    drill: live ? "budget-live" : "budget", phase: flags.phase, flags,
+    baselines: {
+      symbols: symbols.length, minutes: flags.minutes, rounds, live,
+      source: live ? LIVE_BASE : "stub-exchange",
+      stub: stub ? stub.stats : null,
+      window_usage: window.usage(Date.now()),
+    },
     checks,
   });
-  const path = io.writeEvidence(evidenceName("budget"), evidence);
+  const path = io.writeEvidence(evidenceName(live ? "budget-live" : "budget"), evidence);
   const failed = checks.filter((c) => c.ok === false).map((c) => c.name);
   io.log(`evidence: ${path}`);
   io.log(failed.length ? `FAIL: ${failed.join(", ")}` : "PASS: all checks green");
-  return { ok: evidence.ok, touched: true, checks, baselines: { symbols: symbols.length, rounds }, evidence: path };
+  return { ok: evidence.ok, touched: true, checks, baselines: { symbols: symbols.length, rounds, live }, evidence: path };
 }
 
 // ---------------------------------------------------------------- assertions
@@ -363,6 +441,24 @@ export function assertNoBackoffAlert(recoveryRows) {
   return { ok: hits.length === 0, detail: { backoffs: hits.length } };
 }
 
+/** S3b evidence: the §6.3 step-4 handoff was recorded, with a monotonic epoch. */
+export function assertHandoffRecorded(recoveryRows) {
+  const hit = recoveryRows.find((r) => r.incident === "lease.handoff");
+  if (!hit) return { ok: false, detail: { reason: "no lease.handoff incident in the window" } };
+  return { ok: /epoch=\d+/.test(hit.action ?? ""), detail: { action: hit.action, at: hit.at } };
+}
+
+/** S2 acceptance: a degraded episode never produced two intents for one approval AND the
+ *  degrade/recover timeline exists — the pair the kill drills are judged on. */
+export function assertEpisode(modeRows, recoveryRows) {
+  const timeline = assertModeTimeline(modeRows);
+  const rejoin = assertRejoinOrder(modeRows, recoveryRows);
+  return {
+    ok: timeline.ok && rejoin.ok,
+    detail: { sequence: timeline.detail.sequence, rejoin: rejoin.detail },
+  };
+}
+
 /** ADR-004 adequacy floor: symbols x 1/50 x 2 seconds between polls. */
 export function budgetFloorSec(symbols, budgetPerSec = 50) {
   return (symbols / budgetPerSec) * 2;
@@ -418,6 +514,7 @@ export function defaultIo() {
     findGoPid,
     signalPid,
     probeBlockedApproval,
+    leaseHandoff: (workers, holder) => leaseHandoff(workers, holder),
     writeEvidence: (name, obj) => {
       mkdirSync(EVIDENCE_DIR, { recursive: true });
       const p = join(EVIDENCE_DIR, name);
@@ -445,7 +542,9 @@ export async function run(flags, io = defaultIo(), env = process.env) {
   const steps = flags.phase === "all" ? ["preflight", "kill", "watch", "restore", "assert"] : [flags.phase];
   // The budget drill is a pure local load: no kill/watch phases, no stack required.
   if (flags.drill === "budget") {
-    io.log(`chaos.mjs — budget [${flags.phase}] — stub exchange load (localhost only)`);
+    io.log(flags.live
+      ? `chaos.mjs — budget [${flags.phase}] — LIVE public price endpoint (read-only)`
+      : `chaos.mjs — budget [${flags.phase}] — stub exchange load (localhost only)`);
     return await runBudget(flags, io);
   }
   const want = (p) => steps.includes(p);
@@ -468,8 +567,8 @@ export async function run(flags, io = defaultIo(), env = process.env) {
 
   if (want("kill")) {
     if (KILLS_GO.includes(flags.drill)) {
-      const pids = io.findGoPid();
-      if (!pids.length) return { ok: false, touched: true, reason: `no process matched ${GO_PATTERN}`, checks };
+      const pids = io.findGoPid(flags.goPattern);
+      if (!pids.length) return { ok: false, touched: true, reason: `no process matched ${flags.goPattern}`, checks };
       for (const pid of pids) io.signalPid(pid, flags.hard ? "SIGKILL" : "SIGSTOP");
       io.log(`kill: ${flags.hard ? "SIGKILL" : "SIGSTOP"} go-watcher pid ${pids.join(",")}`);
     }
@@ -509,9 +608,40 @@ export async function run(flags, io = defaultIo(), env = process.env) {
       }
     }
     if (KILLS_GO.includes(flags.drill) && !flags.hard) {
-      const pids = io.findGoPid();
+      const pids = io.findGoPid(flags.goPattern);
       for (const pid of pids) io.signalPid(pid, "SIGCONT");
       io.log(`restore: SIGCONT -> ${pids.join(",") || "no pid found (already exited?)"}`);
+    }
+
+    // §6.3: returning to PRIMARY needs the four conditions, so the drill performs the
+    // operator steps — lease handoff (step 4) — and then waits for the gate to open.
+    // Asserting straight after the restore could never pass: Go must be healthy 60s
+    // continuous, the sweep must certify, and we must hold the lease.
+    if (KILLS_GO.includes(flags.drill) || KILLS_REDIS.includes(flags.drill)) {
+      const handoff = await io.leaseHandoff(flags.workers);
+      io.log(`restore: lease handoff -> ${handoff.status}${handoff.body?.epoch ? ` epoch=${handoff.body.epoch}` : ""}`);
+      checks.push({ name: "lease_handoff", ok: handoff.ok, detail: handoff });
+
+      const deadline = Date.now() + flags.recoverMs;
+      const started = Date.now();
+      let mode = null;
+      while (Date.now() < deadline) {
+        const h = await io.httpJson(`${flags.workers}/api/health`);
+        const m = h.body?.mode ?? "?";
+        if (m !== mode) {
+          io.log(`recover: mode -> ${m} (${(h.body?.reasons ?? []).join("; ") || "no reasons"})`);
+          mode = m;
+        }
+        if (m === "PRIMARY") break;
+        await io.sleep(2000);
+      }
+      const elapsed = Math.round((Date.now() - started) / 1000);
+      io.log(`recover: final mode=${mode} after ${elapsed}s`);
+      checks.push({
+        name: "recovery_observed",
+        ok: mode === "PRIMARY",
+        detail: { mode, elapsed_s: elapsed, budget_s: flags.recoverMs / 1000 },
+      });
     }
   }
 
@@ -527,7 +657,9 @@ export async function run(flags, io = defaultIo(), env = process.env) {
       checks.push({ name: "rows_complete", ...assertRowsComplete(allRows) });
       checks.push({ name: "zero_dup_intents", ...assertZeroDupIntents(intents) });
       checks.push({ name: "rejoin_order", ...assertRejoinOrder(modeRows, recoveryRows) });
+      checks.push({ name: "handoff_recorded", ...assertHandoffRecorded(recoveryRows) });
       checks.push({ name: "no_backoff_alert", ...assertNoBackoffAlert(recoveryRows) });
+      checks.push({ name: "episode", ...assertEpisode(modeRows, recoveryRows) });
       const snap = await io.httpJson(`${flags.workers}/api/watches/active-snapshot`);
       const d1Ids = (snap.body?.watches ?? []).map((w) => w.id);
       const redisIds = (await io.redisCall(["SMEMBERS", "watch:active-ids"], flags.redis).catch(() => [])) ?? [];
@@ -552,8 +684,11 @@ export function usage() {
     "  --hard                   go: SIGKILL + relaunch instead of SIGSTOP",
     "  --pause-ms N             CLIENT PAUSE window (0 = until CLIENT UNPAUSE)",
     "  --watch-ms N             how long to watch /api/health (default 60000)",
+    "  --recover-ms N           how long to wait for the return to PRIMARY (default 150000)",
+    "  --go-pattern P           pgrep pattern for the Go watcher (default trading-agent/go-watcher)",
     "  --symbols N              budget-drill symbol count (default 10)",
     "  --minutes N              budget-drill simulated minutes (default 5)",
+    "  --live                   budget drill against the real public price endpoint",
     "  --db <sqlite path>       local D1 file for the row assertions",
     "  --workers <url>  --redis <host:port>   local endpoints",
     "  --json                   print the result object",

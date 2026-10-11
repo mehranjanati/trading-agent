@@ -1,0 +1,84 @@
+{
+  "task": "E06-T02",
+  "drill": "budget",
+  "phase": "all",
+  "ok": true,
+  "target": "local",
+  "at": "2026-10-11T17:34:22.872Z",
+  "baselines": {
+    "symbols": 10,
+    "minutes": 5,
+    "rounds": 60,
+    "live": false,
+    "source": "stub-exchange",
+    "stub": {
+      "requests": 600,
+      "weight": 600,
+      "limited": 0,
+      "symbols_served": 600,
+      "peak_usage": 119,
+      "limited_at": []
+    },
+    "window_usage": 120
+  },
+  "checks": [
+    {
+      "name": "zero_429",
+      "ok": true,
+      "detail": {
+        "venue_limited": 0,
+        "poller_limited": 0
+      }
+    },
+    {
+      "name": "weight_within_budget",
+      "ok": true,
+      "detail": {
+        "peak_usage": 119,
+        "budget_per_min": 3000
+      }
+    },
+    {
+      "name": "cadence_floor",
+      "ok": true,
+      "detail": {
+        "poll_ms": 5000,
+        "floor_ms": 400
+      }
+    },
+    {
+      "name": "adr004_math",
+      "ok": true,
+      "detail": {
+        "symbols": 10,
+        "pollSec": 5,
+        "floor": 0.4,
+        "roundsPerMin": 12,
+        "weightPerMin": 120,
+        "budgetPerMin": 3000
+      }
+    },
+    {
+      "name": "rounds_completed",
+      "ok": true,
+      "detail": {
+        "rounds": 60,
+        "polled": 60,
+        "transport_errors": 0,
+        "minutes": 5,
+        "live": false
+      }
+    },
+    {
+      "name": "quote_coverage",
+      "ok": true,
+      "detail": {
+        "full_rounds": 60,
+        "rounds": 60,
+        "transport_errors": 0,
+        "covered": 10,
+        "expected": 10
+      }
+    }
+  ]
+}

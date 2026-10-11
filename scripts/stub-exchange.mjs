@@ -11,7 +11,10 @@ import http from "node:http";
 
 export const DEFAULT_WINDOW_MS = 60_000;
 
-export function createStubExchange({ budgetPerMin = 3000, windowMs = DEFAULT_WINDOW_MS, now = () => Date.now() } = {}) {
+export function createStubExchange({
+  budgetPerMin = 3000, windowMs = DEFAULT_WINDOW_MS, now = () => Date.now(),
+  fullList = false, ignoreFilter = false, markets = 1022,
+} = {}) {
   const hits = [];
   const stats = { requests: 0, weight: 0, limited: 0, symbols_served: 0, peak_usage: 0, limited_at: [] };
   const prune = (t) => { while (hits.length && t - hits[0].at >= windowMs) hits.shift(); };
@@ -19,8 +22,12 @@ export function createStubExchange({ budgetPerMin = 3000, windowMs = DEFAULT_WIN
 
   const server = http.createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://127.0.0.1");
-    const symbols = (u.searchParams.get("symbols") ?? "").split(",").filter(Boolean);
-    const weight = Math.max(1, symbols.length); // weight 1 per symbol (A-02)
+    // Mirrors the live endpoint (TOOBIT-API-FACTS S2a): `?symbol=X` filters (weight 1),
+    // `?symbols=` is ignored and answers the whole venue (weight = market count).
+    const single = u.searchParams.get("symbol");
+    const symbols = single ? [single] : (u.searchParams.get("symbols") ?? "").split(",").filter(Boolean);
+    const filtered = !!single && !ignoreFilter;
+    const weight = filtered ? 1 : Math.max(1, symbols.length);
     const t = now();
     stats.requests++;
     stats.peak_usage = Math.max(stats.peak_usage, usage(t));
@@ -36,8 +43,21 @@ export function createStubExchange({ budgetPerMin = 3000, windowMs = DEFAULT_WIN
     }
     hits.push({ at: t, weight });
     stats.weight += weight;
-    stats.symbols_served += symbols.length;
     res.writeHead(200, { "content-type": "application/json" });
+    if (filtered) {
+      // filtered answer: canonical symbol form, one item
+      stats.symbols_served += 1;
+      res.end(JSON.stringify([{ s: single.replaceAll("-", "").toUpperCase(), p: String(1000) }]));
+      return;
+    }
+    if (fullList || ignoreFilter) {
+      // unfiltered answer: the whole venue in the dash form
+      const list = Array.from({ length: markets }, (_, i) => ({ s: `MKT${i}-SWAP-USDT`, si: `MKT${i}-SWAP-USDT`, p: "1" }));
+      stats.symbols_served += list.length;
+      res.end(JSON.stringify(list));
+      return;
+    }
+    stats.symbols_served += symbols.length;
     res.end(JSON.stringify(symbols.map((s, i) => ({ s, p: String(1000 + i) }))));
   });
 

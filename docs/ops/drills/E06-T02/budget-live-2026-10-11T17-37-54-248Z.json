@@ -1,0 +1,97 @@
+{
+  "task": "E06-T02",
+  "drill": "budget-live",
+  "phase": "all",
+  "ok": false,
+  "target": "local",
+  "at": "2026-10-11T17:37:54.244Z",
+  "baselines": {
+    "symbols": 3,
+    "minutes": 2,
+    "rounds": 24,
+    "live": true,
+    "source": "https://api.toobit.com",
+    "stub": null,
+    "window_usage": 9
+  },
+  "checks": [
+    {
+      "name": "zero_429",
+      "ok": true,
+      "detail": {
+        "venue_limited": 0,
+        "poller_limited": 0
+      }
+    },
+    {
+      "name": "weight_within_budget",
+      "ok": true,
+      "detail": {
+        "peak_usage": 9,
+        "budget_per_min": 3000
+      }
+    },
+    {
+      "name": "cadence_floor",
+      "ok": true,
+      "detail": {
+        "poll_ms": 5000,
+        "floor_ms": 120
+      }
+    },
+    {
+      "name": "adr004_math",
+      "ok": true,
+      "detail": {
+        "symbols": 3,
+        "pollSec": 5,
+        "floor": 0.12,
+        "roundsPerMin": 12,
+        "weightPerMin": 36,
+        "budgetPerMin": 3000
+      }
+    },
+    {
+      "name": "rounds_attempted",
+      "ok": true,
+      "detail": {
+        "rounds": 24,
+        "polled": 16,
+        "transport_errors": 8,
+        "minutes": 2,
+        "live": true
+      }
+    },
+    {
+      "name": "quote_coverage",
+      "ok": true,
+      "detail": {
+        "full_rounds": 16,
+        "rounds": 24,
+        "transport_errors": 8,
+        "covered": 3,
+        "expected": 3
+      }
+    },
+    {
+      "name": "transport_error_rate",
+      "ok": false,
+      "detail": {
+        "transport_errors": 8,
+        "rounds": 24,
+        "rate": 0.333,
+        "budget": 0.2
+      }
+    },
+    {
+      "name": "observed_request_latency_ms",
+      "ok": true,
+      "detail": {
+        "rounds": 24,
+        "requests": 72,
+        "mean_ms": 3133,
+        "max_ms": 4580
+      }
+    }
+  ]
+}

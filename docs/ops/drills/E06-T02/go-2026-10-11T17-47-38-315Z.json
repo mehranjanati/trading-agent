@@ -1,0 +1,18 @@
+{
+  "task": "E06-T02",
+  "drill": "go",
+  "phase": "preflight",
+  "ok": true,
+  "target": "local",
+  "at": "2026-10-11T17:47:38.315Z",
+  "baselines": {
+    "mode": "DEGRADED",
+    "reasons": [
+      "rejoin_blocked(go_healthy_60s,lease_handoff)"
+    ],
+    "redis_active": "3",
+    "intents": 0,
+    "window_start": "2026-10-11T17:47:38.313Z"
+  },
+  "checks": []
+}

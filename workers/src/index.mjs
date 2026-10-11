@@ -1,4 +1,5 @@
 // E05-T01 control API entry, E06-T01 health badge + cron wired.
+// E06-T02-W0.2: heartbeat ingest route + real cron signals + rejoin gate.
 // TODO(E05-T02 phase): replace X-Role stub with OIDC middleware before staging.
 // D1 binding: env.DB (wrangler.toml). Local tests inject a sqlite-backed fake.
 import { err } from "./errors.mjs";
@@ -6,7 +7,7 @@ import { createStore } from "./idempotency.mjs";
 import { writeErr } from "./_shared.mjs";
 import { watchRoutes } from "./routes.mjs";
 import { miscRoutes } from "./routes2.mjs";
-import { healthRoutes, tick, recordIncident } from "./health-route.mjs";
+import { healthRoutes, runTick } from "./health-route.mjs";
 
 const store = createStore();
 const watches = watchRoutes(store);
@@ -18,6 +19,7 @@ export default {
     const u = new URL(req.url);
     const p = u.pathname;
     try {
+      if (req.method === "POST" && p === "/api/health:heartbeat") return health.heartbeat(req, env);
       if (req.method === "GET" && p === "/api/health") return health.status(req, env);
       if (req.method === "GET" && p === "/api/recovery/log") return health.recoveryLog(req, env);
       if (req.method === "GET" && p === "/api/watches/active-snapshot") return watches.snapshot(req, env);
@@ -32,19 +34,11 @@ export default {
     }
   },
   // 10s health evaluator cron (wrangler [triggers] crons = "*/10 * * * * *").
-  // Signals assembled from hb keys + stream lag in E06-T02; here the seam.
+  // Signals come from the Go heartbeat row + the stream lag it reports; the
+  // rejoin gate keeps a degraded system from flipping back to PRIMARY before
+  // reconcile/drain/lease-handoff (supplied by this task's S3 work).
   async scheduled(_event, env, _ctx) {
-    const signals = {
-      now_ms: Date.now(),
-      go_heartbeat_ms: 0, // no heartbeat yet → DEGRADED until Go connects
-      stream_lag_ms: 0,
-      price_lag_ms: 0,
-      d1_down: false,
-    };
-    const next = await tick(env, signals);
-    if (next.mode !== "PRIMARY") {
-      await recordIncident(env, `mode:${next.mode}`, next.reasons.join(";") || "initial", "health-cron");
-    }
+    await runTick(env);
   },
 };
 

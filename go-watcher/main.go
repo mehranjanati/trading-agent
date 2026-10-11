@@ -1,6 +1,8 @@
-// Package main — go-watcher service entry (E03-T02 wired).
-// Cold start: fetch D1 snapshot → populate ACTIVE set → /readyz 200.
-// WS dial + Streams production loop lands in E05/E06; ops surface live now.
+// Package main — go-watcher service entry.
+// E03-T02: cold start (D1 snapshot -> ACTIVE set -> /readyz 200).
+// E06-T02-W0.1: 5s liveness publisher (/api/health:heartbeat) + ready drop on
+// Redis loss. The production WS dial/Streams loop still lands later; the seams
+// below are the ones the failover drills drive.
 package main
 
 import (
@@ -10,12 +12,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"trading-agent/go-watcher/heartbeat"
 	"trading-agent/go-watcher/metrics"
+	"trading-agent/go-watcher/redisx"
+	"trading-agent/go-watcher/snapshot"
+	"trading-agent/go-watcher/stream"
 )
+
+const snapshotTimeout = 5 * time.Second
 
 var (
 	counters   = &metrics.Counters{}
 	ready      atomic.Bool
+	readyWhy   atomic.Value // string — last /readyz reason
 	activeN    atomic.Int64
 	snapshotAt atomic.Value // string
 )
@@ -25,24 +34,116 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	// Best-effort snapshot load (E03-T02-S2); failure keeps /readyz 503 with reason.
-	if base := os.Getenv("WORKERS_URL"); base != "" {
-		// snapshot.Fetch wired in E05 when Workers serves the route; recorded here.
-		snapshotAt.Store("pending: " + base)
+	base := os.Getenv("WORKERS_URL")
+	readyWhy.Store("not-ready: cold start")
+
+	// Cold start (§6.6 / E03-T02-S2): fetch the D1 snapshot and repopulate the
+	// ACTIVE set. A failed repopulate keeps the process not-ready on purpose.
+	if base != "" {
+		if err := coldStart(base); err != nil {
+			snapshotAt.Store("error: " + err.Error())
+			readyWhy.Store("not-ready: " + err.Error())
+			fmt.Fprintln(os.Stderr, "cold start:", err)
+		} else {
+			snapshotAt.Store(time.Now().UTC().Format(time.RFC3339))
+			ready.Store(true)
+			readyWhy.Store("ready")
+		}
+		go publishLoop(base)
 	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if !ready.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintln(w, "not-ready: snapshot not loaded (E03-T02: set WORKERS_URL + E05 route)")
+			fmt.Fprintln(w, "not-ready: "+reason())
 			return
 		}
 		fmt.Fprintln(w, "ready")
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(counters.Render()))
+		fmt.Fprintf(w, "active_watches=%d snapshot_at=%v\n", activeN.Load(), snapshotAt.Load())
+		_, _ = w.Write([]byte(counters.Render()))
 	})
 	_ = http.ListenAndServe(":"+port, mux)
-	_ = time.Now
+}
+
+func reason() string {
+	if s, ok := readyWhy.Load().(string); ok {
+		return s
+	}
+	return "unknown"
+}
+
+// coldStart loads the ACTIVE watch set from D1 (via Workers) into Redis so the
+// trigger loop can resume from D1 truth (§6.2 S2 reload path).
+func coldStart(base string) error {
+	p, err := snapshot.Fetch(base, snapshotTimeout)
+	if err != nil {
+		return err
+	}
+	if _, err := redisx.Do("DEL", "watch:active-ids"); err != nil {
+		return fmt.Errorf("redis: %w", err)
+	}
+	args := []string{"SADD", "watch:active-ids"}
+	for _, w := range p.Watches {
+		args = append(args, w.ID)
+	}
+	if _, err := redisx.Do(args...); err != nil {
+		return fmt.Errorf("redis: %w", err)
+	}
+	activeN.Store(int64(len(p.Watches)))
+	counters.Reloads.Add(1)
+	return nil
+}
+
+// publishLoop sends the §6.1 heartbeat every 5s. A Redis outage is reported in
+// the payload (redis_reachable=false) and drops /readyz to 503 — the Workers cron
+// then shows the redis component as LAG (§6.2 S2). Readiness is restored by the
+// next reachable beat through the same cold-start reload path.
+func publishLoop(base string) {
+	t := time.NewTicker(heartbeat.Cadence)
+	defer t.Stop()
+	for now := range t.C {
+		p := collect(now)
+		if !p.RedisReachable {
+			ready.Store(false)
+			readyWhy.Store("not-ready: redis unreachable")
+		} else if !ready.Load() {
+			if err := coldStart(base); err == nil {
+				ready.Store(true)
+				readyWhy.Store("ready")
+			} else {
+				readyWhy.Store("not-ready: " + err.Error())
+			}
+		}
+		if err := heartbeat.Post(base, p, 3*time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, "heartbeat:", err)
+		}
+	}
+}
+
+// collect builds one heartbeat payload, parsing the stream lag from Redis.
+func collect(now time.Time) heartbeat.Payload {
+	lastID, err := lastStreamID()
+	if err != nil {
+		return heartbeat.Build(now, 0, false)
+	}
+	lag := heartbeat.LagMs(now, lastID)
+	counters.ObserveLag(lag)
+	return heartbeat.Build(now, lag, true)
+}
+
+// lastStreamID reads the newest entry ID of the watch stream. An empty stream is
+// not an error: the production producer lands with the later Streams loop.
+func lastStreamID() (string, error) {
+	items, err := redisx.DoArray("XREVRANGE", stream.StreamWatch, "+", "-", "COUNT", "1")
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 {
+		return "", nil
+	}
+	return items[0], nil
 }

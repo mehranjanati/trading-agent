@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"trading-agent/go-watcher/redisx"
 	"trading-agent/go-watcher/snapshot"
 )
 
@@ -29,22 +30,22 @@ func main() {
 	base := "http://" + ln.Addr().String()
 
 	// 2. Seed fake Redis ACTIVE set (3 watches), mimicking pre-crash cache.
-	if _, err := redisDo("SADD", "watch:active-ids", "w1", "w2", "w3"); err != nil {
+	if _, err := redisx.Do("SADD", "watch:active-ids", "w1", "w2", "w3"); err != nil {
 		fmt.Println("FAIL seed:", err)
 		os.Exit(1)
 	}
-	before, err := redisDo("SCARD", "watch:active-ids")
+	before, err := redisx.Do("SCARD", "watch:active-ids")
 	if err != nil || before != "3" {
 		fmt.Println("FAIL seed count:", before, err)
 		os.Exit(1)
 	}
 
 	// 3. Simulate Redis loss.
-	if _, err := redisDo("DEL", "watch:active-ids"); err != nil {
+	if _, err := redisx.Do("DEL", "watch:active-ids"); err != nil {
 		fmt.Println("FAIL flush:", err)
 		os.Exit(1)
 	}
-	if n, _ := redisDo("SCARD", "watch:active-ids"); n != "0" {
+	if n, _ := redisx.Do("SCARD", "watch:active-ids"); n != "0" {
 		fmt.Println("FAIL: flush incomplete")
 		os.Exit(1)
 	}
@@ -59,17 +60,17 @@ func main() {
 	for _, w := range p.Watches {
 		args = append(args, w.ID)
 	}
-	if _, err := redisDo(args...); err != nil {
+	if _, err := redisx.Do(args...); err != nil {
 		fmt.Println("FAIL repopulate:", err)
 		os.Exit(1)
 	}
-	after, _ := redisDo("SCARD", "watch:active-ids")
+	after, _ := redisx.Do("SCARD", "watch:active-ids")
 	if after != "3" {
 		fmt.Println("FAIL: reloaded", after, "want 3")
 		os.Exit(1)
 	}
 
 	// 5. Cleanup drill keys.
-	redisDo("DEL", "watch:active-ids")
+	redisx.Do("DEL", "watch:active-ids")
 	fmt.Printf("restart-drill: PASS (flushed 3 → reloaded %s from D1 snapshot)\n", after)
 }

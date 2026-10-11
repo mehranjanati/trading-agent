@@ -15,6 +15,7 @@ export const ALLOW = {
   "POST /api/signals:ingest": ["trader", "operator", "admin"],
   "POST /api/analysis:runs": ["trader", "operator", "admin"],
   "POST /api/approvals": ["trader", "admin"],
+  "POST /api/lease:handoff": ["operator", "admin"],
   "POST /api/kill-switch": ["operator", "admin"],
 };
 export function guard(route, req) {
@@ -30,4 +31,14 @@ export async function readBody(req) {
 }
 export function writeErr(e) {
   return err(e.code ?? "VALIDATION", e.message, {});
+}
+/** Append one `recovery_log` incident. Lives here (not in health-route) because the
+ *  health cron, the reconcile sweep (E06-T02-S3a) and the fallback poller (S3c) all
+ *  write incidents — one implementation, and no module has to import another. */
+export async function recordIncident(env, incident, action, actor) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO recovery_log(id,incident,action,actor,at) VALUES(?,?,?,?,?)",
+  ).bind(uid("rc"), incident, action, actor, now).run();
+  return { at: now };
 }

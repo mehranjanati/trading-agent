@@ -1,16 +1,23 @@
 // health-route.mjs — E06-T01-S2: badge API + cron persistence.
 // E06-T02-W0.2: real cron signals (Go heartbeat row + stream lag + fallback flag),
 // the §6.3 rejoin gate and the heartbeat ingest route.
+// E06-T02-S3b: the authority lease row (handoff/renew/verify via lease.mjs).
 // GET /api/health → {mode, badge, reasons, components, at} from last snapshot row.
 // GET /api/recovery/log → recent incidents.
 // POST /api/health:heartbeat → Go liveness publisher (E06-T02-W0.1).
+// POST /api/lease:handoff → §6.3 step 4 lease handoff (operator only).
 // scheduled(): 10s cron — writes health_snapshots + recovery_log on change.
 import { ok, err } from "./errors.mjs";
 import { evaluate, badge, canReturnToPrimary, TH } from "./health.mjs";
-import { readBody, uid } from "./_shared.mjs";
+import { readBody, uid, roleOf, guard, recordIncident } from "./_shared.mjs";
+import { createAuthority, TTL_MS, HOLDERS, holdsAuthority } from "./lease.mjs";
+
+export { recordIncident };
 
 // Fixed row id: the heartbeat upserts, it must never grow health_snapshots.
 const HB_ID = "hb_go";
+// Fixed row id: the authority lease (E06-T02-S3b) — upserted, never appended.
+const LEASE_ID = "lease_authority";
 
 export function healthRoutes() {
   const safe = (fn) => async (req, env) => {
@@ -50,6 +57,20 @@ export function healthRoutes() {
       ).bind(limit).all();
       return ok({ incidents: rows.results ?? [] });
     }),
+    /** POST /api/lease:handoff — §6.3 step 4 (lease handoff with epoch bump).
+     *  Operator/admin only (RBAC matrix). Until the ExecutionAuthority DO binding
+     *  lands (E12) this route is the local/drill seam; afterwards the DO owns the row.
+     *  It transfers *authority*, never orders: the fallback order path stays blocked
+     *  (`FALLBACK_ORDERS_ENABLED=false`, SAFE-001). */
+    leaseHandoff: safe(async (req, env) => {
+      const g = guard("POST /api/lease:handoff", req);
+      if (g) return g;
+      const body = await readBody(req).catch(() => ({}));
+      const holder = body?.holder === HOLDERS.FALLBACK ? HOLDERS.FALLBACK : HOLDERS.PRIMARY;
+      const lease = await handoffLease(env, { holder, nowMs: Date.now() });
+      await recordIncident(env, "lease.handoff", `epoch=${lease.epoch} holder=${lease.holder}`, roleOf(req));
+      return ok({ ...lease });
+    }),
   };
 }
 
@@ -75,14 +96,8 @@ export async function tick(env, signals, decide = (n) => n) {
   return { ...next, at: now };
 }
 
-/** Record a mode transition in recovery_log (called by tick wrapper / operator). */
-export async function recordIncident(env, incident, action, actor) {
-  const now = new Date().toISOString();
-  await env.DB.prepare(
-    "INSERT INTO recovery_log(id,incident,action,actor,at) VALUES(?,?,?,?,?)",
-  ).bind(uid("rc"), incident, action, actor, now).run();
-  return { at: now };
-}
+/** Record a mode transition in recovery_log (called by tick wrapper / operator).
+ *  Implementation lives in `_shared.mjs` (re-exported here for existing callers). */
 
 /** Upsert the single hb_go row (E06-T02-W0.2). D1 is the only store both planes
  *  reach — the Workers side has no Redis binding — and the §6.1 semantics (5s
@@ -120,7 +135,79 @@ export async function readHeartbeat(env) {
   };
 }
 
-async function lastMode(env) {
+// ---------------------------------------------------------------- authority lease
+// ADR-003 / §6.3: one holder globally, TTL 30s, renew 10s, monotonic epoch. The rules
+// are NOT re-implemented here — `withAuthority` loads the D1 row into the E05-T02 state
+// machine (`lease.mjs`) and persists the result, so the DO (E12) and this pre-DO seam
+// share exactly one fencing implementation.
+
+/** Read the authority lease row. null = nobody holds authority (never "us"). */
+export async function readLease(env) {
+  const row = await env.DB.prepare(
+    "SELECT at, detail_json FROM health_snapshots WHERE id='" + LEASE_ID + "'",
+  ).all();
+  const last = row.results?.[0];
+  if (!last) return null;
+  let d = {};
+  try { d = JSON.parse(last.detail_json ?? "{}"); } catch { d = {}; }
+  if (!d.holder) return null;
+  return { holder: d.holder, epoch: Number(d.epoch ?? 0), expires_ms: Number(d.expires_ms ?? 0), at: last.at };
+}
+
+async function writeLeaseRow(env, lease, atMs) {
+  if (!lease) {
+    await env.DB.prepare("DELETE FROM health_snapshots WHERE id='" + LEASE_ID + "'").run();
+    return;
+  }
+  const detail = JSON.stringify({ holder: lease.holder, epoch: lease.epoch, expires_ms: lease.expires_ms });
+  await env.DB.prepare(
+    "INSERT INTO health_snapshots(id,component,status,detail_json,at) VALUES(?,'lease_authority',?,?,?) " +
+      "ON CONFLICT(id) DO UPDATE SET status=excluded.status, detail_json=excluded.detail_json, at=excluded.at",
+  ).bind(LEASE_ID, lease.holder, detail, new Date(atMs).toISOString()).run();
+}
+
+/** Run one authority operation against the D1 row through the shared state machine. */
+async function withAuthority(env, nowMs, fn) {
+  const cur = await readLease(env);
+  const before = cur ? JSON.stringify({ holder: cur.holder, epoch: cur.epoch, expires_ms: cur.expires_ms }) : null;
+  const mem = { lease: before };
+  const auth = createAuthority({ get: (k) => mem[k] ?? null, set: (k, v) => { mem[k] = v; } });
+  const out = fn(auth);
+  if (mem.lease !== before) await writeLeaseRow(env, mem.lease ? JSON.parse(mem.lease) : null, nowMs);
+  return out;
+}
+
+/** §6.3 step 4: hand authority to `holder`. An unexpired lease held by someone else is
+ *  released first (a single holder is global), so the winner always gets a strictly
+ *  greater epoch — the previous holder is fenced from that moment on. */
+export async function handoffLease(env, { holder = HOLDERS.PRIMARY, nowMs = Date.now() } = {}) {
+  return withAuthority(env, nowMs, (auth) => {
+    const cur = auth.load();
+    if (cur && cur.holder === holder && cur.expires_ms > nowMs) return { ok: true, ...cur, reused: true };
+    if (cur && cur.expires_ms > nowMs) auth.release(cur.holder, cur.epoch);
+    return auth.acquire(holder, nowMs);
+  });
+}
+
+/** Renew with an explicit epoch: a zombie holder (pre-handoff epoch) is rejected with
+ *  `stale-epoch` — the fencing check of §6.3 / the `lease.fenced` alert path. */
+export async function renewLease(env, { holder, epoch, nowMs = Date.now() } = {}) {
+  return withAuthority(env, nowMs, (auth) => auth.renew(holder, epoch, nowMs));
+}
+
+/** Fencing token check — every submit MUST pass this (ADR-003). */
+export async function verifyLease(env, { holder, epoch, nowMs = Date.now() } = {}) {
+  return withAuthority(env, nowMs, (auth) => auth.verify(holder, epoch, nowMs));
+}
+
+/** Renew only while `holder` still owns the row (the cron's self-renewal path). */
+export async function renewLeaseIfHeld(env, { holder = HOLDERS.PRIMARY, nowMs = Date.now() } = {}) {
+  const cur = await readLease(env);
+  if (!holdsAuthority(cur, holder, nowMs)) return { ok: false, reason: cur ? "expired" : "no-lease" };
+  return renewLease(env, { holder, epoch: cur.epoch, nowMs });
+}
+
+export async function lastModeRow(env) {
   const row = await env.DB.prepare(
     "SELECT status, at, detail_json FROM health_snapshots WHERE component='mode' ORDER BY at DESC, rowid DESC LIMIT 1",
   ).all();
@@ -139,42 +226,51 @@ async function lastNonPrimaryModeAt(env) {
 }
 
 /** assembleSignals — the seam index.mjs used to hardcode (W0.2). Derives the cron
- *  signals from the heartbeat row + the mode history. Unknown sources stay null so
- *  health.mjs treats them as worst-case; per-symbol price freshness lands with the
- *  fallback poller/E07, the lease fields with the execution-authority DO (E12). */
+ *  signals from the heartbeat row, the mode history and the authority lease row (S3b).
+ *  Unknown sources stay null so health.mjs treats them as worst-case; per-symbol
+ *  fallback price freshness lands with the S3c poller. */
 export async function assembleSignals(env, nowMs = Date.now()) {
   let d1Down = false;
   let hb = null;
   let prevMode = null;
   let lastDownAt = null;
+  let lease = null;
   try {
     hb = await readHeartbeat(env);
-    prevMode = await lastMode(env);
+    prevMode = await lastModeRow(env);
     lastDownAt = await lastNonPrimaryModeAt(env);
+    lease = await readLease(env);
   } catch { d1Down = true; }
 
   const goHealthy = !d1Down && (hb?.go_heartbeat_ms ?? 0) > 0 && nowMs - hb.go_heartbeat_ms <= TH.HEARTBEAT_MS * TH.MISSES;
+  const fallbackActive = !!prevMode && prevMode.status !== "PRIMARY" && !goHealthy;
+  // price freshness: PRIMARY → the WS/Go path owns it (stream lag); the fallback
+  // REST snapshot age arrives with S3c's poller.
+  const priceLagMs = 0;
   return {
     now_ms: nowMs,
     go_heartbeat_ms: hb?.go_heartbeat_ms ?? 0,
     stream_lag_ms: hb?.stream_lag_ms ?? null,
     redis_reachable: hb?.redis_reachable ?? true,
-    price_lag_ms: 0, // no per-symbol freshness source yet — the drills inject it
+    price_lag_ms: priceLagMs,
     d1_down: d1Down,
     // §6.2 S1: once the system is already degraded, the fallback path is engaged.
-    fallback_active: !!prevMode && prevMode.status !== "PRIMARY" && !goHealthy,
+    fallback_active: fallbackActive,
     // §6.3 condition 1: continuous healthy time since the last non-PRIMARY mode row.
     healthy_contig_ms: goHealthy ? (lastDownAt ? Math.max(0, nowMs - Date.parse(lastDownAt)) : TH.RECOVER_CONTIG_MS) : 0,
-    lease_expires_ms: null,
-    lease_holder: null,
+    // §6.1: an aged authority lease is its own degradation input (renewed every 10s
+    // while held; null until the first handoff, and until the DO binding at E12).
+    lease_expires_ms: lease?.expires_ms ?? null,
+    lease_holder: lease?.holder ?? null,
     kill_engaged: false, // the kill-switch route is not part of this task's scope
   };
 }
 
-/** Rejoin inputs (§6.3 conditions 2-4). Until the reconcile sweep, the poller drain
- *  counter and the lease handoff land (S3 of this task) the defaults are unknown →
- *  the gate stays closed, so a DEGRADED system never flips back to PRIMARY on
- *  freshness alone. */
+/** Rejoin inputs (§6.3 conditions 2-4). The real values are produced by the S3 work:
+ *  `non_terminal_intents` by the reconcile sweep, `fallback_inflight` by the S3c
+ *  poller, `lease_ours` by the authority handoff/renewal. Defaults stay unknown (null)
+ *  so a gate wired without them keeps a DEGRADED system from flipping back on
+ *  freshness alone — it fails closed, never open. */
 export function defaultRejoinState() {
   return { non_terminal_intents: null, fallback_inflight: null, lease_ours: null };
 }
@@ -202,7 +298,7 @@ function reasonKey(status, reasons = []) {
 export async function runTick(env, opts = {}) {
   const nowMs = opts.nowMs ?? Date.now();
   const rejoin = opts.rejoin ?? defaultRejoinState();
-  const prev = await lastMode(env).catch(() => null);
+  const prev = await lastModeRow(env).catch(() => null);
   const signals = await assembleSignals(env, nowMs);
   const next = await tick(env, signals, (n) => applyRejoinGate(prev, n, signals, rejoin));
   // Log a transition — or a change of reason kind while the mode holds (e.g. the

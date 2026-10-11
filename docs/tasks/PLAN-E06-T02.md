@@ -276,10 +276,14 @@ drills that assert them; drills last — they are the evidence, not the code.
 
 **File map:** `go-watcher`: `redisx/` (new), `main.go`,
 `cmd/restart-drill/*` (switch to redisx), new tests. `workers/src`:
-`health-route.mjs` (heartbeat route), `index.mjs` (signals), `reconcile.mjs`
+`health-route.mjs` (heartbeat route, `lastModeRow`, the authority-lease row +
+`POST /api/lease:handoff`), `index.mjs` (signals, `runCron`), `reconcile.mjs`
 (new), `fallback-poll.mjs` (new), `rejoin.test.mjs` / `reconcile.test.mjs` /
-`fallback-poll.test.mjs` (new), extended health/index tests. `scripts`:
-`chaos.mjs`, `chaos.test.mjs` (new). Root: `Makefile` (test target). Docs:
+`fallback-poll.test.mjs` (new), extended health/index tests. `_shared.mjs` gains
+`recordIncident` (moved out of `health-route.mjs`, re-exported there) so the
+sweep and the poller can write incidents without an import cycle. `scripts`:
+`chaos.mjs`, `chaos.test.mjs` (new), `stub-exchange.mjs` (new test double for the
+no-429 proof). Root: `Makefile` (test target). Docs:
 `docs/ops/DRILLS.md`, `docs/ops/drills/E06-T02/*`, `docs/tasks/BACKLOG.json`,
 `docs/tasks/EPICS.md`, drill note. Migrations: none.
 
@@ -301,8 +305,10 @@ drills that assert them; drills last — they are the evidence, not the code.
       `healthy_contig_ms`, Go ready/snapshot, redisx extraction) — commit 1
 - [x] S1 chaos.mjs + safety guards + injection suite + Makefile extension — commit 2
 - [ ] S2 drills 1/2/3 executed; evidence JSON + logs committed
-- [ ] S3a reconcile sweep + tests; S3b rejoin/fencing sequence test;
-      S3c poller + no-429 test + deferral note
+- [x] S3a reconcile sweep (`workers/src/reconcile.mjs`) + tests — commit 3
+- [x] S3b lease handoff + fencing: `rejoin.test.mjs` + the D1 authority row
+      (`health-route.mjs` handoff/renew/verify through `lease.mjs`) — commit 3
+- [ ] S3c poller (`workers/src/fallback-poll.mjs`) + no-429 proof + deferral note
 - [ ] Docs: `docs/ops/DRILLS.md` ledger + drill note (deferrals: live 429
       run → E12; DO handoff → E12; detection-latency note)
 - [ ] BACKLOG.json status flips with evidence; EPICS.md E06 row updated
@@ -316,7 +322,14 @@ drills that assert them; drills last — they are the evidence, not the code.
 - 10 s cron vs 15 s threshold → observed detection ≤ ~25 s (rule unchanged,
   noted in the drill log).
 - Lease handoff is proven at module level only until the DO binding lands
-  (E12).
+  (E12). Before E12 the authority row is written by
+  `POST /api/lease:handoff` (operator/admin), so the return to PRIMARY needs an
+  explicit operator handoff — recorded in `docs/ops/drills/E06-T02/README.md`.
+  `lease.mjs` `release()` was fixed while doing this: it used to reset the epoch
+  counter, so a handoff could hand a zombie a re-usable epoch.
+- The fallback poller runs from the 10 s cron, so the observed cadence is 10 s
+  until the DO alarm (E12) restores ADR-004's 5 s — slower than the proven
+  envelope, never faster. The poller drops a round rather than spend into a 429.
 - The live 429-free run + live heartbeat cadence check are deferred to
   Hetzner/E12 (no egress here) and attach to the E11 gate report.
 - Zero-dup scope is our side only (intent rows + evt dedupe); exchange-side

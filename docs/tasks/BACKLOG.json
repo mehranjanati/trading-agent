@@ -1092,7 +1092,7 @@
       "epic_id": "E09",
       "title": "Idempotent submit + reconcile (testnet)",
       "objective": "One exchange order per intent.",
-      "scope": "Signed submit clientOrderId, UNKNOWN-only reconcile, 15s sweep, kill hook, snapshots.",
+      "scope": "Signed submit clientOrderId, UNKNOWN-only reconcile, 15s sweep, kill hook, snapshots. Submit path lives in Workers only: Go Watcher never submits orders, including fallback (D-08).",
       "out_of_scope": "No live.",
       "priority": "P0",
       "risk_level": "high",

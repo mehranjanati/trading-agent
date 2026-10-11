@@ -19,7 +19,6 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-
 export const DRILLS = ["go", "redis", "both", "rejoin", "budget"];
 export const PHASES = ["preflight", "kill", "watch", "restore", "assert", "all"];
 export const EVIDENCE_DIR = "docs/ops/drills/E06-T02";
@@ -32,7 +31,7 @@ const ENV_OK = ["dev", "test", "local"];
 export function parseArgs(argv, env = process.env) {
   const flags = {
     drill: null, phase: "all", target: null, execute: false, hard: false,
-    json: false, help: false, pauseMs: 0, watchMs: 60_000, symbols: 10, db: null,
+    json: false, help: false, pauseMs: 0, watchMs: 60_000, symbols: 10, minutes: 5, db: null,
     workers: env.WORKERS_URL || "http://127.0.0.1:8787",
     redis: env.REDIS_ADDR || "127.0.0.1:6379",
   };
@@ -51,6 +50,7 @@ export function parseArgs(argv, env = process.env) {
     else if (a === "--pause-ms") flags.pauseMs = Number(argv[++i]);
     else if (a === "--watch-ms") flags.watchMs = Number(argv[++i]);
     else if (a === "--symbols") flags.symbols = Number(argv[++i]);
+    else if (a === "--minutes") flags.minutes = Number(argv[++i]);
     else rest.push(a);
   }
   flags.drill = rest[0] ?? null;
@@ -128,8 +128,8 @@ export function planFor(flags) {
       ...asserts],
     budget: [
       "stub exchange: node:http weight accounting (REQUEST_WEIGHT 3000/min, poll weight 1, 429 + X-Api-Limit-Reset-Timestamp on breach)",
-      `drive the fallback poller for N=${flags.symbols} symbols at the ADR-004 cadence (floor = symbols x 1/50 x 2 s)`,
-      "assert: zero 429, weight within budget, cadence >= floor",
+      `drive the fallback poller for N=${flags.symbols} symbols over ${flags.minutes} simulated min at the ADR-004 cadence (floor = symbols x 1/50 x 2 s)`,
+      "assert: zero 429, weight within budget, cadence >= floor, every round polled",
     ],
   };
   return plans[flags.drill] ?? [];
@@ -253,6 +253,57 @@ export async function probeBlockedApproval(workers) {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** chaos.mjs budget — the ADR-004 no-429 proof, end to end against the local stub.
+ *  The clock is simulated, so five minutes of 5s cadence costs milliseconds. No
+ *  production endpoint is ever contacted: the only socket is the stub on 127.0.0.1. */
+export async function runBudget(flags, io = defaultIo()) {
+  const { tick, createWindow, memoryStore, floorMs, POLL_MS } = await import("../workers/src/fallback-poll.mjs");
+  const { createStubExchange, syntheticSymbols } = await import("./stub-exchange.mjs");
+
+  const symbols = syntheticSymbols(flags.symbols);
+  const rounds = Math.max(1, Math.round((flags.minutes * 60_000) / POLL_MS));
+  let simNow = Date.now();
+  const stub = createStubExchange({ now: () => simNow });
+  const port = await stub.listen(0);
+  const store = memoryStore();
+  const window = createWindow();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const checks = [];
+  let polled = 0;
+  let limited = 0;
+
+  try {
+    for (let i = 0; i < rounds; i++) {
+      simNow += i === 0 ? 0 : POLL_MS;
+      const res = await tick({}, {
+        nowMs: simNow, mode: "FALLBACK", store, window, symbols, baseUrl, jitter: () => 0, env: {},
+      });
+      if (res.reason === "ok") polled++;
+      if (res.reason === "rate-limited") limited++;
+      io.log(`budget: round ${i + 1}/${rounds} → ${res.reason} (usage ${window.usage(simNow)}/${3000})`);
+    }
+  } finally {
+    await stub.close();
+  }
+
+  checks.push({ name: "zero_429", ok: stub.stats.limited === 0 && limited === 0, detail: { stub_limited: stub.stats.limited, poller_limited: limited } });
+  checks.push({ name: "weight_within_budget", ok: stub.stats.peak_usage <= 3000, detail: { peak_usage: stub.stats.peak_usage, budget_per_min: 3000 } });
+  checks.push({ name: "cadence_floor", ok: POLL_MS >= floorMs(symbols.length), detail: { poll_ms: POLL_MS, floor_ms: floorMs(symbols.length) } });
+  checks.push({ name: "adr004_math", ...assertBudget({ symbols: symbols.length, pollSec: POLL_MS / 1000, pollsPerRound: symbols.length }) });
+  checks.push({ name: "rounds_completed", ok: polled === rounds, detail: { rounds, polled, minutes: flags.minutes } });
+
+  const evidence = renderEvidence({
+    drill: "budget", phase: flags.phase, flags,
+    baselines: { symbols: symbols.length, minutes: flags.minutes, rounds, stub: stub.stats },
+    checks,
+  });
+  const path = io.writeEvidence(evidenceName("budget"), evidence);
+  const failed = checks.filter((c) => c.ok === false).map((c) => c.name);
+  io.log(`evidence: ${path}`);
+  io.log(failed.length ? `FAIL: ${failed.join(", ")}` : "PASS: all checks green");
+  return { ok: evidence.ok, touched: true, checks, baselines: { symbols: symbols.length, rounds }, evidence: path };
+}
 
 // ---------------------------------------------------------------- assertions
 // Every assertion is pure: {ok, detail}. `ok: null` means "cannot judge" and is
@@ -392,6 +443,11 @@ export async function run(flags, io = defaultIo(), env = process.env) {
   }
 
   const steps = flags.phase === "all" ? ["preflight", "kill", "watch", "restore", "assert"] : [flags.phase];
+  // The budget drill is a pure local load: no kill/watch phases, no stack required.
+  if (flags.drill === "budget") {
+    io.log(`chaos.mjs — budget [${flags.phase}] — stub exchange load (localhost only)`);
+    return await runBudget(flags, io);
+  }
   const want = (p) => steps.includes(p);
   const checks = [];
   const baselines = {};
@@ -497,6 +553,7 @@ export function usage() {
     "  --pause-ms N             CLIENT PAUSE window (0 = until CLIENT UNPAUSE)",
     "  --watch-ms N             how long to watch /api/health (default 60000)",
     "  --symbols N              budget-drill symbol count (default 10)",
+    "  --minutes N              budget-drill simulated minutes (default 5)",
     "  --db <sqlite path>       local D1 file for the row assertions",
     "  --workers <url>  --redis <host:port>   local endpoints",
     "  --json                   print the result object",

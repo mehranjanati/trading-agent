@@ -11,6 +11,7 @@ import { ok, err } from "./errors.mjs";
 import { evaluate, badge, canReturnToPrimary, TH } from "./health.mjs";
 import { readBody, uid, roleOf, guard, recordIncident } from "./_shared.mjs";
 import { createAuthority, TTL_MS, HOLDERS, holdsAuthority } from "./lease.mjs";
+import { pollStatus } from "./fallback-poll.mjs";
 
 export { recordIncident };
 
@@ -244,9 +245,15 @@ export async function assembleSignals(env, nowMs = Date.now()) {
 
   const goHealthy = !d1Down && (hb?.go_heartbeat_ms ?? 0) > 0 && nowMs - hb.go_heartbeat_ms <= TH.HEARTBEAT_MS * TH.MISSES;
   const fallbackActive = !!prevMode && prevMode.status !== "PRIMARY" && !goHealthy;
-  // price freshness: PRIMARY → the WS/Go path owns it (stream lag); the fallback
-  // REST snapshot age arrives with S3c's poller.
-  const priceLagMs = 0;
+  // §6.2 S1: in fallback the only price source is the REST poller, so its snapshot age
+  // IS the price freshness. With no fallback quote yet that is "stale", never fresh.
+  let priceLagMs = 0; // PRIMARY: the WS/Go path owns price freshness (stream lag)
+  if (fallbackActive && !d1Down) {
+    try {
+      const poll = await pollStatus(env, nowMs);
+      priceLagMs = poll.quote_lag_ms;
+    } catch { priceLagMs = TH.PRICE_STALE_MS + 1; }
+  }
   return {
     now_ms: nowMs,
     go_heartbeat_ms: hb?.go_heartbeat_ms ?? 0,

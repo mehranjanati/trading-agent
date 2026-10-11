@@ -11,6 +11,7 @@ import { miscRoutes } from "./routes2.mjs";
 import { healthRoutes, runTick, lastModeRow, readLease, renewLease } from "./health-route.mjs";
 import { sweep, readCursor, shouldSweep } from "./reconcile.mjs";
 import { HOLDERS, holdsAuthority } from "./lease.mjs";
+import { tick as pollOnce, pollStatus } from "./fallback-poll.mjs";
 
 const store = createStore();
 const watches = watchRoutes(store);
@@ -78,14 +79,32 @@ export async function runCron(env, opts = {}) {
     }
   } catch { leaseOurs = false; }
 
-  // §6.3 condition 3 — the fallback drain counter arrives with S3c's poller.
+  // §6.3 condition 3 — the fallback must have drained. The in-flight marker is read
+  // BEFORE the tick (that is the state the gate reasons about) and the poll round is
+  // driven AFTER it with the freshly evaluated mode, so polling starts on the same tick
+  // the system degrades instead of one cron late (ADR-004: poll only while the primary
+  // plane is down; in fallback this is also the only price feed).
+  let drained = false;
+  try { drained = (await pollStatus(env, nowMs)).drained; } catch { drained = false; }
+
   const rejoin = {
     non_terminal_intents: sweepError ? null : (swept ? swept.remaining : cursor.remaining),
-    fallback_inflight: 0,
+    fallback_inflight: drained ? 0 : 1,
     lease_ours: leaseOurs,
   };
   const tickResult = await runTick(env, { nowMs, rejoin });
-  return { tick: tickResult, rejoin, sweep: swept, sweep_error: sweepError };
+
+  let poll = null;
+  try {
+    const round = await pollOnce(env, {
+      nowMs, mode: tickResult.mode, window: opts.window, symbols: opts.symbols,
+      get: opts.get, baseUrl: opts.baseUrl, actor: opts.actor ?? "health-cron",
+    });
+    poll = { ...(await pollStatus(env, nowMs)), round: round.reason };
+  } catch (e) {
+    poll = { drained: false, round: "error", error: e.message }; // unknown → not drained
+  }
+  return { tick: tickResult, rejoin, sweep: swept, sweep_error: sweepError, poll };
 }
 
 

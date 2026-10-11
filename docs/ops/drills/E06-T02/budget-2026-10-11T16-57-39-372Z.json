@@ -1,0 +1,68 @@
+{
+  "task": "E06-T02",
+  "drill": "budget",
+  "phase": "all",
+  "ok": true,
+  "target": "local",
+  "at": "2026-10-11T16:57:39.372Z",
+  "baselines": {
+    "symbols": 10,
+    "minutes": 5,
+    "rounds": 60,
+    "stub": {
+      "requests": 60,
+      "weight": 600,
+      "limited": 0,
+      "symbols_served": 600,
+      "peak_usage": 110,
+      "limited_at": []
+    }
+  },
+  "checks": [
+    {
+      "name": "zero_429",
+      "ok": true,
+      "detail": {
+        "stub_limited": 0,
+        "poller_limited": 0
+      }
+    },
+    {
+      "name": "weight_within_budget",
+      "ok": true,
+      "detail": {
+        "peak_usage": 110,
+        "budget_per_min": 3000
+      }
+    },
+    {
+      "name": "cadence_floor",
+      "ok": true,
+      "detail": {
+        "poll_ms": 5000,
+        "floor_ms": 400
+      }
+    },
+    {
+      "name": "adr004_math",
+      "ok": true,
+      "detail": {
+        "symbols": 10,
+        "pollSec": 5,
+        "floor": 0.4,
+        "roundsPerMin": 12,
+        "weightPerMin": 120,
+        "budgetPerMin": 3000
+      }
+    },
+    {
+      "name": "rounds_completed",
+      "ok": true,
+      "detail": {
+        "rounds": 60,
+        "polled": 60,
+        "minutes": 5
+      }
+    }
+  ]
+}

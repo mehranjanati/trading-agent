@@ -22,7 +22,7 @@
 - **Q-04** Stale thresholds per symbol? Owner: trader · Close: E03 · Proposal: majors 5s, alts 10s.
 - **Q-05** Approval expiry default? Owner: trader · Close: E08 · Proposal: 10min.
 - **Q-06** Kill-switch + release actors? Owner: human · Close: E08 · Proposal: operator engages, second human releases.
-- **Q-07** External signal-system auth (HMAC/JWT/mTLS)? Owner: signal owner · Close: E07 · Proposal: HMAC webhook.
+- **Q-07 CLOSED (E07-T01, 2026-10-12)** — External signal auth = **HMAC-SHA256 webhook** (`X-Signal-Source/-Timestamp/-Nonce/-Signature`), constant-time compare, nonce replay guard, 30s clock-skew reject (docs/07 §7.4). Provenance is an authenticated source identity + a config-driven per-kind allowlist; it proves source identity only and never strategy validity (E08 R-gates decide). Secrets via `SIGNAL_HMAC_SECRET`/`SIGNAL_HMAC_SECRETS`.
 - **Q-08** Hetzner sizing/region/backups? Owner: operator · Close: E12 · Proposal: FSN1, daily snapshots.
 - **Q-09** Cloudflare plan limits (D1 rows/writes, DO requests)? Owner: operator · Close: E04 · Verify on dashboard + docs.
 - **Q-10 CLOSED → no testnet** (D-06 above). E09/E11 use paper-simulator.

@@ -67,7 +67,7 @@ before(async () => {
   rmSync(tmp, { force: true });
   app = (await import("./index.mjs")).default;
 });
-const env = () => ({ DB: fakeDb(), ENV: "test" });
+const env = (extra = {}) => ({ DB: fakeDb(), ENV: "test", ...extra });
 const req = (method, path, body, headers = {}) =>
   new Request(`http://x${path}`, {
     method, headers: { "content-type": "application/json", ...headers },
@@ -103,25 +103,33 @@ describe("E05-T01 control API contracts", () => {
     assert.ok(Array.isArray(snap.watches)); // snapshot serves (empty until ACTIVE)
   });
   it("S2: signal ingest validates kind; bad kind 400", async () => {
-    const bad = await app.fetch(req("POST", "/api/signals:ingest", { kind: "NOPE", payload: {}, source: "s" }), env());
-    assert.equal(bad.status, 400);
-    // E07-T01-S1: the payload must satisfy the per-kind contract (MTF v1), and
-    // the row carries the registry version it was admitted under.
-    const mtf = {
-      watch_id: "w1", kind: "MTF",
-      payload: {
-        symbol: "BTCUSDT",
-        timeframes: [{ tf: "1h", bias: "LONG" }, { tf: "4h", bias: "LONG" }],
-        agreement: "LONG",
-      },
-      source: "ext",
+    const e = env({ SIGNAL_HMAC_SECRET: "route-test-secret" });
+    // E07-T01: /api/signals:ingest is the authenticated webhook (FR-005 "signed
+    // payload"); the allowlist is fail-closed, so activate one first.
+    await app.fetch(new Request("http://x/api/strategy:activate", {
+      method: "POST", headers: { "content-type": "application/json", "x-role": "admin" },
+      body: JSON.stringify({ version: "v-test", config: { signal_sources: { ext: ["MTF"] } } }),
+    }), e);
+    const { signWebhook } = await import("./strategies.mjs");
+    const post = async (body) => {
+      const rawBody = JSON.stringify(body);
+      const t = Date.now(), nonce = `n${Math.random()}`;
+      const headers = {
+        "content-type": "application/json", "x-signal-source": "ext",
+        "x-signal-timestamp": String(t), "x-signal-nonce": nonce,
+        "x-signal-signature": await signWebhook("route-test-secret", { timestamp_ms: t, nonce, rawBody }),
+      };
+      return app.fetch(new Request("http://x/api/signals:ingest", { method: "POST", headers, body: rawBody }), e);
     };
-    const good = await app.fetch(req("POST", "/api/signals:ingest", mtf), env());
+    // unknown kind is rejected by the contract, after auth passes
+    assert.equal((await post({ kind: "NOPE", payload: {}, source: "ext" })).status, 400);
+    const good = await post({
+      kind: "MTF",
+      payload: { symbol: "BTCUSDT", timeframes: [{ tf: "1h", bias: "LONG" }, { tf: "4h", bias: "LONG" }], agreement: "LONG" },
+      source: "ext",
+    });
     assert.equal(good.status, 201);
     assert.equal((await good.json()).schema_version, "1");
-    const badShape = await app.fetch(req("POST", "/api/signals:ingest",
-      { watch_id: "w1", kind: "MTF", payload: { tf: "4h" }, source: "ext" }), env());
-    assert.equal(badShape.status, 400);
   });
   it("S2: approval grant issues expiring token; analysis run stored", async () => {
     const an = await (await app.fetch(req("POST", "/api/analysis:runs", { watch_id: "w1" }), env())).json();

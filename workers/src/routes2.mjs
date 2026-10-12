@@ -2,41 +2,88 @@
 import { ok } from "./errors.mjs";
 import { signalBody, approvalBody } from "./validate.mjs";
 import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
-import { uid, roleOf, guard, readBody, writeErr } from "./_shared.mjs";
+import { uid, roleOf, guard, readBody, writeErr, recordIncident } from "./_shared.mjs";
+import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed } from "./strategies.mjs";
+
+/** Contract validation + version tagging. Shared by the webhook path so there is
+ *  exactly one place that decides whether a payload is admissible. */
+function validatePayload(b) {
+  signalBody(b);
+  // E07-T01-S1: strict per-kind contract (exact $.path on violation) and the
+  // registry version is stamped into the row, so a run pinned later knows
+  // exactly which contract admitted the signal it reads.
+  const { schema_version } = validateSignal(b.kind, b.payload);
+  return { schema_version, tagged: { ...b.payload, _schema_version: schema_version } };
+}
+
+async function persistSignal(env, b, { schema_version, tagged }) {
+  const now = new Date().toISOString();
+  const id = uid("sig");
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO signals(id,watch_id,kind,payload_json,source,at) VALUES(?,?,?,?,?,?)",
+    ).bind(id, b.watch_id ?? null, b.kind, JSON.stringify(tagged), b.source, now),
+    env.DB.prepare(
+      "INSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES(?,?,?,?,?,?)",
+    ).bind(uid("evt"), "signal.ingested_v1", b.watch_id ?? id, JSON.stringify({ kind: b.kind, schema_version: SCHEMA_VERSION }), `signal.ingested_v1:${id}:0`, now),
+  ]);
+  return ok({ id, schema_version }, 201);
+}
 
 export function miscRoutes() {
   const safe = (fn) => async (req, env) => {
     try { return await fn(req, env); } catch (e) { return writeErr(e); }
   };
   return {
-    ingestSignal: safe(async (req, env) => {
-      const g = guard("POST /api/signals:ingest", req);
+    /** E07-T01-S2b: the authenticated signal webhook (FR-005 "signed payload").
+     *  Order is deliberate: authenticate → validate contract → authorise source
+     *  → store. A bad payload is 400 whatever the source; an unlisted-but-signed
+     *  source is 403. Provenance proves identity only — see strategies.mjs. */
+    ingestSignalWebhook: safe(async (req, env) => {
+      const rawBody = await req.text();
+      let b;
+      try { b = JSON.parse(rawBody); } catch { const e = new Error("invalid JSON"); e.code = "VALIDATION"; throw e; }
+      let source;
+      try {
+        ({ source } = await verifyWebhook(env, req.headers, rawBody));
+      } catch (e) {
+        await recordIncident(env, "signal.auth_rejected", `reason=${e?.reason ?? e?.message}`, "signal-webhook");
+        const out = new Error("invalid webhook signature");
+        out.code = "AUTH";
+        throw out;
+      }
+      // The verified header identity supersedes any body claim, and satisfies the
+      // source requirement of the shared body contract.
+      const merged = { ...b, source };
+      const validated = validatePayload(merged); // 400 (with $.path) before any provenance decision
+      const active = await activeVersion(env);
+      const cfg = allowlistFor(active ? JSON.parse(active.config_json) : {});
+      if (!sourceAllowed(cfg, b.kind, source)) {
+        await recordIncident(env, "signal.provenance_rejected", `source=${source} kind=${b.kind}`, "signal-webhook");
+        const e = new Error(`source ${source} not allowlisted for ${b.kind}`);
+        e.code = "FORBIDDEN";
+        throw e;
+      }
+      // The stored row's source is the VERIFIED identity, never the body's claim.
+      return persistSignal(env, merged, validated);
+    }),
+    activateStrategy: safe(async (req, env) => {
+      const g = guard("POST /api/strategy:activate", req);
       if (g) return g;
       const b = await readBody(req);
-      signalBody(b);
-      // E07-T01-S1: strict per-kind contract (exact $.path on violation) and the
-      // registry version is stamped into the row, so a run pinned later knows
-      // exactly which contract admitted the signal it reads.
-      const { schema_version } = validateSignal(b.kind, b.payload);
-      const tagged = { ...b.payload, _schema_version: schema_version };
-      const now = new Date().toISOString();
-      const id = uid("sig");
-      await env.DB.batch([
-        env.DB.prepare(
-          "INSERT INTO signals(id,watch_id,kind,payload_json,source,at) VALUES(?,?,?,?,?,?)",
-        ).bind(id, b.watch_id ?? null, b.kind, JSON.stringify(tagged), b.source, now),
-        env.DB.prepare(
-          "INSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES(?,?,?,?,?,?)",
-        ).bind(uid("evt"), "signal.ingested_v1", b.watch_id ?? id, JSON.stringify({ kind: b.kind, schema_version: SCHEMA_VERSION }), `signal.ingested_v1:${id}:0`, now),
-      ]);
-      return ok({ id, schema_version }, 201);
+      if (!b.version || typeof b.version !== "string") { const e = new Error("version required"); e.code = "VALIDATION"; throw e; }
+      return ok(await activateVersion(env, { version: b.version, config: b.config, actor: roleOf(req) }), 201);
     }),
     runAnalysis: safe(async (req, env) => {
       const b = await readBody(req);
       if (!b.watch_id) { const e = new Error("watch_id required"); e.code = "VALIDATION"; throw e; }
       const now = new Date().toISOString();
       const id = uid("an");
-      const out = { bias: "FLAT", confidence: 0.4, reasons: ["E05 stub: model wiring in E07"], model: "stub", input_hash: "na" };
+      // E07-T01-S2a: pin the version that is active AT RUN START — old runs
+      // keep their pin forever (pin-immutability is what E09 will audit).
+      const active = await activeVersion(env);
+      const pinned = active?.version ?? null;
+      const out = { bias: "FLAT", confidence: 0.4, reasons: ["E05 stub: model wiring in E07"], model: "stub", input_hash: "na", strategy_version: pinned };
       await env.DB.prepare(
         "INSERT INTO analysis_runs(id,watch_id,model,input_hash,output_json,confidence,at) VALUES(?,?,?,?,?,?,?)",
       ).bind(id, b.watch_id, out.model, out.input_hash, JSON.stringify(out), out.confidence, now).run();

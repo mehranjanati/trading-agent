@@ -23,7 +23,7 @@
 | R-EXP | total exposure ≤ cap | $5,000 | reject |
 | R-STALE | price age ≤ threshold | 5s | HOLD + refresh |
 | R-DUP | no live intent for same approval | strict | 409 |
-Limits live in versioned `strategy_configs`; changes need operator role + audit row.
+Limits live in versioned `strategy_configs`; changes need the **admin** role + audit row (RBAC matrix; SAFE-010 separation of duties).
 
 ## 8.3 Approval workflow (states)
 `requested → notified → granted|rejected → consumed|expired`. Grant creates token `{approval_id, watch_id, expires_at, nonce}`; consume sets `used_at` atomically (single flight wins, others 409).

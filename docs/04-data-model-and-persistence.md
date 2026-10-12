@@ -33,6 +33,8 @@ CREATE TABLE strategy_configs(version TEXT PRIMARY KEY, config_json TEXT NOT NUL
 ```
 Key relationships: watches 1—N transitions/signals/runs/intents; approvals 1—1 intents (single-use enforced by `used_at`); intents 1—1 orders by `client_order_id`.
 
+**Versioned payloads (E07-T01):** no schema change was needed — version stamps live inside existing columns. A `signals.payload_json` carries `_schema_version` (the registry contract that admitted it), and an `analysis_runs.output_json` carries `strategy_version` (the active `strategy_configs` version pinned at run start). Both are additive keys, so forward-only migrations stay untouched and old rows keep their original pin.
+
 ## 4.2 Retention & migrations
 - Ticks: never in D1. Events/audit ≥2y; positions snapshots 1y; health 90d. Migrations `migrations/NNNN_*.sql`, forward-only, `wrangler d1 migrations apply` per env; failed migration → forward fix, never edit applied files.
 

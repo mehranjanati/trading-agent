@@ -14,7 +14,7 @@
 - **Persistence:** RDB+AOF enabled; loss = replay from D1 snapshot + last-acked stream ID (business-safe).
 
 ## 3.3 Workers — owner: control plane + orchestration
-- **Routes (v1, auth, see §10):** `POST/GET /api/watches*`, `POST /api/signals:ingest`, `POST /api/analysis:runs`, `POST /api/approvals`, `POST /api/orders:intents`, `POST /api/kill-switch`, `GET /api/health*`, `GET /api/recovery/log`.
+- **Routes (v1, auth, see §10):** `POST/GET /api/watches*`, `POST /api/signals:ingest` (HMAC-authenticated webhook, E07-T01-S2b), `POST /api/strategy:activate` (operator/admin), `POST /api/analysis:runs`, `POST /api/approvals`, `POST /api/orders:intents`, `POST /api/kill-switch`, `GET /api/health*`, `GET /api/recovery/log`.
 - **Rules:** validate auth → validate schema → check idempotency-key → D1 batch (row+outbox) → relay → respond with IDs. Every mutation returns `trace_id`.
 - **Crons:** `*/10s` health evaluator, `*/15s` reconcile sweep, `*/60s` approval-expiry sweeper.
 
@@ -28,7 +28,8 @@
 Tables: watches, watch_transitions, signals, events, analysis_runs, approvals, order_intents, orders, positions, outbox, health_snapshots, recovery_log, strategy_configs. All writes via Workers batches; reads via indexed queries.
 
 ## 3.6 AI Analyst — owner: advisory rationale
-- **Input:** trigger + signals + regime + config version hash. **Output:** `{bias: LONG|SHORT|FLAT, confidence 0..1, reasons[], invalidation_refs[], model, input_hash}` stored in `analysis_runs`. No order fields. Low-confidence (<0.55 default) → auto-FLAT with reason.
+- **Input:** trigger + signals + regime + config version hash. **Output:** `{bias: LONG|SHORT|FLAT, confidence 0..1, reasons[], invalidation_refs[], model, input_hash, strategy_version}` stored in `analysis_runs`. No order fields. Low-confidence (<0.55 default) → auto-FLAT with reason.
+- **Version pinning (E07-T01-S2a):** `strategy_version` is the active `strategy_configs` version **at run start**, recorded in the run's `output_json`; later activations never rewrite old pins (pin-immutability). Ingested signals likewise carry the schema-registry version they were admitted under (`payload_json._schema_version`).
 
 ## 3.7 Risk Engine — owner: deterministic gates (see §08)
 Pure function `validate(intent, ctx) → PASS | REJECT(code, detail)`. Gates: R-KILL, R-APPROVAL, R-SYM, R-LEV, R-NOT, R-EXP, R-STALE, R-DUP. Unit-tested matrix, no network calls except clock.

@@ -15,6 +15,7 @@ export const ALLOW = {
   "POST /api/signals:ingest": ["trader", "operator", "admin"],
   "POST /api/analysis:runs": ["trader", "operator", "admin"],
   "POST /api/approvals": ["trader", "admin"],
+  "POST /api/strategy:activate": ["admin"],
   "POST /api/lease:handoff": ["operator", "admin"],
   "POST /api/kill-switch": ["operator", "admin"],
 };

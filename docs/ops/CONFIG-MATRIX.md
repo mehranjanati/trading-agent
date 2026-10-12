@@ -12,6 +12,8 @@ Binding rule: every deploy reads secrets from a manager, never from repo files.
 | `TOOBIT_WS_URL` | verify-required placeholder | official URL (E02-T01) | official URL | no | public data |
 | `TOOBIT_API_KEY` | testnet/paper | testnet | testnet until gate | **yes** | trade-only, no withdraw |
 | `TOOBIT_API_SECRET` | testnet/paper | testnet | testnet until gate | **yes** | rotation 90d (§12.5) |
+| `SIGNAL_HMAC_SECRET` | dev value | staging value | prod value | **yes** | single-secret form for the signal webhook (E07-T01-S2b); never in repo |
+| `SIGNAL_HMAC_SECRETS` | — | `{"<source>":"<secret>",…}` | per-source map | **yes** | keyed per source; overrides the single form when set |
 | D1 database | `trading_dev` | `trading_stg` | `trading_prod` | binding | per-env in wrangler |
 | Log level | `debug` | `info` | `warn` | no | JSON logs, trace evt IDs |
 

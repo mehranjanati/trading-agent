@@ -8,3 +8,20 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
       - run: make check
+  dashboard:
+    # E10-T01: the dashboard has its own toolchain, so it gets its own job —
+    # `make check` stays stdlib-only and runnable without an npm install.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm run check   # svelte-check, TypeScript strict
+        working-directory: dashboard
+      - run: npm test        # freshness/badge/degraded-UX unit tests
+        working-directory: dashboard
+      - run: npm run build   # adapter-cloudflare production build
+        working-directory: dashboard
+

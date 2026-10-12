@@ -12,7 +12,7 @@
 | E07 | Signal Ingestion & Strategy | P1 | 5 kinds + versioned config | Schema tests; version pinning; HMAC provenance | E07-T01 DONE (3) |
 | E08 | Risk Engine & Human Approval | P0 | 8 deterministic gates + single-use approvals | 100% reject coverage; race-safe consume | E08-T01 DONE, E08-T02 DONE (4) |
 | E09 | Order Execution & Reconciliation | P0 | Idempotent submit + reconcile (testnet) | Ack-loss drill; kill <5s; one order/ID | E09-T01 DONE (3) |
-| E10 | Dashboard & Audit Timeline | P1 | SvelteKit 11 views + freshness | Degraded-UX test; badge coverage | E10-T01 (3, Q-01 decided) |
+| E10 | Dashboard & Audit Timeline | P1 | SvelteKit 11 views + freshness | Degraded-UX test; badge coverage | E10-T01 DONE (3, Q-01 decided) |
 | E11 | Testing, Simulation & Paper Trading | P0 | Suites + 14d paper + gate report | Zero unapproved; signed report | E11-T01 (3) |
 | E12 | Deployment, Monitoring & Readiness | P1 | Envs, alerts, backups, drills | Rollback <5min; alert routing | E12-T01 (3) |
 | E13 | Go/WASM Strategy Runtime (PLAN ONLY) | P0/P1 | Versioned WASM strategies w/o rebuild | Contract frozen; compat matrix; MVP backlog | E13-T01 DONE, E13-T02..T06 (11) |

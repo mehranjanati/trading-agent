@@ -1201,7 +1201,7 @@
         "reviewer": "GLM-5.3-Flash"
       },
       "estimated_complexity": "L",
-      "status": "PROPOSED",
+      "status": "DONE",
       "blocking_decisions": [],
       "safety_tags": [
         "none"

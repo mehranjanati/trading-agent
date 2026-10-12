@@ -25,6 +25,14 @@
 | R-DUP | no live intent for same approval | strict | 409 |
 Limits live in versioned `strategy_configs`; changes need the **admin** role + audit row (RBAC matrix; SAFE-010 separation of duties).
 
+**Gate semantics (E08-T01, normative):**
+1. Gates run in the table order above and the **first failure wins** — a reject is deterministic and reproducible.
+2. **Every gate fails closed** (SAFE-001): a missing/unknown input — kill state, approval, symbol, price, open exposure, duplicate state — is a reject, never a pass. An unknown kill state is treated as engaged.
+3. Notional and exposure arithmetic is **exact decimal (string) math**, never floats — a boundary like `0.1 × 0.7 = 0.07` must pass exactly.
+4. Limits are the active `strategy_configs` version (E07-T01 pinning); every verdict echoes `limits_version` for audit, and a config missing any bound is a `DEGRADED` system fault — no invented defaults (SAFE-003).
+5. Gate carries: `R-LEV`/`R-NOT`/`R-EXP` include `limit` + `asked` (J3); `R-SYM` includes the permitted set; `R-STALE` includes `action: "HOLD"`.
+6. Rejections surface as `422 RISK_REJECT {risk_code}` (docs/10); the E09 submit path must call this validator — no other gate implementation is allowed.
+
 ## 8.3 Approval workflow (states)
 `requested → notified → granted|rejected → consumed|expired`. Grant creates token `{approval_id, watch_id, expires_at, nonce}`; consume sets `used_at` atomically (single flight wins, others 409).
 

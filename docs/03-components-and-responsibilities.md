@@ -32,7 +32,7 @@ Tables: watches, watch_transitions, signals, events, analysis_runs, approvals, o
 - **Version pinning (E07-T01-S2a):** `strategy_version` is the active `strategy_configs` version **at run start**, recorded in the run's `output_json`; later activations never rewrite old pins (pin-immutability). Ingested signals likewise carry the schema-registry version they were admitted under (`payload_json._schema_version`).
 
 ## 3.7 Risk Engine — owner: deterministic gates (see §08)
-Pure function `validate(intent, ctx) → PASS | REJECT(code, detail)`. Gates: R-KILL, R-APPROVAL, R-SYM, R-LEV, R-NOT, R-EXP, R-STALE, R-DUP. Unit-tested matrix, no network calls except clock.
+Pure function `validate(intent, ctx) → PASS | REJECT(code, detail)`. Gates: R-KILL, R-APPROVAL, R-SYM, R-LEV, R-NOT, R-EXP, R-STALE, R-DUP. Unit-tested matrix, no network calls except clock. Implemented in `workers/src/risk.mjs` (E08-T01): fixed gate order with first-failure-wins, fail-closed on unknown evidence, exact decimal arithmetic, and every verdict echoing the active `strategy_configs` limits version.
 
 ## 3.8 Execution — owner: submit + reconcile
 `submit(intent)` requires lease epoch + risk PASS + fresh approval; sends signed REST with `clientOrderId`; on timeout → `SUBMIT_UNKNOWN`; `reconcile()` polls to terminal; writes `orders` + `positions` + events.

@@ -1,0 +1,65 @@
+{
+  "task": "E11-T01",
+  "day": 1,
+  "at": "2026-10-12T19:12:33.136Z",
+  "checks": [
+    {
+      "name": "zero_unapproved_orders",
+      "ok": true,
+      "detail": {
+        "unapproved_count": 0,
+        "unapproved": []
+      }
+    },
+    {
+      "name": "approval_single_use",
+      "ok": true,
+      "detail": {
+        "reused": []
+      }
+    },
+    {
+      "name": "no_unresolved_submit_unknown",
+      "ok": true,
+      "detail": {
+        "lingering": []
+      }
+    },
+    {
+      "name": "terminal_coverage",
+      "ok": true,
+      "detail": {
+        "live": [],
+        "terminal_count": 1
+      }
+    },
+    {
+      "name": "paper_only",
+      "ok": true,
+      "detail": {
+        "suspect_vars": []
+      }
+    },
+    {
+      "name": "suites_green",
+      "ok": true,
+      "detail": {
+        "ref": "/tmp/suites.json"
+      }
+    }
+  ],
+  "ok": true,
+  "decision": "PASS — evidence complete; file for the human release gate",
+  "signed_by": null,
+  "kind": "nightly-paper-report",
+  "audit": {
+    "unapproved_count": 0,
+    "unapproved": []
+  },
+  "counts": {
+    "intents": 1,
+    "approvals": 1,
+    "incidents": 4
+  },
+  "clock": "the 14-day window is calendar time (docs/00 S-01); it starts when the deployed stack runs (E12)"
+}

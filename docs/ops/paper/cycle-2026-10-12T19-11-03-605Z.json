@@ -1,0 +1,170 @@
+{
+  "task": "E11-T01",
+  "drill": "paper-cycle",
+  "ok": false,
+  "at": "2026-10-12T19:11:03.605Z",
+  "workers": "http://127.0.0.1:8787",
+  "symbol": "BTCUSDT",
+  "qty": "1",
+  "leverage": 5,
+  "approved_by": "trader:mehran (operator session)",
+  "steps": [
+    {
+      "name": "lease_handoff",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "holder": "primary",
+        "epoch": 1,
+        "expires_ms": 1791832285323,
+        "reused": true
+      }
+    },
+    {
+      "name": "strategy_activated",
+      "ok": true,
+      "detail": {
+        "version": "v-paper-1791832263605"
+      }
+    },
+    {
+      "name": "watch_created",
+      "ok": true,
+      "detail": {
+        "watch_id": "w_mv5mnzak92tn1r"
+      }
+    },
+    {
+      "name": "paper_price_seeded",
+      "ok": true,
+      "detail": {
+        "symbol": "BTCUSDT",
+        "px": "100"
+      }
+    },
+    {
+      "name": "signal_ingested",
+      "ok": false,
+      "detail": {}
+    },
+    {
+      "name": "analysis_run",
+      "ok": true,
+      "detail": {
+        "id": "an_mv5mnzerb8yi5b",
+        "strategy_version": "v-paper-1791832263605"
+      }
+    },
+    {
+      "name": "human_approval",
+      "ok": true,
+      "detail": {
+        "approval_id": "ap_mv5mnzfdtj7178",
+        "approved_by": "trader:mehran (operator session)",
+        "expires_at": "2026-10-12T19:21:03.961Z"
+      }
+    },
+    {
+      "name": "submit",
+      "ok": true,
+      "detail": {
+        "intent_id": "int_mv5mnzisvn6pkj",
+        "order_status": "FILLED",
+        "client_order_id": "int_mv5mnzisvn6pkj"
+      }
+    },
+    {
+      "name": "zero_unapproved_orders",
+      "ok": true,
+      "detail": {
+        "unapproved_count": 0
+      }
+    },
+    {
+      "name": "intent_terminal",
+      "ok": true,
+      "detail": {
+        "live": 0,
+        "terminal": 1
+      }
+    },
+    {
+      "name": "position_snapshot",
+      "ok": true,
+      "detail": {
+        "symbol": "BTCUSDT",
+        "size": "1",
+        "entry_px": "100",
+        "leverage": 5,
+        "updated_at": "2026-10-12T19:11:04.006Z"
+      }
+    }
+  ],
+  "audit": {
+    "unapproved_count": 0,
+    "rows": [
+      {
+        "intent_id": "int_mv5mnzisvn6pkj",
+        "client_order_id": "int_mv5mnzisvn6pkj",
+        "approval_id": "ap_mv5mnzfdtj7178",
+        "status": "FILLED",
+        "verdict": "ok"
+      }
+    ]
+  },
+  "gate_report": {
+    "task": "E11-T01",
+    "day": 0,
+    "at": "2026-10-12T19:11:03.605Z",
+    "checks": [
+      {
+        "name": "zero_unapproved_orders",
+        "ok": true,
+        "detail": {
+          "unapproved_count": 0,
+          "unapproved": []
+        }
+      },
+      {
+        "name": "approval_single_use",
+        "ok": true,
+        "detail": {
+          "reused": []
+        }
+      },
+      {
+        "name": "no_unresolved_submit_unknown",
+        "ok": true,
+        "detail": {
+          "lingering": []
+        }
+      },
+      {
+        "name": "terminal_coverage",
+        "ok": true,
+        "detail": {
+          "live": [],
+          "terminal_count": 1
+        }
+      },
+      {
+        "name": "paper_only",
+        "ok": true,
+        "detail": {
+          "suspect_vars": []
+        }
+      },
+      {
+        "name": "suites_green",
+        "ok": true,
+        "detail": {
+          "note": "see make check / CI dashboard job"
+        }
+      }
+    ],
+    "ok": true,
+    "decision": "PASS — evidence complete; file for the human release gate",
+    "signed_by": null
+  },
+  "note": "one cycle of the 14-day paper run; the calendar clock starts with the deployed stack (E12)"
+}

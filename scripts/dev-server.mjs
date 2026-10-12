@@ -102,7 +102,15 @@ async function main() {
   migrate(flags.db, log);
   if (flags.seed) seed(flags.db, log);
 
-  const env = { DB: createD1(flags.db, flags.verbose ? log : () => {}), ENV: "dev", HUMAN_APPROVAL_REQUIRED: "true" };
+  const env = {
+    DB: createD1(flags.db, flags.verbose ? log : () => {}),
+    ENV: "dev",
+    HUMAN_APPROVAL_REQUIRED: "true",
+    // E07 webhook secrets come from the operator's environment (never the repo):
+    // without one, the HMAC signal route correctly rejects everything.
+    ...(process.env.SIGNAL_HMAC_SECRET ? { SIGNAL_HMAC_SECRET: process.env.SIGNAL_HMAC_SECRET } : {}),
+    ...(process.env.SIGNAL_HMAC_SECRETS ? { SIGNAL_HMAC_SECRETS: process.env.SIGNAL_HMAC_SECRETS } : {}),
+  };
   const worker = (await import(join(ROOT, "workers/src/index.mjs"))).default;
   const { runCron } = await import(join(ROOT, "workers/src/index.mjs"));
 

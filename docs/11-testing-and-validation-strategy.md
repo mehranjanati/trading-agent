@@ -10,6 +10,8 @@
 - **Recovery (E06-T02):** kill-Go, kill-Redis, kill-both, D1-outage, ack-loss — each asserts zero duplicate intents + audit rows + correct badges.
 - **Paper-trading (E11-T01):** ≥14 days on testnet with approvals; nightly gate report (unapproved count must be 0).
 
+**Machinery implemented (E11-T01, `scripts/paper-gate.mjs` + `paper-cycle.mjs` + `nightly-report.mjs`):** the audit and the report are pure, unit-tested functions — intents↔approvals traceability (`unapproved_count` must be 0), approval single-use, lingering `SUBMIT_UNKNOWN` (>5min), terminal coverage, and the `LIVE_*` env namespace (SAFE-007). One full J1 cycle has been proven end-to-end with `unapproved_count = 0` (evidence in `docs/ops/paper/`), and a day-1 report where every check is green but `signed_by` is null. The 14 consecutive days are calendar time: the clock starts when the deployed stack runs continuously (E12), so E11-T01 remains IN_PROGRESS and the human release gate closed until then.
+
 ## 11.2 Fixtures & doubles
 `schemas/*.schema.json` for events; Toobit WS/REST fakes in `workers/test/` + `go-watcher/testdata/`; chaos script `scripts/chaos.sh` (E06).
 

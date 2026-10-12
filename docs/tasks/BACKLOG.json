@@ -1268,8 +1268,10 @@
         "reviewer": "human"
       },
       "estimated_complexity": "XL",
-      "status": "PROPOSED",
-      "blocking_decisions": [],
+      "status": "IN_PROGRESS",
+      "blocking_decisions": [
+        "14-day paper clock starts at E12 deploy (dependency E12-T01)"
+      ],
       "safety_tags": [
         "trading-safety"
       ],

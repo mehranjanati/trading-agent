@@ -8,7 +8,12 @@ export const Codes = {
 export function err(code, message, opts = {}) {
   const status = Codes[code] ?? 500;
   return Response.json(
-    { code, message, trace_id: opts.trace || randomUUID(), retryable: opts.retryable ?? (status === 429 || status === 503) },
+    {
+      code, message,
+      trace_id: opts.trace || randomUUID(),
+      retryable: opts.retryable ?? (status === 429 || status === 503),
+      ...(opts.extra ?? {}),
+    },
     { status },
   );
 }

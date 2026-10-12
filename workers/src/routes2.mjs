@@ -1,10 +1,20 @@
 // routes2.mjs — E05-T01-S2: signal / analysis / approval routes.
-import { ok } from "./errors.mjs";
-import { signalBody, approvalBody } from "./validate.mjs";
+import { ok, err } from "./errors.mjs";
+import { signalBody, approvalBody, intentBody } from "./validate.mjs";
 import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
 import { uid, roleOf, guard, readBody, writeErr, recordIncident } from "./_shared.mjs";
 import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed } from "./strategies.mjs";
 import { decideApproval as decideApprovalRecord, ttlMsFrom } from "./approvals.mjs";
+import { limitsFrom } from "./risk.mjs";
+import { submitIntent as runSubmit } from "./execution.mjs";
+import { engageKill, releaseKill, readKill } from "./kill.mjs";
+import { createPaperExchange } from "./exchange.mjs";
+import { readLease } from "./health-route.mjs";
+
+// D-06: Toobit has no testnet, so the wired venue is the paper simulator. Tests
+// and drills inject `env.EXCHANGE` to drive ack-loss / partial-fill scenarios;
+// the signed-REST client swaps in behind the same interface.
+const defaultExchange = createPaperExchange({ fill: true });
 
 /** Contract validation + version tagging. Shared by the webhook path so there is
  *  exactly one place that decides whether a payload is admissible. */
@@ -74,6 +84,46 @@ export function miscRoutes() {
       const b = await readBody(req);
       if (!b.version || typeof b.version !== "string") { const e = new Error("version required"); e.code = "VALIDATION"; throw e; }
       return ok(await activateVersion(env, { version: b.version, config: b.config, actor: roleOf(req) }), 201);
+    }),
+    /** E09-T01: the ONE order path (D-08). Kill → fence → risk → consume →
+     *  intent → submit. The client supplies only {approval_id, side, qty,
+     *  leverage}: identity (client_order_id) is derived here and the price comes
+     *  from our own market data, never from the caller. */
+    submitIntent: safe(async (req, env) => {
+      const g = guard("POST /api/orders:intents", req);
+      if (g) return g;
+      const b = await readBody(req);
+      intentBody(b);
+      const active = await activeVersion(env);
+      // A config that cannot supply every bound throws DEGRADED (fail closed).
+      const limits = limitsFrom(active ? JSON.parse(active.config_json) : null, active?.version);
+      const out = await runSubmit(env, {
+        approval_id: b.approval_id, side: b.side, qty: b.qty, leverage: b.leverage,
+        exchange: env.EXCHANGE ?? defaultExchange,
+        lease: await readLease(env).catch(() => null),
+        kill: await (async () => { try { return await readKill(env); } catch { return { engaged: "unknown", read_error: true }; } })(),
+        limits, limits_version: active?.version ?? null,
+        actor: roleOf(req),
+      });
+      if (!out.ok) {
+        return err(out.code, out.reason ?? "rejected", {
+          extra: out.risk_code ? { risk_code: out.risk_code, detail: out.detail ?? null } : {},
+        });
+      }
+      return ok(out, out.status);
+    }),
+    /** E09-T01: kill switch (SAFE-006). Engage is operator+; release needs admin
+     *  AND an explicit confirm (two-person rule). The flag is persisted, so a
+     *  restart cannot silently clear a halt. */
+    killSwitch: safe(async (req, env) => {
+      const g = guard("POST /api/kill-switch", req);
+      if (g) return g;
+      const b = await readBody(req);
+      if (typeof b.engaged !== "boolean") { const e = new Error("engaged boolean required"); e.code = "VALIDATION"; throw e; }
+      const actor = roleOf(req);
+      if (b.engaged) return ok(await engageKill(env, { actor, reason: b.reason ?? "unspecified" }), 201);
+      if (actor !== "admin") return err("FORBIDDEN", "kill release requires admin", {});
+      return ok(await releaseKill(env, { actor, reason: b.reason ?? "unspecified", confirm: b.confirm === true }), 200);
     }),
     runAnalysis: safe(async (req, env) => {
       const b = await readBody(req);

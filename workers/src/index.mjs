@@ -33,6 +33,8 @@ export default {
       if (req.method === "POST" && p === "/api/watches") return watches.create(req, env);
       if (req.method === "POST" && p === "/api/signals:ingest") return misc.ingestSignalWebhook(req, env);
       if (req.method === "POST" && p === "/api/strategy:activate") return misc.activateStrategy(req, env);
+      if (req.method === "POST" && p === "/api/orders:intents") return misc.submitIntent(req, env);
+      if (req.method === "POST" && p === "/api/kill-switch") return misc.killSwitch(req, env);
       if (req.method === "POST" && p === "/api/analysis:runs") return misc.runAnalysis(req, env);
       if (req.method === "POST" && p === "/api/approvals") return misc.decideApproval(req, env);
       return err("NOT_IMPLEMENTED", `${req.method} ${p} lands in a later task`, {});

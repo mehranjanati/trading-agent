@@ -41,3 +41,5 @@ Timeout/no-response → `SUBMIT_UNKNOWN` → reconcile by `client_order_id` → 
 
 ## 8.5 Kill switch & exposure caps
 `POST /api/kill-switch {engaged, reason}` (operator+). Engaged persists in D1 + DO mirror; all submit paths check first. Release needs second human confirm + reason.
+
+**Implemented (E09-T01, `workers/src/kill.mjs`):** the flag is a fixed-id D1 row read fresh on every submit — a restart cannot silently clear a halt, and the halt is a single indexed read (the <5s requirement is asserted in tests, not assumed). Engage writes the row + `kill.engaged_v1` event + a `kill.engaged` incident with actor and reason; release requires **admin** AND an explicit `confirm: true` (two-person rule enforced in code, RBAC matrix) and writes `kill.released_v1` + a `kill.released` incident. A read failure is surfaced to the gate as `engaged: "unknown"`, which risk.mjs treats as engaged (fail closed).

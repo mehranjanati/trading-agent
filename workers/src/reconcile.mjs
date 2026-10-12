@@ -16,6 +16,9 @@ import { eventAppendSql } from "./timeline.mjs";
 
 export const NON_TERMINAL = ["SUBMITTED", "SUBMIT_UNKNOWN", "ACKED", "PARTIAL"];
 export const TERMINAL = ["FILLED", "REJECTED", "CANCELLED", "EXPIRED"];
+/** E09-T01: states the venue can report that are progress but NOT the end —
+ *  persisted, yet still counted as live by the §6.3 rejoin gate. */
+export const INTERMEDIATE = ["ACKED", "PARTIAL"];
 export const SWEEP_MS = 15_000; // §6.5: "swept every 15s + on every recovery"
 export const SWEEP_ID = "sweep_reconcile"; // fixed id → the cursor never grows the table
 export const RECONCILE_INCIDENT = "reconcile.complete"; // chaos.mjs asserts this name
@@ -147,11 +150,21 @@ export async function sweep(env, opts = {}) {
 
   const statements = [];
   const resolvedIntents = [];
+  const progressedIntents = [];
   for (const row of intents) {
     const outcome = await resolve.intent(row);
-    if (!outcome || !TERMINAL.includes(outcome.status)) continue; // unknown → keep polling (§6.4)
-    statements.push(...resolutionStatements(row, outcome, nowIso));
-    resolvedIntents.push(row.id);
+    if (!outcome) continue; // unknown → keep polling (§6.4)
+    if (TERMINAL.includes(outcome.status)) {
+      statements.push(...resolutionStatements(row, outcome, nowIso));
+      resolvedIntents.push(row.id);
+    } else if (INTERMEDIATE.includes(outcome.status)) {
+      // E09-T01: the venue gave us progress (ACKED / PARTIAL). Persist it — the row
+      // and the order view must reflect reality — but the intent is still LIVE, so
+      // it must NOT count as reconciled. Counting it would clear the §6.3 gate and
+      // declare an all-clear while an order is still working.
+      statements.push(...resolutionStatements(row, outcome, nowIso));
+      progressedIntents.push(row.id);
+    }
   }
   const resolvedOrders = [];
   for (const row of orders) {
@@ -181,6 +194,7 @@ export async function sweep(env, opts = {}) {
     remaining,
     intents_remaining: intentsRemaining,
     orders_remaining: ordersRemaining,
+    progressed: progressedIntents.length,
     certified: certify,
     complete_reported: completeReported,
   };

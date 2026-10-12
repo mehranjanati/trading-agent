@@ -9,8 +9,9 @@ Base `/api/v1` (alias `/api` → v1). Auth: `Authorization: Bearer <jwt>`; mutat
 - `POST /api/signals:ingest {watch_id?, kind, payload, source}` → 201 `{id}`. Kinds: DIVERGENCE_TRIPLE|ORDER_BLOCK|OB_OS|MTF|REGIME.
 - `POST /api/analysis:runs {watch_id}` → 201 `{id, bias, confidence}` (advisory).
 - `POST /api/approvals {watch_id, analysis_id, decision, reason}` → 201 `{id, decision, expires_at, state}` + `approval.granted_v1|rejected_v1` audit event. Consume is invoked by the submit path (E09), surfacing `410 APPROVAL_EXPIRED` / `409 CONFLICT`; the expiry sweeper runs on a 60s cadence.
-- `POST /api/orders:intents {approval_id, side, qty, leverage}` → 201 `{intent_id, client_order_id}` or 422 `{risk_code}`.
-- `POST /api/kill-switch {engaged, reason}` (operator+) · `GET /api/health` · `GET /api/recovery/log`.
+- `POST /api/orders:intents {approval_id, side, qty, leverage}` → 201 `{intent_id, client_order_id, order_status, exchange_order_id}` or `422 {risk_code, detail}`; a consumed approval → `409 CONFLICT`, an expired one → `410 APPROVAL_EXPIRED`, a fenced caller → `503 DEGRADED`. Identity (`client_order_id`) is derived server-side; the price comes from our own market data, never the caller.
+- `POST /api/kill-switch {engaged, reason, confirm?}` → 201 engage (operator+), 200 release (admin + `confirm: true`, else 400/403).
+- `GET /api/health` · `GET /api/recovery/log` (unchanged, E06-T01).
 
 ## 10.3 Event payload examples
 ```json

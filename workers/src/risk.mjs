@@ -32,6 +32,14 @@ export function addDec(a, b) { const [x, y, s] = align(a, b); return fromUnscale
 export function mulDec(a, b) { return fromUnscaled(unscaled(a) * unscaled(b), scaleOf(a) + scaleOf(b)); }
 // normalize a decimal string (trim leading zeros / trailing fraction zeros)
 export function normDec(s) { const [i, f = ""] = s.split("."); const fi = f.replace(/0+$/, ""); return fi ? `${BigInt(i)}.${fi}` : `${BigInt(i)}`; }
+/** Exact division, truncated (never rounded up — a position is never overstated).
+ *  `scale` bounds the fraction digits. Division by zero throws: callers must
+ *  treat that as a system fault, not a zero. */
+export function divDec(a, b, scale = 8) {
+  const [x, y] = align(a, b);
+  if (y === 0n) { const e = new Error("decimal division by zero"); e.code = "DEGRADED"; throw e; }
+  return fromUnscaled((x * 10n ** BigInt(scale)) / y, scale);
+}
 
 const reject = (code, reason, detail = {}) => ({ ok: false, code, reason, detail, risk_code: code });
 const pass = (limits_version) => ({ ok: true, code: "PASS", limits_version });

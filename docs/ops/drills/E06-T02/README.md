@@ -30,6 +30,23 @@ node --test workers/src/*.test.mjs
 The kill drills (S2) run against the local stack and are recorded in the same
 directory by `chaos.mjs <go|redis|both|rejoin> --execute --target local --db <local D1>`.
 
+## 1b. What is proven here (S2 kill drills, local 2026-10-12)
+
+| Drill | Evidence | Result | Recovery | Path |
+|---|---|---|---|---|
+| kill-Go | `go-2026-10-12T09-04-32-985Z.json` | PASS | 60s | PRIMARY → DEGRADED → PRIMARY |
+| kill-Redis | `redis-2026-10-12T09-19-50-812Z.json` | PASS | 66s | PRIMARY → DEGRADED → PRIMARY |
+| kill-both + rejoin | `both-2026-10-12T09-23-13-071Z.json` | PASS | 66s | PRIMARY → DEGRADED → FALLBACK → DEGRADED → PRIMARY |
+
+Each run asserts: degradation observed; zero duplicate intents per approval
+(acceptance 1); all seven health components snapshotted; the ACTIVE set equals
+D1 truth in both directions; the `reconcile.complete` incident precedes the
+return-to-PRIMARY row (acceptance 2); the lease handoff is recorded with a
+monotonic epoch; no `rate_limit_backoff`; and a paper approval is rejected while
+degraded. Run with a **fresh seeded DB** per drill — the sweep certifies once
+per episode, so a reused DB cannot emit the drill's own `reconcile.complete`.
+Central register and re-run recipe: [../../DRILLS.md](../../DRILLS.md).
+
 ## 2. Deferrals (recorded, not silent)
 
 1. **Live 429-free run → Hetzner at E12.** This machine has no egress to
@@ -65,3 +82,16 @@ directory by `chaos.mjs <go|redis|both|rejoin> --execute --target local --db <lo
 - The poller's in-flight marker (`poll_quotes.inflight`) doubles as §6.3 condition 3. A
   round that dies mid-flight leaves it at 1, so recovery stays blocked until it is
   resolved — deliberately conservative, and revisited with the DO alarm at E12.
+- **`CLIENT UNPAUSE` cannot traverse a paused socket.** During `CLIENT PAUSE` the
+  harness's own `UNPAUSE` times out (its connection predates the pause), so the pause's
+  `--pause-ms` auto-expiry is what restores Redis; pin it to land within `--recover-ms`.
+  A fresh connection *can* unpause immediately, so this is a harness-socket artefact, not
+  a defect in the system under test.
+- **One fresh DB per drill.** The sweep certifies `reconcile.complete` once per episode
+  and only re-certifies after a sweep sees a non-empty inventory; on a reused DB the
+  second drill cannot emit its own certify and `rejoin_order` would pair against the
+  previous episode's incident. Each drill therefore runs against a freshly seeded DB.
+- **The Go pattern must exclude the drill's own argv.** `go run` executes from the
+  build cache (`…/Caches/go-build/…/go-watcher`), so `exe/go-watcher` never matches and a
+  bare `go-watcher` self-matches (the drill `SIGSTOP`s itself). The `[g]o-watcher`
+  character-class form matches only the binary — recorded in `docs/ops/DRILLS.md`.

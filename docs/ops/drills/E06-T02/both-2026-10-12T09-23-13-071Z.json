@@ -1,0 +1,154 @@
+{
+  "task": "E06-T02",
+  "drill": "both",
+  "phase": "all",
+  "ok": true,
+  "target": "local",
+  "at": "2026-10-12T09:23:13.071Z",
+  "baselines": {
+    "mode": "PRIMARY",
+    "reasons": [],
+    "redis_active": "3",
+    "intents": 0,
+    "window_start": "2026-10-12T09:21:43.396Z"
+  },
+  "checks": [
+    {
+      "name": "degradation_observed",
+      "ok": true,
+      "detail": {
+        "mode": "DEGRADED"
+      }
+    },
+    {
+      "name": "orders_blocked",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "status": 400,
+        "body": {
+          "code": "VALIDATION",
+          "message": "watch_id required",
+          "trace_id": "5b4595ab-8ab7-4dd8-b30a-15a17eb8e56f",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "name": "lease_handoff",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "status": 200,
+        "body": {
+          "ok": true,
+          "holder": "primary",
+          "epoch": 1,
+          "expires_ms": 1791796952002,
+          "reused": true
+        }
+      }
+    },
+    {
+      "name": "recovery_observed",
+      "ok": true,
+      "detail": {
+        "mode": "PRIMARY",
+        "elapsed_s": 66,
+        "budget_s": 150
+      }
+    },
+    {
+      "name": "mode_timeline",
+      "ok": true,
+      "detail": {
+        "sequence": [
+          "PRIMARY",
+          "DEGRADED",
+          "FALLBACK",
+          "DEGRADED",
+          "PRIMARY"
+        ]
+      }
+    },
+    {
+      "name": "rows_complete",
+      "ok": true,
+      "detail": {
+        "components": [
+          "d1",
+          "fallback_poll",
+          "go",
+          "hb_go",
+          "healthy_since",
+          "kill_switch",
+          "lease",
+          "lease_authority",
+          "mode",
+          "prices",
+          "reconcile",
+          "redis"
+        ],
+        "missing": []
+      }
+    },
+    {
+      "name": "zero_dup_intents",
+      "ok": true,
+      "detail": {
+        "intents": 0,
+        "duplicates": []
+      }
+    },
+    {
+      "name": "rejoin_order",
+      "ok": true,
+      "detail": {
+        "reconcile.complete": "2026-10-12T09:22:12.034Z",
+        "primary_at": "2026-10-12T09:23:12.118Z"
+      }
+    },
+    {
+      "name": "handoff_recorded",
+      "ok": true,
+      "detail": {
+        "action": "epoch=1 holder=primary",
+        "at": "2026-10-12T09:22:06.630Z"
+      }
+    },
+    {
+      "name": "no_backoff_alert",
+      "ok": true,
+      "detail": {
+        "backoffs": 0
+      }
+    },
+    {
+      "name": "episode",
+      "ok": true,
+      "detail": {
+        "sequence": [
+          "PRIMARY",
+          "DEGRADED",
+          "FALLBACK",
+          "DEGRADED",
+          "PRIMARY"
+        ],
+        "rejoin": {
+          "reconcile.complete": "2026-10-12T09:22:12.034Z",
+          "primary_at": "2026-10-12T09:23:12.118Z"
+        }
+      }
+    },
+    {
+      "name": "watch_set_equal",
+      "ok": true,
+      "detail": {
+        "redis": 3,
+        "d1": 3,
+        "onlyRedis": [],
+        "onlyD1": []
+      }
+    }
+  ]
+}

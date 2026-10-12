@@ -4,6 +4,7 @@ import { signalBody, approvalBody } from "./validate.mjs";
 import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
 import { uid, roleOf, guard, readBody, writeErr, recordIncident } from "./_shared.mjs";
 import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed } from "./strategies.mjs";
+import { decideApproval as decideApprovalRecord, ttlMsFrom } from "./approvals.mjs";
 
 /** Contract validation + version tagging. Shared by the webhook path so there is
  *  exactly one place that decides whether a payload is admissible. */
@@ -94,13 +95,14 @@ export function miscRoutes() {
       if (g) return g;
       const b = await readBody(req);
       approvalBody(b);
-      const now = new Date().toISOString();
-      const id = uid("ap");
-      const exp = new Date(Date.now() + 600_000).toISOString();
-      await env.DB.prepare(
-        "INSERT INTO approvals(id,watch_id,analysis_id,decision,reason,approver,single_use,expires_at,at) VALUES(?,?,?,?,?,?,1,?,?)",
-      ).bind(id, b.watch_id, b.analysis_id, b.decision, b.reason ?? null, roleOf(req), exp, now).run();
-      return ok({ id, decision: b.decision, expires_at: exp }, 201);
+      // TTL from the ACTIVE strategy version (E07 pinning); 10m default (Q-05).
+      const active = await activeVersion(env);
+      const ttlMs = ttlMsFrom(active ? JSON.parse(active.config_json) : null);
+      const out = await decideApprovalRecord(env, {
+        id: uid("ap"), watch_id: b.watch_id, analysis_id: b.analysis_id,
+        decision: b.decision, reason: b.reason, approver: roleOf(req), ttlMs,
+      });
+      return ok(out, 201);
     }),
   };
 }

@@ -20,7 +20,7 @@
 - **Q-02** Fiber vs net/http for Go ops API? Owner: implementer · Close: E02 start · Options: Fiber (familiar) / stdlib (fewer deps). Lean stdlib unless benchmarked need.
 - **Q-03** Symbol universe + per-symbol weight? Owner: trader · Close: E02-T01 · Needed for fallback math + allowlist (R-SYM).
 - **Q-04** Stale thresholds per symbol? Owner: trader · Close: E03 · Proposal: majors 5s, alts 10s.
-- **Q-05** Approval expiry default? Owner: trader · Close: E08 · Proposal: 10min.
+- **Q-05 CLOSED (E08-T02, 2026-10-12)** — approval expiry default 10m, sourced from the active `strategy_configs.approval_ttl_s` (seed 600); expiring approvals are swept by a 60s cron with idempotent `approval.expired_v1` audit events.
 - **Q-06** Kill-switch + release actors? Owner: human · Close: E08 · Proposal: operator engages, second human releases.
 - **Q-07 CLOSED (E07-T01, 2026-10-12)** — External signal auth = **HMAC-SHA256 webhook** (`X-Signal-Source/-Timestamp/-Nonce/-Signature`), constant-time compare, nonce replay guard, 30s clock-skew reject (docs/07 §7.4). Provenance is an authenticated source identity + a config-driven per-kind allowlist; it proves source identity only and never strategy validity (E08 R-gates decide). Secrets via `SIGNAL_HMAC_SECRET`/`SIGNAL_HMAC_SECRETS`.
 - **Q-08** Hetzner sizing/region/backups? Owner: operator · Close: E12 · Proposal: FSN1, daily snapshots.

@@ -10,6 +10,7 @@ import { watchRoutes } from "./routes.mjs";
 import { miscRoutes } from "./routes2.mjs";
 import { healthRoutes, runTick, lastModeRow, readLease, renewLease } from "./health-route.mjs";
 import { sweep, readCursor, shouldSweep } from "./reconcile.mjs";
+import { sweepApprovals, readCursor as readApprovalCursor, shouldSweep as shouldSweepApprovals } from "./approvals.mjs";
 import { HOLDERS, holdsAuthority } from "./lease.mjs";
 import { tick as pollOnce, pollStatus } from "./fallback-poll.mjs";
 
@@ -105,7 +106,19 @@ export async function runCron(env, opts = {}) {
   } catch (e) {
     poll = { drained: false, round: "error", error: e.message }; // unknown → not drained
   }
-  return { tick: tickResult, rejoin, sweep: swept, sweep_error: sweepError, poll };
+
+  // §3.3 approval-expiry sweeper on its own 60s cadence (same 10s cron, gated).
+  // Idempotent: the UNIQUE approval.expired_v1 event fires once per approval.
+  let approvalsSweep = null;
+  try {
+    const acursor = await readApprovalCursor(env);
+    if (shouldSweepApprovals(acursor, nowMs)) {
+      approvalsSweep = await sweepApprovals(env, { nowMs, actor: opts.actor ?? "approval-sweeper" });
+    }
+  } catch (e) {
+    approvalsSweep = { error: e.message };
+  }
+  return { tick: tickResult, rejoin, sweep: swept, sweep_error: sweepError, poll, approvals_sweep: approvalsSweep };
 }
 
 

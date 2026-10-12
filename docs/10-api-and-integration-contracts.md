@@ -8,7 +8,7 @@ Base `/api/v1` (alias `/api` → v1). Auth: `Authorization: Bearer <jwt>`; mutat
 - `GET /api/watches?status=ACTIVE` · `GET /api/watches/active-snapshot` (Go boot; full ACTIVE set + versions).
 - `POST /api/signals:ingest {watch_id?, kind, payload, source}` → 201 `{id}`. Kinds: DIVERGENCE_TRIPLE|ORDER_BLOCK|OB_OS|MTF|REGIME.
 - `POST /api/analysis:runs {watch_id}` → 201 `{id, bias, confidence}` (advisory).
-- `POST /api/approvals {watch_id, analysis_id, decision, reason}` → grant token or reject row.
+- `POST /api/approvals {watch_id, analysis_id, decision, reason}` → 201 `{id, decision, expires_at, state}` + `approval.granted_v1|rejected_v1` audit event. Consume is invoked by the submit path (E09), surfacing `410 APPROVAL_EXPIRED` / `409 CONFLICT`; the expiry sweeper runs on a 60s cadence.
 - `POST /api/orders:intents {approval_id, side, qty, leverage}` → 201 `{intent_id, client_order_id}` or 422 `{risk_code}`.
 - `POST /api/kill-switch {engaged, reason}` (operator+) · `GET /api/health` · `GET /api/recovery/log`.
 

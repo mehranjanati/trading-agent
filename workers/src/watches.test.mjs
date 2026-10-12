@@ -50,7 +50,7 @@ describe("E04-T02 watch repo + audit", () => {
       `INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,created_at,updated_at) VALUES('w3','SOLUSDT','LONG','{}','{}','ACTIVE',1,'t','t0','t0');`,
       transitionSql("w3", "ACTIVE", "TRIGGERED", 1, { tid: "tr3", reason: "cross", actor: "go", at: "t1" }),
       eventAppendSql({ id: "evt_3", type: "watch.triggered_v1", entity_id: "w3", payload_json: "{}", dedupe_key: "watch.triggered_v1:w3:1", at: "t1" }),
-      signalInsertSql({ id: "sig_1", watch_id: "w3", kind: "MTF", payload_json: "{}", source: "ext", at: "t0" }),
+      signalInsertSql({ id: "sig_1", watch_id: "w3", kind: "MTF", payload_json: "{\"symbol\":\"BTCUSDT\",\"timeframes\":[{\"tf\":\"1h\",\"bias\":\"LONG\"},{\"tf\":\"4h\",\"bias\":\"FLAT\"}],\"agreement\":\"LONG\"}", source: "ext", at: "t0" }),
       timelineSql("w3"),
     ].join("\n");
     const out = run(sql);

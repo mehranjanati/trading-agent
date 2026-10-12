@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "signal.mtf.v1",
+  "type": "object",
+  "required": ["symbol", "timeframes", "agreement"],
+  "additionalProperties": false,
+  "properties": {
+    "symbol": { "type": "string", "pattern": "^[A-Z]{2,12}USDT$" },
+    "timeframes": {
+      "type": "array", "minItems": 2, "maxItems": 4,
+      "items": {
+        "type": "object", "required": ["tf", "bias"],
+        "additionalProperties": false,
+        "properties": {
+          "tf": { "type": "string", "minLength": 1 },
+          "bias": { "enum": ["LONG", "SHORT", "FLAT"] }
+        }
+      }
+    },
+    "agreement": { "enum": ["LONG", "SHORT", "MIXED"] }
+  }
+}

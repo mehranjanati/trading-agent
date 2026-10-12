@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "signal.ob_os.v1",
+  "type": "object",
+  "required": ["symbol", "metric", "value", "threshold"],
+  "additionalProperties": false,
+  "properties": {
+    "symbol": { "type": "string", "pattern": "^[A-Z]{2,12}USDT$" },
+    "metric": { "enum": ["RSI_14", "STOCH_14", "MFI_14"] },
+    "value": { "type": "number", "minimum": 0, "maximum": 100 },
+    "threshold": { "type": "number", "minimum": 0, "maximum": 100 },
+    "timeframe": { "type": "string", "minLength": 1 }
+  }
+}

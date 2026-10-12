@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "signal.divergence_triple.v1",
+  "type": "object",
+  "required": ["symbol", "direction", "legs", "at"],
+  "additionalProperties": false,
+  "properties": {
+    "symbol": { "type": "string", "pattern": "^[A-Z]{2,12}USDT$" },
+    "direction": { "enum": ["LONG", "SHORT"] },
+    "legs": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {
+        "type": "object", "required": ["anchor", "price"],
+        "additionalProperties": false,
+        "properties": {
+          "anchor": { "type": "string", "minLength": 1 },
+          "price": { "type": "string", "pattern": "^\\d+(\\.\\d+)?$" }
+        }
+      }
+    },
+    "at": { "type": "string", "minLength": 1 }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "registry": "signal",
+  "schema_version": "1",
+  "kinds": {
+    "DIVERGENCE_TRIPLE": "divergence_triple.v1.json",
+    "ORDER_BLOCK": "order_block.v1.json",
+    "OB_OS": "ob_os.v1.json",
+    "MTF": "mtf.v1.json",
+    "REGIME": "regime.v1.json"
+  }
+}

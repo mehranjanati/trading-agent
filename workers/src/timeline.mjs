@@ -1,11 +1,15 @@
 // timeline.mjs — E04-T02-S2: append-only events/signals + per-entity timeline query.
 // S2 acceptance: every stored trigger yields transition + event rows; illegal edges 409.
 import { guardTransition } from "./watches.mjs";
+import { validateSignal } from "./signals.mjs";
 export const SIGNAL_KINDS = ["DIVERGENCE_TRIPLE", "ORDER_BLOCK", "OB_OS", "MTF", "REGIME"];
 export function signalInsertSql(s) {
   if (!SIGNAL_KINDS.includes(s.kind)) {
     const e = new Error(`unknown signal kind ${s.kind}`); e.code = 400; throw e;
   }
+  // E07-T01-S1: the SQL seeder shares the strict per-kind contract — a bad
+  // payload can never sneak past the route through a raw insert.
+  validateSignal(s.kind, JSON.parse(s.payload_json ?? "null"));
   return `INSERT INTO signals(id,watch_id,kind,payload_json,source,at) VALUES('${s.id}','${s.watch_id}','${s.kind}','${s.payload_json}','${s.source}','${s.at}');`;
 }
 export function eventAppendSql(e) {

@@ -910,9 +910,9 @@
       "id": "E07-T01",
       "epic_id": "E07",
       "title": "Signals (5 kinds) + strategy versions",
-      "objective": "Versioned inputs linked to watches.",
-      "scope": "Per-kind schemas, ingest, version activation, HMAC webhook.",
-      "out_of_scope": "No auto-trade.",
+      "objective": "Versioned inputs linked to watches. Provenance is authenticated (HMAC), never a self-asserted JSON field.",
+      "scope": "Per-kind payload schemas (registry v1), ingest validation incl. schema_version recording, version activation + run pinning, HMAC webhook with per-kind allowlist (extensible).",
+      "out_of_scope": "No auto-trade. Provenance control proves source identity only — it never proves strategy validity or signal correctness (R-gates decide in E08).",
       "priority": "P1",
       "risk_level": "medium",
       "dependencies": [
@@ -923,17 +923,21 @@
         "d1"
       ],
       "implementation_steps": [
-        "Schemas",
-        "Ingest+versions",
-        "Webhook auth"
+        "Signal schema registry v1 + per-kind validators w/ schema_version (S1)",
+        "Strategy version activation + analysis-run pinning (S2a)",
+        "HMAC webhook verify + per-kind source allowlist, configurable (S2b)"
       ],
       "acceptance_criteria": [
-        "Given v2 active When runs start Then v2 ref, old keep v1",
-        "Given bad OB_OS When posted Then 400+schema path"
+        "Given each valid kind payload When posted Then stored with schema_version recorded (S1)",
+        "Given bad OB_OS When posted Then 400 with the JSON schema path (S1)",
+        "Given v2 active When runs start Then v2 ref recorded, old runs keep v1 (S2a)",
+        "Given bad sig When posted Then 401 with a logged incident (S2b)",
+        "Given unlisted source for a kind When posted with valid HMAC Then 403 provenance (S2b)"
       ],
       "test_plan": [
-        "Schema tests",
-        "Pinning test"
+        "Registry/shape matrix per kind (S1)",
+        "Activation + pinning, incl. pin-immutability (S2a)",
+        "HMAC vectors (valid/tampered/replay/skew) + allowlist matrix (S2b)"
       ],
       "documentation_references": [
         "docs/03-components-and-responsibilities.md"
@@ -954,15 +958,21 @@
       "subtasks": [
         {
           "id": "E07-T01-S1",
-          "title": "5 schemas",
-          "output": "signals/*.json+validate",
-          "acceptance": "Given each kind When valid Then stored"
+          "title": "Signal schema registry v1 + ingest validation",
+          "output": "schemas/signals/*.json + pure validator; ingest stores schema_version",
+          "acceptance": "Given each kind When valid Then stored with version; bad OB_OS → 400 with schema path"
         },
         {
-          "id": "E07-T01-S2",
-          "title": "Versions+webhook",
-          "output": "activate+HMAC",
-          "acceptance": "Given bad sig When posted Then 401"
+          "id": "E07-T01-S2a",
+          "title": "Strategy versions: activation + run pinning",
+          "output": "activate route (operator) + analysis_runs pinned to active version at run start",
+          "acceptance": "Given v2 active When runs start Then v2 ref; old runs immutable v1"
+        },
+        {
+          "id": "E07-T01-S2b",
+          "title": "HMAC webhook + per-kind source allowlist",
+          "output": "constant-time verify, replay/skew reject, configurable allowlist, rejection incidents",
+          "acceptance": "Given bad sig Then 401+incident; unlisted source Then 403 provenance"
         }
       ]
     },

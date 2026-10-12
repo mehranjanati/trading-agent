@@ -1,6 +1,7 @@
 // routes2.mjs — E05-T01-S2: signal / analysis / approval routes.
 import { ok } from "./errors.mjs";
 import { signalBody, approvalBody } from "./validate.mjs";
+import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
 import { uid, roleOf, guard, readBody, writeErr } from "./_shared.mjs";
 
 export function miscRoutes() {
@@ -13,17 +14,22 @@ export function miscRoutes() {
       if (g) return g;
       const b = await readBody(req);
       signalBody(b);
+      // E07-T01-S1: strict per-kind contract (exact $.path on violation) and the
+      // registry version is stamped into the row, so a run pinned later knows
+      // exactly which contract admitted the signal it reads.
+      const { schema_version } = validateSignal(b.kind, b.payload);
+      const tagged = { ...b.payload, _schema_version: schema_version };
       const now = new Date().toISOString();
       const id = uid("sig");
       await env.DB.batch([
         env.DB.prepare(
           "INSERT INTO signals(id,watch_id,kind,payload_json,source,at) VALUES(?,?,?,?,?,?)",
-        ).bind(id, b.watch_id ?? null, b.kind, JSON.stringify(b.payload), b.source, now),
+        ).bind(id, b.watch_id ?? null, b.kind, JSON.stringify(tagged), b.source, now),
         env.DB.prepare(
           "INSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES(?,?,?,?,?,?)",
-        ).bind(uid("evt"), "signal.ingested_v1", b.watch_id ?? id, JSON.stringify({ kind: b.kind }), `signal.ingested_v1:${id}:0`, now),
+        ).bind(uid("evt"), "signal.ingested_v1", b.watch_id ?? id, JSON.stringify({ kind: b.kind, schema_version: SCHEMA_VERSION }), `signal.ingested_v1:${id}:0`, now),
       ]);
-      return ok({ id }, 201);
+      return ok({ id, schema_version }, 201);
     }),
     runAnalysis: safe(async (req, env) => {
       const b = await readBody(req);

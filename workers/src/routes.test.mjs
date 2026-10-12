@@ -105,9 +105,23 @@ describe("E05-T01 control API contracts", () => {
   it("S2: signal ingest validates kind; bad kind 400", async () => {
     const bad = await app.fetch(req("POST", "/api/signals:ingest", { kind: "NOPE", payload: {}, source: "s" }), env());
     assert.equal(bad.status, 400);
-    const good = await app.fetch(req("POST", "/api/signals:ingest",
-      { watch_id: "w1", kind: "MTF", payload: { tf: "4h" }, source: "ext" }), env());
+    // E07-T01-S1: the payload must satisfy the per-kind contract (MTF v1), and
+    // the row carries the registry version it was admitted under.
+    const mtf = {
+      watch_id: "w1", kind: "MTF",
+      payload: {
+        symbol: "BTCUSDT",
+        timeframes: [{ tf: "1h", bias: "LONG" }, { tf: "4h", bias: "LONG" }],
+        agreement: "LONG",
+      },
+      source: "ext",
+    };
+    const good = await app.fetch(req("POST", "/api/signals:ingest", mtf), env());
     assert.equal(good.status, 201);
+    assert.equal((await good.json()).schema_version, "1");
+    const badShape = await app.fetch(req("POST", "/api/signals:ingest",
+      { watch_id: "w1", kind: "MTF", payload: { tf: "4h" }, source: "ext" }), env());
+    assert.equal(badShape.status, 400);
   });
   it("S2: approval grant issues expiring token; analysis run stored", async () => {
     const an = await (await app.fetch(req("POST", "/api/analysis:runs", { watch_id: "w1" }), env())).json();

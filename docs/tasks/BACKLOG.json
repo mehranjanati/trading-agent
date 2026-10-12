@@ -877,7 +877,7 @@
         "reviewer": "Qwen3.8 Max"
       },
       "estimated_complexity": "XL",
-      "status": "READY",
+      "status": "DONE",
       "blocking_decisions": [],
       "safety_tags": [
         "trading-safety"

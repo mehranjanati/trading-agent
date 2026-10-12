@@ -304,15 +304,16 @@ no-429 proof). Root: `Makefile` (test target). Docs:
 - [x] W0 seams wired (heartbeat publisher/route, real cron signals,
       `healthy_contig_ms`, Go ready/snapshot, redisx extraction) — commit 1
 - [x] S1 chaos.mjs + safety guards + injection suite + Makefile extension — commit 2
-- [ ] S2 drills 1/2/3 executed; evidence JSON + logs committed
+- [x] S2 drills 1/2/3 executed; evidence JSON committed
+      (`docs/ops/drills/E06-T02/{go,redis,both}-2026-10-12*.json`, all PASS)
 - [x] S3a reconcile sweep (`workers/src/reconcile.mjs`) + tests — commit 3
 - [x] S3b lease handoff + fencing: `rejoin.test.mjs` + the D1 authority row
       (`health-route.mjs` handoff/renew/verify through `lease.mjs`) — commit 3
-- [ ] S3c poller (`workers/src/fallback-poll.mjs`) + no-429 proof + deferral note
-- [ ] Docs: `docs/ops/DRILLS.md` ledger + drill note (deferrals: live 429
+- [x] S3c poller (`workers/src/fallback-poll.mjs`) + no-429 proof + deferral note
+- [x] Docs: `docs/ops/DRILLS.md` ledger + drill note (deferrals: live 429
       run → E12; DO handoff → E12; detection-latency note)
-- [ ] BACKLOG.json status flips with evidence; EPICS.md E06 row updated
-- [ ] `make check` green end-to-end
+- [x] BACKLOG.json status flips with evidence; EPICS.md E06 row updated
+- [x] `make check` green end-to-end
 - [ ] Safety PR records `GLM-5.3 / Qwen3.8 Max / <date>` (author ≠ reviewer)
 
 ## 11. Risks & open notes

@@ -72,7 +72,7 @@
           </div>
         </div>
 
-        <Button on:click={handleSubmit} disabled={loading || !description.trim() || !strategy_id.trim()} class="w-full">
+        <Button onclick={handleSubmit} disabled={loading || !description.trim() || !strategy_id.trim()} class="w-full">
           {loading ? "Generating..." : "Generate Strategy"}
         </Button>
 

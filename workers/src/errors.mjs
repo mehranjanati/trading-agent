@@ -29,6 +29,7 @@ export function err(code, message, opts = {}) {
 export const BROWSER_POST_PATHS = new Set([
   "/api/strategy:generate",
   "/api/strategy:chat",
+  "/api/strategy:chat:stream",
   "/api/strategy:draft",
   "/api/watches",
 ]);

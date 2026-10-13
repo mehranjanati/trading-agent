@@ -6,12 +6,18 @@
 // E14-T01: /analyze is an exception — it POSTs to the Go watcher (advisory
 // only, never orders/approvals). D-08 is preserved: the dashboard still never
 // submits orders.
-import type { Health, Watch, Signal, AnalysisRun, Approval, OrderIntent, Position, RecoveryIncident, StrategyVersion, BadgeLabel } from "./types";
+import type { Health, Watch, Signal, AnalysisRun, Approval, OrderIntent, Position, RecoveryIncident, StrategyVersion, BadgeLabel, StrategyDraft, AnalyzeRequest, AnalyzeResponse } from "./types";
 import { badge, modeBanner, actionBlocker } from "./freshness.mjs";
 
 export const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? "http://127.0.0.1:8787";
 // Go watcher :8080 — advisory analysis only (no orders, no approvals).
 export const ANALYZE_BASE: string = (import.meta.env?.VITE_ANALYZE_BASE as string | undefined) ?? "http://127.0.0.1:8080";
+// Go chatd :8081 — chat sessions (Redis) + WebSocket streaming. Advisory only.
+export const CHAT_BASE: string = (import.meta.env?.VITE_CHAT_BASE as string | undefined) ?? "http://127.0.0.1:8081";
+/** ws:// host for chatd; https pages must set VITE_CHAT_WS_BASE to a wss:// tunnel. */
+export const CHAT_WS_BASE: string =
+  (import.meta.env?.VITE_CHAT_WS_BASE as string | undefined) ??
+  CHAT_BASE.replace(/^http/, "ws");
 
 export type Result<T> = { ok: true; data: T; at: string; ageMs: number } | { ok: false; error: string };
 
@@ -133,6 +139,84 @@ export async function postDraft(body: {
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
+}
+
+// ── Go chat service (chatd :8081) ─ Redis sessions, WebSocket streaming ─────
+// Advisory plane only: create/read/delete sessions and save principles.
+// The real-time turn loop runs over chatSocket(). If chatd is unreachable
+// (e.g. public Pages without a tunnel), the /chat page falls back to the
+// Worker REST endpoint postChat above.
+
+export type ChatStoredMessage = { role: string; content: string; timestamp: string };
+
+/** Availability probe: any HTTP reply from chatd means the service is up. */
+export async function chatServiceUp(): Promise<boolean> {
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 1500);
+    const res = await fetch(`${CHAT_BASE}/api/chat/_probe`, { signal: ac.signal, headers: { accept: "application/json" } });
+    clearTimeout(t);
+    return res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+/** POST /api/chat/create — start a Redis-backed session. */
+export async function postChatCreate(principles = ""): Promise<Result<{ id: string }>> {
+  try {
+    const res = await fetch(`${CHAT_BASE}/api/chat/create`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ principles }),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** GET /api/chat/{id} — reload persisted history. */
+export async function getChatSession(id: string): Promise<Result<{ messages: ChatStoredMessage[]; principles: string }>> {
+  try {
+    const res = await fetch(`${CHAT_BASE}/api/chat/${encodeURIComponent(id)}`, { headers: { accept: "application/json" } });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** DELETE /api/chat/{id} — drop the session (Clear chat). */
+export async function deleteChatSession(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${CHAT_BASE}/api/chat/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** POST /api/chat/{id}/principles — persist principles with the session. */
+export async function postChatPrinciples(id: string, content: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${CHAT_BASE}/api/chat/${encodeURIComponent(id)}/principles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Open the real-time turn socket for a session. */
+export function chatSocket(id: string): WebSocket {
+  return new WebSocket(`${CHAT_WS_BASE}/ws/chat/${encodeURIComponent(id)}`);
 }
 
 export const getHealth = () => getJson<Health>("/api/health");

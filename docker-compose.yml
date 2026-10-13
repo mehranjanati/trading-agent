@@ -38,3 +38,21 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+  # chatd — Go chat service (v2-vibe pattern): Redis sessions, WebSocket
+  # transport, AI delegated to the Worker chat:stream endpoint.
+  chatd:
+    build: ./go-watcher
+    container_name: ta-chatd
+    # ENTRYPOINT in the image is go-watcher; chatd overrides it.
+    entrypoint: ["/usr/local/bin/chatd"]
+    environment:
+      CHAT_PORT: "8081"
+      REDIS_ADDR: redis:6379
+      WORKERS_URL: https://trading-agent-control.apjkala25.workers.dev
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped

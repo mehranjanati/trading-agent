@@ -253,6 +253,70 @@ describe("strategies-ai — POST /api/strategy:generate (fake AI)", () => {
   });
 });
 
+describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", () => {
+  const SSE = 'data: {"response":"hello "}\n\ndata: {"response":"world"}\n\ndata: [DONE]\n\n';
+
+  it("200 text/event-stream, x-ai-model header, frames pass through untouched", async () => {
+    const env = freshEnv({ AI_MODEL: "test-model", AI: { run: async () => SSE } });
+    const r = await post(app, env, "/api/strategy:chat:stream",
+      JSON.stringify({ messages: [{ role: "user", content: "hi" }], principles: "Max risk 2%" }));
+    assert.equal(r.status, 200);
+    assert.ok((r.headers.get("content-type") ?? "").includes("text/event-stream"));
+    // The Go chat client reads this header to report which model answered.
+    assert.equal(r.headers.get("x-ai-model"), "test-model");
+    const text = await r.text();
+    assert.ok(text.includes('"response":"hello "'), text);
+    assert.ok(text.includes("[DONE]"), text);
+  });
+
+  it("principles become a system turn and /no_think rides the last user turn", async () => {
+    let seen = null;
+    const env = freshEnv({
+      AI: { run: async (_m, opts) => { seen = opts; return SSE; } },
+    });
+    await post(app, env, "/api/strategy:chat:stream", JSON.stringify({
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "second" },
+        { role: "user", content: "third" },
+      ],
+      principles: "Never exceed 2% risk",
+    }));
+    assert.equal(seen.stream, true);
+    assert.equal(seen.messages[0].role, "system");
+    assert.ok(seen.messages[0].content.includes("Never exceed 2% risk"));
+    assert.ok(seen.messages.at(-1).content.endsWith("/no_think"));
+    assert.equal(seen.messages.length, 4); // 1 system + 3 history
+  });
+
+  it("400 VALIDATION on an empty messages array (no AI call)", async () => {
+    let called = false;
+    const env = freshEnv({ AI: { run: async () => { called = true; return SSE; } } });
+    const r = await post(app, env, "/api/strategy:chat:stream", JSON.stringify({ messages: [] }));
+    assert.equal(r.status, 400);
+    assert.equal(called, false);
+  });
+
+  it("503 DEGRADED without the AI binding", async () => {
+    const env = freshEnv();
+    const r = await post(app, env, "/api/strategy:chat:stream",
+      JSON.stringify({ messages: [{ role: "user", content: "hi" }] }));
+    assert.equal(r.status, 503);
+  });
+
+  it("403 for a role outside trader/operator/admin", async () => {
+    const env = freshEnv({ AI: { run: async () => SSE } });
+    const r = await post(app, env, "/api/strategy:chat:stream",
+      JSON.stringify({ messages: [{ role: "user", content: "hi" }] }), { "x-role": "viewer" });
+    assert.equal(r.status, 403);
+  });
+
+  it("advisory stream path is browser-POST allowed (D-08 surface unchanged)", () => {
+    assert.ok(BROWSER_POST_PATHS.has("/api/strategy:chat:stream"));
+    assert.ok(!BROWSER_POST_PATHS.has("/api/orders:intents"));
+  });
+});
+
 describe("browser CORS allow-list (fail closed on order paths)", () => {
   const req = (method, path, acrm) =>
     new Request(`http://x${path}`, { method, headers: acrm ? { "access-control-request-method": acrm } : {} });

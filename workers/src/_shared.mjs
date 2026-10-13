@@ -21,6 +21,8 @@ export const ALLOW = {
   "POST /api/strategy:generate": ["trader", "operator", "admin"],
   // Multi-turn chat: same RBAC as generate (advisory only, no orders).
   "POST /api/strategy:chat": ["trader", "operator", "admin"],
+  // Streaming variant of chat (SSE passthrough): same RBAC.
+  "POST /api/strategy:chat:stream": ["trader", "operator", "admin"],
   // Save extracted code as draft: same RBAC.
   "POST /api/strategy:draft": ["trader", "operator", "admin"],
   "POST /api/lease:handoff": ["operator", "admin"],

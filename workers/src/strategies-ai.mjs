@@ -14,7 +14,7 @@
 //   braces backtick-free fence requirement.
 // - RBAC: trader+ (same as watches create). D-08 holds: no orders/approvals
 //   are reachable from this route.
-import { ok, err } from "./errors.mjs";
+import { ok, err, CORS } from "./errors.mjs";
 import { roleOf, guard, readBody } from "./_shared.mjs";
 import { TEMPLATE_MAIN } from "./strategies-template.mjs";
 
@@ -218,7 +218,40 @@ export function generateRoutes() {
       const codeBlocks = extractCodeBlocks(String(text ?? ""));
       return ok({ response: text, codeBlocks, model }, 200);
     }),
-    /** POST /api/strategy:draft — save extracted code as draft (no AI call). */
+    /** POST /api/strategy:chat:stream — streaming variant of :chat.
+     *  Same validation and message assembly; the model runs with stream:true
+     *  and the raw SSE stream is piped through so consumers (the Go chat
+     *  service) can forward incremental text over WebSocket. D-08 unchanged:
+     *  advisory only, RBAC trader+. */
+    chatStream: safe(async (req, env) => {
+      const g = guard("POST /api/strategy:chat:stream", req);
+      if (g) return g;
+      const b = await readBody(req);
+      const messages = Array.isArray(b.messages) ? b.messages : [];
+      const principles = String(b.principles ?? "").trim();
+      if (messages.length === 0) {
+        const e = new Error("messages array required (min 1)"); e.code = "VALIDATION"; throw e;
+      }
+      if (!env.AI) {
+        const e = new Error("AI binding unavailable"); e.code = "DEGRADED"; throw e;
+      }
+      const model = env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8";
+      const fullMessages = [];
+      if (principles) {
+        fullMessages.push({ role: "system", content: `Trading principles (apply to all strategies):\n${principles}` });
+      }
+      fullMessages.push(...messages);
+      if (fullMessages.length > 0 && fullMessages[fullMessages.length - 1].role === "user") {
+        fullMessages[fullMessages.length - 1].content += "\n/no_think";
+      }
+      const aiRes = await env.AI.run(model, { messages: fullMessages, max_tokens: 4096, stream: true });
+      // Pass the model's SSE stream through untouched; the client parses
+      // `data: {...}` frames and [DONE]. CORS mirrors the non-stream route.
+      return new Response(aiRes, {
+        status: 200,
+        headers: { "content-type": "text/event-stream; charset=utf-8", ...CORS, "cache-control": "no-cache", "x-ai-model": model },
+      });
+    }),
     saveDraft: safe(async (req, env) => {
       const g = guard("POST /api/strategy:draft", req);
       if (g) return g;

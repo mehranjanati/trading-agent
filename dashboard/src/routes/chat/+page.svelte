@@ -1,15 +1,25 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Badge } from "$lib/components/ui/badge";
-  import { postChat, postDraft } from "$lib/api";
+  import {
+    postChat,
+    postDraft,
+    chatServiceUp,
+    postChatCreate,
+    getChatSession,
+    deleteChatSession,
+    postChatPrinciples,
+    chatSocket,
+  } from "$lib/api";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
 
   type Message = { role: "user" | "assistant"; content: string; timestamp: string };
   type CodeBlock = { language: string; code: string };
+  type WsEvent = { type: string; text?: string; error?: string; codeBlocks?: CodeBlock[] };
 
   let messages: Message[] = [];
   let input = "";
@@ -18,17 +28,107 @@
   let principles = "";
   let principlesOpen = false;
 
-  onMount(() => {
-    const saved = localStorage.getItem("chat_messages");
-    if (saved) messages = JSON.parse(saved);
+  // WS mode: chatd (Go + Redis + WebSocket). Rest mode: Worker POST fallback.
+  let mode: "ws" | "rest" = "rest";
+  let sessionId = "";
+  let live = ""; // streamed assistant text, committed on "done"
+  let ws: WebSocket | null = null;
+  let wsState: "connecting" | "open" | "closed" = "connecting";
+  let intentionalClose = false;
+  let reconnects = 0;
+
+  onMount(async () => {
     const savedPrinciples = localStorage.getItem("chat_principles");
     if (savedPrinciples) principles = savedPrinciples;
+    if (await chatServiceUp()) {
+      mode = "ws";
+      sessionId = localStorage.getItem("chat_session_id") ?? "";
+      if (sessionId) {
+        const res = await getChatSession(sessionId);
+        if (res.ok) {
+          messages = res.data.messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content, timestamp: m.timestamp }));
+          if (res.data.principles) principles = res.data.principles;
+        } else {
+          sessionId = ""; // stale id (Redis TTL) -> fresh session
+        }
+      }
+      if (!sessionId) {
+        const res = await postChatCreate(principles);
+        if (res.ok) {
+          sessionId = res.data.id;
+          localStorage.setItem("chat_session_id", sessionId);
+        } else {
+          mode = "rest"; // chatd answered the probe but create failed -> fallback
+        }
+      }
+      if (mode === "ws") openSocket();
+    }
+    if (mode === "rest") {
+      const saved = localStorage.getItem("chat_messages");
+      if (saved) messages = JSON.parse(saved);
+    }
     setTimeout(() => Prism.highlightAll(), 0);
   });
 
+  onDestroy(() => {
+    intentionalClose = true;
+    ws?.close();
+  });
+
+  function openSocket() {
+    wsState = "connecting";
+    ws = chatSocket(sessionId);
+    ws.onopen = () => {
+      wsState = "open";
+      reconnects = 0;
+    };
+    ws.onmessage = (ev) => {
+      let msg: WsEvent;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (msg.type === "chunk") {
+        live += msg.text ?? "";
+      } else if (msg.type === "done") {
+        const content = msg.text ?? live;
+        messages = [...messages, { role: "assistant", content, timestamp: new Date().toISOString() }];
+        live = "";
+        loading = false;
+        setTimeout(() => Prism.highlightAll(), 0);
+      } else if (msg.type === "error") {
+        error = msg.error ?? "chat error";
+        live = "";
+        loading = false;
+      }
+    };
+    ws.onclose = () => {
+      wsState = "closed";
+      loading = false;
+      // Bounded reconnect, then graceful degradation to the REST fallback.
+      if (!intentionalClose && mode === "ws") {
+        if (reconnects < 3) {
+          reconnects++;
+          setTimeout(openSocket, 1500 * reconnects);
+        } else {
+          mode = "rest";
+          localStorage.setItem("chat_messages", JSON.stringify(messages));
+        }
+      }
+    };
+    ws.onerror = () => {
+      /* onclose fires next; the fallback lives there */
+    };
+  }
+
   function saveToStorage() {
-    localStorage.setItem("chat_messages", JSON.stringify(messages));
     localStorage.setItem("chat_principles", principles);
+    if (mode === "ws") {
+      if (sessionId) void postChatPrinciples(sessionId, principles);
+    } else {
+      localStorage.setItem("chat_messages", JSON.stringify(messages));
+    }
   }
 
   async function handleSend() {
@@ -38,18 +138,26 @@
     const userMsg: Message = { role: "user", content: input.trim(), timestamp: new Date().toISOString() };
     messages = [...messages, userMsg];
     input = "";
-    saveToStorage();
 
+    if (mode === "ws" && ws && ws.readyState === WebSocket.OPEN) {
+      live = "";
+      ws.send(JSON.stringify({ type: "message", content: userMsg.content }));
+      return; // the done event completes the turn
+    }
+    if (mode === "ws") {
+      error = "Chat socket is not connected - retrying...";
+      loading = false;
+      return;
+    }
+
+    // REST path (Worker fallback): synchronous round-trip.
     const res = await postChat({ messages: messages.map((m) => ({ role: m.role, content: m.content })), principles });
     loading = false;
-
     if (!res.ok) {
       error = res.error;
       return;
     }
-
-    const aiMsg: Message = { role: "assistant", content: res.data.response, timestamp: new Date().toISOString() };
-    messages = [...messages, aiMsg];
+    messages = [...messages, { role: "assistant", content: res.data.response, timestamp: new Date().toISOString() }];
     saveToStorage();
     setTimeout(() => Prism.highlightAll(), 0);
   }
@@ -66,10 +174,26 @@
     }
   }
 
-  function clearChat() {
-    if (confirm("Clear all messages?")) {
-      messages = [];
-      localStorage.removeItem("chat_messages");
+  async function clearChat() {
+    if (!confirm("Clear all messages?")) return;
+    messages = [];
+    live = "";
+    localStorage.removeItem("chat_messages");
+    if (mode === "ws" && sessionId) {
+      await deleteChatSession(sessionId);
+      localStorage.removeItem("chat_session_id");
+      intentionalClose = true;
+      ws?.close();
+      sessionId = "";
+      const res = await postChatCreate(principles);
+      if (res.ok) {
+        sessionId = res.data.id;
+        localStorage.setItem("chat_session_id", sessionId);
+        intentionalClose = false;
+        openSocket();
+      } else {
+        mode = "rest";
+      }
     }
   }
 
@@ -86,12 +210,25 @@
 
 <div class="container mx-auto p-6 max-w-6xl">
   <div class="flex items-center justify-between mb-6">
-    <h1 class="text-3xl font-bold">Strategy Chat</h1>
+    <div class="flex items-center gap-3">
+      <h1 class="text-3xl font-bold">Strategy Chat</h1>
+      {#if mode === "ws"}
+        {#if wsState === "open"}
+          <Badge variant="outline" class="border-emerald-500 text-emerald-500">live - session {sessionId}</Badge>
+        {:else if wsState === "connecting"}
+          <Badge variant="outline">connecting...</Badge>
+        {:else}
+          <Badge variant="outline" class="border-amber-500 text-amber-500">reconnecting...</Badge>
+        {/if}
+      {:else}
+        <Badge variant="outline" title="chatd (Go/Redis/WS) unavailable - using the Worker REST endpoint">REST fallback</Badge>
+      {/if}
+    </div>
     <div class="flex gap-2">
-      <Button variant="outline" on:click={() => (principlesOpen = !principlesOpen)}>
+      <Button variant="outline" onclick={() => (principlesOpen = !principlesOpen)}>
         {principlesOpen ? "Hide" : "Show"} Principles
       </Button>
-      <Button variant="destructive" on:click={clearChat}>Clear</Button>
+      <Button variant="destructive" onclick={clearChat}>Clear</Button>
     </div>
   </div>
 
@@ -99,24 +236,23 @@
     <Card class="mb-6">
       <CardHeader>
         <CardTitle>Trading Principles</CardTitle>
-        <CardDescription>These will be injected as system context for every message</CardDescription>
+        <CardDescription>Injected as system context for every message{mode === "ws" ? " and persisted with the session" : ""}</CardDescription>
       </CardHeader>
       <CardContent>
         <Textarea
           bind:value={principles}
-          on:change={saveToStorage}
+          onchange={saveToStorage}
           placeholder="e.g., Max risk 2% per trade, prefer trend-following, avoid choppy markets..."
           rows={4}
         />
       </CardContent>
     </Card>
   {/if}
-
   <div class="grid gap-6 md:grid-cols-[1fr_400px]">
     <Card>
       <CardHeader><CardTitle>Conversation</CardTitle></CardHeader>
       <CardContent class="space-y-4 max-h-[600px] overflow-y-auto">
-        {#if messages.length === 0}
+        {#if messages.length === 0 && !live}
           <div class="text-muted-foreground text-sm text-center py-12">Start a conversation about your trading strategy</div>
         {:else}
           {#each messages as msg}
@@ -127,7 +263,15 @@
               </div>
             </div>
           {/each}
-          {#if loading}<div class="flex justify-start"><div class="bg-muted rounded-lg p-3"><div class="text-sm">Thinking...</div></div></div>{/if}
+          {#if live}
+            <div class="flex justify-start">
+              <div class="max-w-[80%] bg-muted rounded-lg p-3">
+                <div class="text-sm whitespace-pre-wrap">{live}<span class="animate-pulse">|</span></div>
+              </div>
+            </div>
+          {:else if loading}
+            <div class="flex justify-start"><div class="bg-muted rounded-lg p-3"><div class="text-sm">Thinking...</div></div></div>
+          {/if}
         {/if}
       </CardContent>
     </Card>
@@ -140,7 +284,7 @@
             <Card class="p-3">
               <div class="flex items-center justify-between mb-2">
                 <Badge variant="outline">{block.language}</Badge>
-                <Button size="sm" on:click={() => handleSaveDraft(block)}>Save as draft</Button>
+                <Button size="sm" onclick={() => handleSaveDraft(block)}>Save as draft</Button>
               </div>
               <pre class="bg-muted p-2 rounded text-xs overflow-x-auto"><code class="language-{block.language}">{block.code}</code></pre>
             </Card>
@@ -156,10 +300,11 @@
   <Card class="mt-6">
     <CardContent class="p-4">
       <div class="flex gap-2">
-        <Textarea bind:value={input} placeholder="Describe your strategy or ask a question..." rows={3} on:keydown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()} />
-        <Button on:click={handleSend} disabled={loading || !input.trim()} class="self-end">{loading ? "Sending..." : "Send"}</Button>
+        <Textarea bind:value={input} placeholder="Describe your strategy or ask a question..." rows={3} onkeydown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())} />
+        <Button onclick={handleSend} disabled={loading || !input.trim()} class="self-end">{loading ? "Sending..." : "Send"}</Button>
       </div>
       {#if error}<div class="mt-2 p-2 bg-destructive/10 border border-destructive rounded text-destructive text-sm">{error}</div>{/if}
     </CardContent>
   </Card>
 </div>
+

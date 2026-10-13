@@ -95,6 +95,46 @@ export async function getStrategyDrafts(): Promise<Result<{ drafts: StrategyDraf
   }
 }
 
+/** POST /api/strategy:chat — multi-turn chat with AI. */
+export async function postChat(body: {
+  messages: { role: string; content: string }[];
+  principles?: string;
+}): Promise<Result<{ response: string; codeBlocks: { language: string; code: string }[]; model: string }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/strategy:chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader", accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** POST /api/strategy:draft — save extracted code as draft (no AI call). */
+export async function postDraft(body: {
+  strategy_id: string;
+  version: string;
+  code: string;
+  prompt?: string;
+}): Promise<Result<{ id: string; status: string }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/strategy:draft`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader", accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 export const getHealth = () => getJson<Health>("/api/health");
 export const getWatches = () => getJson<{ watches: Watch[] }>("/api/watches?status=ACTIVE");
 export const getSignals = () => getJson<{ signals: Signal[] }>("/api/signals");

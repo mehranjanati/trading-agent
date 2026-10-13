@@ -44,6 +44,8 @@ export default {
       if (req.method === "POST" && p === "/api/approvals") return misc.decideApproval(req, env);
       if (req.method === "GET" && p === "/api/strategy") return misc.listStrategy(req, env);
       if (req.method === "POST" && p === "/api/strategy:generate") return ai.generate(req, env);
+      if (req.method === "POST" && p === "/api/strategy:chat") return ai.chat(req, env);
+      if (req.method === "POST" && p === "/api/strategy:draft") return ai.saveDraft(req, env);
       if (req.method === "GET" && p === "/api/strategy:drafts") return ai.drafts(req, env);
       return err("NOT_IMPLEMENTED", `${req.method} ${p} lands in a later task`, {});
     } catch (e) {

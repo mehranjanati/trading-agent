@@ -186,7 +186,65 @@ export function generateRoutes() {
       ).all().catch(() => ({ results: [] }));
       return ok({ drafts: rows.results ?? [] });
     }),
+    /** POST /api/strategy:chat — multi-turn chat with AI (advisory only).
+     *  Accepts full message history + optional principles (injected as system
+     *  message). Returns AI response + extracted code blocks. */
+    chat: safe(async (req, env) => {
+      const g = guard("POST /api/strategy:chat", req);
+      if (g) return g;
+      const b = await readBody(req);
+      const messages = Array.isArray(b.messages) ? b.messages : [];
+      const principles = String(b.principles ?? "").trim();
+      if (messages.length === 0) {
+        const e = new Error("messages array required (min 1)"); e.code = "VALIDATION"; throw e;
+      }
+      if (!env.AI) {
+        const e = new Error("AI binding unavailable"); e.code = "DEGRADED"; throw e;
+      }
+      const model = env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8";
+      // Build full message array: system (principles) + history
+      const fullMessages = [];
+      if (principles) {
+        fullMessages.push({ role: "system", content: `Trading principles (apply to all strategies):\n${principles}` });
+      }
+      fullMessages.push(...messages);
+      // Append /no_think to last user message (Qwen3 reasoning mode blows timeout)
+      if (fullMessages.length > 0 && fullMessages[fullMessages.length - 1].role === "user") {
+        fullMessages[fullMessages.length - 1].content += "\n/no_think";
+      }
+      const aiRes = await env.AI.run(model, { messages: fullMessages, max_tokens: 4096 });
+      const text = typeof aiRes === "string" ? aiRes : (aiRes?.response ?? aiRes?.result ?? "");
+      // Extract code blocks from response
+      const codeBlocks = extractCodeBlocks(String(text ?? ""));
+      return ok({ response: text, codeBlocks, model }, 200);
+    }),
+    /** POST /api/strategy:draft — save extracted code as draft (no AI call). */
+    saveDraft: safe(async (req, env) => {
+      const g = guard("POST /api/strategy:draft", req);
+      if (g) return g;
+      const b = await readBody(req);
+      const strategy_id = String(b.strategy_id ?? "").trim();
+      const version = String(b.version ?? "").trim();
+      const code = String(b.code ?? "");
+      if (!strategy_id || !version || !code) {
+        const e = new Error("strategy_id, version, code required"); e.code = "VALIDATION"; throw e;
+      }
+      const draft = await recordDraft(env, { strategy_id, version, prompt: b.prompt ?? "", code, model: "chat-extract", status: "generated", actor: roleOf(req) });
+      return ok({ id: draft.id, status: "generated" }, 201);
+    }),
   };
+}
+
+// extractCodeBlocks: find all fenced code blocks (any language) in text.
+export function extractCodeBlocks(text) {
+  if (typeof text !== "string" || !text.length) return [];
+  const blocks = [];
+  const re = /```(\w+)?\s*\n([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    blocks.push({ language: m[1] ?? "text", code: m[2].trim() });
+  }
+  return blocks;
 }
 
 export async function recordDraft(env, { strategy_id, version, prompt, code, model, status, actor, reason }) {

@@ -4,7 +4,7 @@ import { signalBody, approvalBody, intentBody } from "./validate.mjs";
 import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
 import { uid, roleOf, guard, readBody, writeErr, recordIncident } from "./_shared.mjs";
 import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed, listVersions } from "./strategies.mjs";
-import { decideApproval as decideApprovalRecord, ttlMsFrom } from "./approvals.mjs";
+import { decideApproval as decideApprovalRecord, listApprovals, ttlMsFrom } from "./approvals.mjs";
 import { limitsFrom } from "./risk.mjs";
 import { submitIntent as runSubmit } from "./execution.mjs";
 import { engageKill, releaseKill, readKill } from "./kill.mjs";
@@ -157,6 +157,10 @@ export function miscRoutes() {
     /** GET /api/strategy — list all strategy versions (dashboard strategy page). */
     listStrategy: safe(async (_req, env) => {
       return ok(await listVersions(env));
+    }),
+    /** GET /api/approvals — list recent approvals (dashboard approvals page). */
+    listApprovals: safe(async (_req, env) => {
+      return ok(await listApprovals(env));
     }),
   };
 }

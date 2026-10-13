@@ -45,6 +45,15 @@ export async function readApproval(env, id) {
   return r.results?.[0] ?? null;
 }
 
+/** List recent approvals (newest first). Read path for GET /api/approvals
+ *  (dashboard approvals page); bounded at 100, no filters for paper MVP. */
+export async function listApprovals(env) {
+  const rows = await env.DB.prepare(
+    "SELECT id, watch_id, analysis_id, decision, reason, approver, used_at, expires_at, at FROM approvals ORDER BY at DESC LIMIT 100",
+  ).all().catch(() => ({ results: [] }));
+  return { approvals: rows.results ?? [] };
+}
+
 /** Grant or reject an approval (the human decision). Writes the row plus its
  *  audit event in one batch, so a decision is never observable without its
  *  event. Returns the token surfaced to the client: {approval_id, watch_id,

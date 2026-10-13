@@ -12,7 +12,8 @@ import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractGoCode, validateGoCode, SYSTEM_PROMPT, buildGeneratePrompt } from "./strategies-ai.mjs";
+import { extractGoCode, validateGoCode, SYSTEM_PROMPT, buildGeneratePrompt, extractCodeBlocks } from "./strategies-ai.mjs";
+import { CORS, corsFor, BROWSER_POST_PATHS } from "./errors.mjs";
 import { TEMPLATE_MAIN } from "./strategies-template.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -249,5 +250,60 @@ describe("strategies-ai — POST /api/strategy:generate (fake AI)", () => {
     assert.equal(r.status, 200);
     const body = await r.json();
     assert.ok(body.drafts.some((d) => d.strategy_id === "draft-list"));
+  });
+});
+
+describe("browser CORS allow-list (fail closed on order paths)", () => {
+  const req = (method, path, acrm) =>
+    new Request(`http://x${path}`, { method, headers: acrm ? { "access-control-request-method": acrm } : {} });
+
+  it("preflight for POST on advisory paths carries allow-methods: POST", () => {
+    for (const p of ["/api/strategy:generate", "/api/strategy:chat", "/api/strategy:draft", "/api/watches"]) {
+      const h = corsFor(req("OPTIONS", p, "POST"));
+      assert.ok(h["access-control-allow-methods"].includes("POST"), p);
+    }
+  });
+
+  it("preflight for POST on non-whitelisted paths fails closed", () => {
+    for (const p of ["/api/orders:intents", "/api/approvals", "/api/kill-switch", "/api/strategy:activate", "/api/lease:handoff", "/api/health"]) {
+      assert.ok(!BROWSER_POST_PATHS.has(p), p);
+      const h = corsFor(req("OPTIONS", p, "POST"));
+      assert.ok(!h["access-control-allow-methods"].includes("POST"), p);
+    }
+  });
+
+  it("preflight not asking for POST keeps the reads-only list", () => {
+    const h = corsFor(req("OPTIONS", "/api/strategy:chat", "GET"));
+    assert.ok(!h["access-control-allow-methods"].includes("POST"));
+  });
+
+  it("plain GET keeps the reads-only list even on advisory paths", () => {
+    const h = corsFor(req("GET", "/api/strategy:chat"));
+    assert.ok(!h["access-control-allow-methods"].includes("POST"));
+    assert.equal(h["access-control-allow-origin"], CORS["access-control-allow-origin"]);
+  });
+
+  it("OPTIONS preflight end-to-end returns 204 with POST on advisory paths", async () => {
+    const env = freshEnv();
+    const app0 = app;
+    for (const p of ["/api/strategy:chat", "/api/strategy:generate"]) {
+      const r = await app0.fetch(req("OPTIONS", p, "POST"), env);
+      assert.equal(r.status, 204);
+      assert.ok((r.headers.get("access-control-allow-methods") ?? "").includes("POST"), p);
+    }
+    const r = await app0.fetch(req("OPTIONS", "/api/orders:intents", "POST"), env);
+    assert.equal(r.status, 204);
+    assert.ok(!(r.headers.get("access-control-allow-methods") ?? "").includes("POST"));
+  });
+
+  it("extractCodeBlocks finds every fence with its language", () => {
+    const text = "a\n```go\npackage main\n```\nb\n```python\nprint(1)\n```\nc\n```\nplain\n```";
+    const blocks = extractCodeBlocks(text);
+    assert.equal(blocks.length, 3);
+    assert.equal(blocks[0].language, "go");
+    assert.ok(blocks[0].code.includes("package main"));
+    assert.equal(blocks[1].language, "python");
+    assert.equal(blocks[2].language, "text");
+    assert.deepEqual(extractCodeBlocks("no fences"), []);
   });
 });

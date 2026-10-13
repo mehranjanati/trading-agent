@@ -13,11 +13,13 @@ import { sweep, readCursor, shouldSweep } from "./reconcile.mjs";
 import { sweepApprovals, readCursor as readApprovalCursor, shouldSweep as shouldSweepApprovals } from "./approvals.mjs";
 import { HOLDERS, holdsAuthority } from "./lease.mjs";
 import { tick as pollOnce, pollStatus } from "./fallback-poll.mjs";
+import { generateRoutes } from "./strategies-ai.mjs";
 
 const store = createStore();
 const watches = watchRoutes(store);
 const misc = miscRoutes();
 const health = healthRoutes();
+const ai = generateRoutes();
 
 export default {
   async fetch(req, env) {
@@ -41,6 +43,8 @@ export default {
       if (req.method === "POST" && p === "/api/analysis:runs") return misc.runAnalysis(req, env);
       if (req.method === "POST" && p === "/api/approvals") return misc.decideApproval(req, env);
       if (req.method === "GET" && p === "/api/strategy") return misc.listStrategy(req, env);
+      if (req.method === "POST" && p === "/api/strategy:generate") return ai.generate(req, env);
+      if (req.method === "GET" && p === "/api/strategy:drafts") return ai.drafts(req, env);
       return err("NOT_IMPLEMENTED", `${req.method} ${p} lands in a later task`, {});
     } catch (e) {
       return writeErr(e);

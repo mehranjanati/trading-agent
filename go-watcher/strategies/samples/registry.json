@@ -1,1 +1,32 @@
-[{"id":"sma-cross","version":"0.1.0","file":"sma-cross-0.1.0.wasm","configuration":{"fast_window":2,"slow_window":3,"min_confidence":0.55}},{"id":"sma-cross","version":"0.2.0","file":"sma-cross-0.2.0.wasm","configuration":{"fast_window":5,"slow_window":20,"min_confidence":0.6}}]
+[
+  {
+    "id": "sma-cross",
+    "version": "0.1.0",
+    "file": "sma-cross-0.1.0.wasm",
+    "configuration": {
+      "fast_window": 2,
+      "slow_window": 3,
+      "min_confidence": 0.55
+    }
+  },
+  {
+    "id": "sma-cross",
+    "version": "0.2.0",
+    "file": "sma-cross-0.2.0.wasm",
+    "configuration": {
+      "fast_window": 5,
+      "slow_window": 20,
+      "min_confidence": 0.6
+    }
+  },
+  {
+    "id": "sma-x-live",
+    "version": "0.1.0",
+    "file": "sma-x-live-0.1.0.wasm",
+    "configuration": {
+      "fast_window": 5,
+      "slow_window": 20,
+      "min_confidence": 0.6
+    }
+  }
+]

@@ -20,3 +20,7 @@ migrations_dir = "../migrations"
 ENV = "paper"
 HUMAN_APPROVAL_REQUIRED = "true"
 
+# AI strategy generation (chat → Go code). Workers AI binding, no API keys.
+[ai]
+binding = "AI"
+

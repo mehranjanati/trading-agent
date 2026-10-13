@@ -127,6 +127,10 @@ func faultCode(ctx context.Context, inv Invocation, runErr error) (string, strin
 	switch {
 	case strings.Contains(s, "out of memory") || strings.Contains(s, "memory."):
 		return "OOM", runErr.Error()
+	// A guest panic unwinds as a non-zero WASI exit ("module closed with
+	// exit_code(2)") — map it to PANIC so diagnostics tell the truth.
+	case strings.Contains(s, "exit_code(") && !strings.Contains(s, "exit_code(0"):
+		return "PANIC", runErr.Error()
 	case strings.Contains(s, "closed") || strings.Contains(s, "cancel"):
 		return "CANCELLED", runErr.Error()
 	default:

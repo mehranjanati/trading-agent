@@ -16,6 +16,9 @@ export const ALLOW = {
   "POST /api/analysis:runs": ["trader", "operator", "admin"],
   "POST /api/approvals": ["trader", "admin"],
   "POST /api/strategy:activate": ["admin"],
+  // AI strategy generation: trader+ may ASK the model for Go code. The draft
+  // is review-only (strategy_drafts); nothing builds or executes from here.
+  "POST /api/strategy:generate": ["trader", "operator", "admin"],
   "POST /api/lease:handoff": ["operator", "admin"],
   "POST /api/kill-switch": ["operator", "admin"],
 };

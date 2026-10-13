@@ -3,7 +3,7 @@ import { ok, err } from "./errors.mjs";
 import { signalBody, approvalBody, intentBody } from "./validate.mjs";
 import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
 import { uid, roleOf, guard, readBody, writeErr, recordIncident } from "./_shared.mjs";
-import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed } from "./strategies.mjs";
+import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed, listVersions } from "./strategies.mjs";
 import { decideApproval as decideApprovalRecord, ttlMsFrom } from "./approvals.mjs";
 import { limitsFrom } from "./risk.mjs";
 import { submitIntent as runSubmit } from "./execution.mjs";
@@ -153,6 +153,10 @@ export function miscRoutes() {
         decision: b.decision, reason: b.reason, approver: roleOf(req), ttlMs,
       });
       return ok(out, 201);
+    }),
+    /** GET /api/strategy — list all strategy versions (dashboard strategy page). */
+    listStrategy: safe(async (_req, env) => {
+      return ok(await listVersions(env));
     }),
   };
 }

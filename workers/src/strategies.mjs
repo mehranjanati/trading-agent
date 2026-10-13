@@ -105,3 +105,13 @@ export async function activateVersion(env, { version, config, actor }) {
   ).bind(version, body, actor, now).run();
   return { version, activated_by: actor, at: now };
 }
+
+/** GET /api/strategy — list all strategy versions (newest first). The dashboard
+ *  reads this for the strategy page; the active version is the one with the
+ *  newest `at` (see activeVersion). */
+export async function listVersions(env) {
+  const rows = await env.DB.prepare(
+    "SELECT version, config_json, activated_by, at FROM strategy_configs ORDER BY at DESC",
+  ).all().catch(() => ({ results: [] }));
+  return { versions: rows.results ?? [] };
+}

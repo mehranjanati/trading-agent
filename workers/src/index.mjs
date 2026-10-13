@@ -40,6 +40,7 @@ export default {
       if (req.method === "POST" && p === "/api/kill-switch") return misc.killSwitch(req, env);
       if (req.method === "POST" && p === "/api/analysis:runs") return misc.runAnalysis(req, env);
       if (req.method === "POST" && p === "/api/approvals") return misc.decideApproval(req, env);
+      if (req.method === "GET" && p === "/api/strategy") return misc.listStrategy(req, env);
       return err("NOT_IMPLEMENTED", `${req.method} ${p} lands in a later task`, {});
     } catch (e) {
       return writeErr(e);

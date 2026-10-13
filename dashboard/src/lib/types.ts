@@ -43,6 +43,18 @@ export interface StrategyVersion {
   version: string; config_json: string; activated_by: string; at: string;
 }
 
+export interface StrategyDraft {
+  id: string;
+  strategy_id: string;
+  version: string;
+  prompt: string;
+  code: string;
+  model: string;
+  status: string;
+  created_by: string;
+  created_at: string;
+}
+
 // E14-T01: deep-analysis types (advisory only, D-08 preserved).
 export interface AnalyzeRequest {
   symbol: string;

@@ -61,6 +61,40 @@ export async function postWatch(body: { symbol: string; direction: "LONG" | "SHO
   }
 }
 
+/** POST /api/strategy:generate — chat → Go draft (advisory only, D-08). */
+export async function postGenerateStrategy(body: {
+  description: string;
+  strategy_id: string;
+  version: string;
+}): Promise<Result<{ id: string; strategy_id: string; version: string; code: string; model: string; status: string }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/strategy:generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader", accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** GET /api/strategy:drafts — list AI-generated strategy drafts. */
+export async function getStrategyDrafts(): Promise<Result<{ drafts: StrategyDraft[] }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/strategy:drafts`, {
+      headers: { accept: "application/json" },
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 export const getHealth = () => getJson<Health>("/api/health");
 export const getWatches = () => getJson<{ watches: Watch[] }>("/api/watches?status=ACTIVE");
 export const getSignals = () => getJson<{ signals: Signal[] }>("/api/signals");

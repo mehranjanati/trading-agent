@@ -10,7 +10,7 @@
 
   const routes = [
     ["/", "overview"], ["/signals", "signals"], ["/watches", "watches"], ["/zones", "zones"],
-    ["/events", "events"], ["/analysis", "analysis"], ["/analyze", "analyze"], ["/approvals", "approvals"],
+    ["/events", "events"], ["/analysis", "analysis"], ["/analyze", "analyze"], ["/strategies", "strategies"], ["/approvals", "approvals"],
     ["/orders", "orders"], ["/failover", "failover"], ["/logs", "logs"], ["/strategy", "strategy"],
   ];
 

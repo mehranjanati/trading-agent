@@ -19,7 +19,9 @@ workers/.wrangler/
 
 # Go command binaries built in-place (e.g. `go build ./cmd/restart-drill`)
 /go-watcher/restart-drill
-
-# Docker prebuilt artifact (cross-compiled; rebuilt by `make strategy-build` /
-# docker compose build, never committed)
+# Docker prebuilt watcher (cross-compiled; rebuilt by docker compose build)
 /go-watcher/docker/
+# NOTE: go-watcher/strategies/samples/*.wasm ARE tracked on purpose — the
+# registry pins them by filename and the Dockerfile copies them into the
+# image, so a checkout must ship the exact artifacts the registry names.
+# Rebuild any entry with: make strategy-build SRC=<dir> ID=<id> VERSION=<x.y.z>

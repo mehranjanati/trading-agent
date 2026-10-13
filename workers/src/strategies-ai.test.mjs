@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractGoCode, validateGoCode, SYSTEM_PROMPT, buildGeneratePrompt } from "./strategies-ai.mjs";
+import { TEMPLATE_MAIN } from "./strategies-template.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql"]
@@ -100,6 +101,13 @@ describe("strategies-ai — extraction & validation (pure)", () => {
     assert.equal(extractGoCode(null), null);
   });
 
+  it("prefers the LONGEST go fence (reasoning models emit several)", () => {
+    const text = "thinking...\n```go\nfunc x() {}\n```\nfinal:\n```go\n" + GOOD_CODE + "\n```\n";
+    assert.equal(extractGoCode(text), GOOD_CODE);
+    // Bare fences are only considered when no go fence exists at all.
+    assert.equal(extractGoCode("```\nshort\n```\n```\n" + GOOD_CODE + "\n```"), GOOD_CODE);
+  });
+
   it("validateGoCode accepts the template-shaped program", () => {
     const tpl = readFileSync(join(ROOT, "go-watcher", "strategies", "template", "main.go"), "utf8");
     assert.deepEqual(validateGoCode(tpl), []);
@@ -124,6 +132,18 @@ describe("strategies-ai — extraction & validation (pure)", () => {
     assert.ok(SYSTEM_PROMPT.includes("package main") && SYSTEM_PROMPT.includes("os.Stdin") && SYSTEM_PROMPT.includes("NO_SIGNAL"));
     const p = buildGeneratePrompt({ description: "rsi divergence", strategy_id: "rsi-div", version: "0.1.0", templateMain: null });
     assert.ok(p.includes("rsi divergence") && p.includes("rsi-div") && p.includes("0.1.0"));
+  });
+
+  it("DRIFT GUARD: the bundled TEMPLATE_MAIN equals go-watcher/strategies/template/main.go", () => {
+    const tpl = readFileSync(join(ROOT, "go-watcher", "strategies", "template", "main.go"), "utf8");
+    assert.equal(TEMPLATE_MAIN, tpl, "regenerate workers/src/strategies-template.mjs from the template");
+  });
+
+  it("the default prompt embeds the envelope so the model only writes decide()", () => {
+    const p = buildGeneratePrompt({ description: "d", strategy_id: "x-1", version: "0.1.0", templateMain: TEMPLATE_MAIN });
+    assert.ok(p.includes("func decide(inv invocation)"));
+    assert.ok(p.includes("StrategyID") && p.includes("DeadlineMs"));
+    assert.ok(p.includes("/no_think"));
   });
 });
 
@@ -185,6 +205,40 @@ describe("strategies-ai — POST /api/strategy:generate (fake AI)", () => {
     const r = await post(app, env, "/api/strategy:generate",
       JSON.stringify({ description: "d", strategy_id: "no-ai", version: "0.1.0" }));
     assert.equal(r.status, 503);
+  });
+
+  it("two-shot: falls back to the strong model when the fast one fails validation", async () => {
+    const bad = GOOD_CODE.replace('import (', 'import (\n\t"net/http"');
+    // Fast model returns banned code; fallback returns valid code.
+    const env = freshEnv({
+      AI_MODEL: "fast-model",
+      AI_MODEL_FALLBACK: "strong-model",
+      AI: { run: async (m) => (m === "fast-model" ? "```go\n" + bad + "\n```" : "```go\n" + GOOD_CODE + "\n```") },
+    });
+    const r = await post(app, env, "/api/strategy:generate",
+      JSON.stringify({ description: "two-shot", strategy_id: "two-shot", version: "0.1.0" }));
+    assert.equal(r.status, 201);
+    const body = await r.json();
+    assert.equal(body.model, "strong-model");
+    assert.equal(body.attempts, 2);
+    // The fast model's rejected attempt is still on the trail.
+    const rows = sqlJson(`SELECT model, status FROM strategy_drafts WHERE strategy_id='two-shot' ORDER BY created_at;`);
+    assert.equal(rows.length, 2);
+    assert.ok(rows[0].status.startsWith("rejected"));
+    assert.equal(rows[1].status, "generated");
+  });
+
+  it("two-shot: both models failing records a rejected draft and 400", async () => {
+    const env = freshEnv({
+      AI_MODEL: "fast-model",
+      AI_MODEL_FALLBACK: "strong-model",
+      AI: { run: async () => "no code at all" },
+    });
+    const r = await post(app, env, "/api/strategy:generate",
+      JSON.stringify({ description: "d", strategy_id: "both-fail", version: "0.1.0" }));
+    assert.equal(r.status, 400);
+    const rows = sqlJson(`SELECT status FROM strategy_drafts WHERE strategy_id='both-fail';`);
+    assert.ok(rows.length >= 1 && rows[0].status.startsWith("rejected"));
   });
 
   it("GET /api/strategy:drafts lists recorded drafts", async () => {

@@ -19,6 +19,13 @@ migrations_dir = "../migrations"
 [vars]
 ENV = "paper"
 HUMAN_APPROVAL_REQUIRED = "true"
+# AI strategy codegen model (override without redeploying code).
+# qwen3-30b-a3b-fp8: MoE 30B with ~3B active params → fast, $0.0509/M in +
+# $0.335/M out (13x cheaper input than qwen2.5-coder-32b, ~3.5x more free-tier
+# generations/day). The coder-32b stays as the fallback for hard retries.
+AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
+# Fallback model used when the primary output fails contract validation.
+AI_MODEL_FALLBACK = "@cf/qwen/qwen2.5-coder-32b-instruct"
 
 # AI strategy generation (chat → Go code). Workers AI binding, no API keys.
 [ai]

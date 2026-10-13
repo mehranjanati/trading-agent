@@ -16,6 +16,7 @@
 //   are reachable from this route.
 import { ok, err } from "./errors.mjs";
 import { roleOf, guard, readBody } from "./_shared.mjs";
+import { TEMPLATE_MAIN } from "./strategies-template.mjs";
 
 // SYSTEM_PROMPT is the contract the model must obey. Keep tight: every
 // allowed import is enumerated, the envelope is verbatim, and any deviation
@@ -29,7 +30,7 @@ HARD RULES (violation = rejected):
 4. Result JSON must match strategy-result-v1: {"contract_version":"1","strategy_id":"<id>","strategy_version":"<version>","invocation_id":"<echo>","status":"SIGNAL|NO_SIGNAL|ERROR","decision":{"bias":"LONG|SHORT|FLAT","confidence":0..1},"signals":[{"kind":"<KIND>","symbol":"<echo>"}] or [],"proposed_state":{},"diagnostics":{"reason":"<human reason>","code":"OK","logs":[]}}.
 5. Invocation JSON has market_snapshot {symbol, px, ts, src, candles[]? where each candle is {ts: NUMBER unix millis, open, high, low, close, volume: decimal STRINGS}} and strategy_configuration {} (read params with safe defaults) and previous_state (may carry window[] of decimal strings) and execution_context {asof_ts, deadline_ms, trace_id}.
 6. Echo strategy_id/strategy_version/invocation_id from the invocation. Confidence MUST be within [0,1]. Reasons must be short English sentences.
-7. Put the strategy logic in func decide(inv invocation) (bias string, conf float64, logs []string). Keep the main() envelope EXACTLY as given by the caller (the caller sends a template main in the prompt when available).
+7. The caller ALWAYS provides the envelope below: keep it BYTE-IDENTICAL (imports, types, main(), helper funcs) and write only the decide() function plus any extra unexported helper funcs decide() needs. Do not add or remove imports. Field names are StrategyID, StrategyVersion, InvocationID, DeadlineMs, Candles, PreviousState, StrategyConfiguration — copy them exactly.
 8. No comments about policy. No markdown outside the single go fence.`;
 
 // ALLOWED_IMPORTS is the go/imports allowlist enforced post-generation.
@@ -49,11 +50,13 @@ const BANNED_PATTERNS = [
 
 export function extractGoCode(text) {
   if (typeof text !== "string" || !text.length) return null;
-  // Prefer the first ```go fence; fall back to a bare ``` fence.
-  let m = text.match(/```go\s*\n([\s\S]*?)```/);
-  if (!m) m = text.match(/```\s*\n([\s\S]*?)```/);
-  if (!m) return null;
-  return m[1].trim();
+  // Reasoning models (e.g. qwen3) may emit several fenced blocks while
+  // thinking; the real program is the LONGEST go fence. Take all go fences
+  // first, then all bare fences as a fallback.
+  const fences = [...text.matchAll(/```go\s*\n([\s\S]*?)```/g)].map((m) => m[1].trim());
+  const pool = fences.length ? fences : [...text.matchAll(/```\s*\n([\s\S]*?)```/g)].map((m) => m[1].trim());
+  if (!pool.length) return null;
+  return pool.reduce((a, b) => (b.length > a.length ? b : a));
 }
 
 // stripComments removes Go comments before heuristic checks. This is a
@@ -100,12 +103,17 @@ export function validateGoCode(code) {
 
 // buildGeneratePrompt assembles the user message: description + ids +
 // optional template main (verbatim envelope the model must keep).
+// `/no_think` disables Qwen3's reasoning trace: our task is a bounded
+// code-emission with a fixed contract, and thinking mode blew the request
+// wall-clock past the gateway timeout (and burns output tokens). Models that
+// ignore the directive are unaffected.
 export function buildGeneratePrompt({ description, strategy_id, version, templateMain }) {
   let p = `Strategy request: ${description}\nstrategy_id: ${strategy_id}\nstrategy_version: ${version}\n`;
   p += `Emit the full Go program in one go fence. Echo strategy_id/version/invocation_id from the invocation at runtime.\n`;
   if (templateMain) {
     p += `Keep this exact main() envelope and contract types; only write the decide() region:\n\`\`\`go\n${templateMain}\n\`\`\`\n`;
   }
+  p += "/no_think";
   return p;
 }
 
@@ -137,25 +145,39 @@ export function generateRoutes() {
       if (!env.AI) {
         const e = new Error("AI binding unavailable"); e.code = "DEGRADED"; throw e;
       }
-      const model = env.AI_MODEL ?? "@cf/qwen/qwen2.5-coder-32b-instruct";
+      const model = env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8";
+      const fallback = env.AI_MODEL_FALLBACK ?? "@cf/qwen/qwen2.5-coder-32b-instruct";
       const messages = [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: buildGeneratePrompt({ description, strategy_id, version, templateMain: b.template_main ?? null }) },
+        { role: "user", content: buildGeneratePrompt({ description, strategy_id, version, templateMain: b.template_main ?? TEMPLATE_MAIN }) },
       ];
-      const aiRes = await env.AI.run(model, { messages, max_tokens: 3072 });
-      const text = typeof aiRes === "string" ? aiRes : (aiRes?.response ?? aiRes?.result ?? "");
-      const code = extractGoCode(String(text ?? ""));
-      if (!code) {
-        await recordDraft(env, { strategy_id, version, prompt: description, code: "", model, status: "rejected", actor: roleOf(req), reason: "no go fence in model output" });
-        return err("VALIDATION", "model output contained no Go code block", {});
+      // Two-shot: the cheap/fast model first; if its output fails the
+      // contract, retry once on the stronger coder model. Every attempt is
+      // recorded (accepted or rejected) so the trail shows which model
+      // produced which bytes.
+      const attempts = model === fallback ? [model] : [model, fallback];
+      let lastProblems = [];
+      let lastModel = model;
+      for (const m of attempts) {
+        lastModel = m;
+        const aiRes = await env.AI.run(m, { messages, max_tokens: 3072 });
+        const text = typeof aiRes === "string" ? aiRes : (aiRes?.response ?? aiRes?.result ?? "");
+        const code = extractGoCode(String(text ?? ""));
+        if (!code) {
+          lastProblems = ["no go fence in model output"];
+          continue;
+        }
+        const problems = validateGoCode(code);
+        if (problems.length) {
+          await recordDraft(env, { strategy_id, version, prompt: description, code, model: m, status: "rejected", actor: roleOf(req), reason: problems.join("; ") });
+          lastProblems = problems;
+          continue;
+        }
+        const draft = await recordDraft(env, { strategy_id, version, prompt: description, code, model: m, status: "generated", actor: roleOf(req) });
+        return ok({ id: draft.id, strategy_id, version, code, model: m, status: "generated", attempts: attempts.indexOf(m) + 1 }, 201);
       }
-      const problems = validateGoCode(code);
-      if (problems.length) {
-        await recordDraft(env, { strategy_id, version, prompt: description, code, model, status: "rejected", actor: roleOf(req), reason: problems.join("; ") });
-        return err("VALIDATION", "generated code rejected: " + problems.join("; "), {});
-      }
-      const draft = await recordDraft(env, { strategy_id, version, prompt: description, code, model, status: "generated", actor: roleOf(req) });
-      return ok({ id: draft.id, strategy_id, version, code, model, status: "generated" }, 201);
+      await recordDraft(env, { strategy_id, version, prompt: description, code: "", model: lastModel, status: "rejected", actor: roleOf(req), reason: lastProblems.join("; ") });
+      return err("VALIDATION", "generated code rejected: " + lastProblems.join("; "), {});
     }),
     /** GET /api/strategy:drafts — list drafts (newest first). */
     drafts: safe(async (req, env) => {

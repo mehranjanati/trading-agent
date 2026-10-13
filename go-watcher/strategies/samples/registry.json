@@ -28,5 +28,15 @@
       "slow_window": 20,
       "min_confidence": 0.6
     }
+  },
+  {
+    "id": "sma-x-v2",
+    "version": "0.1.0",
+    "file": "sma-x-v2-0.1.0.wasm",
+    "configuration": {
+      "fast_window": 5,
+      "slow_window": 20,
+      "min_confidence": 0.6
+    }
   }
 ]

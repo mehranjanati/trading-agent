@@ -10,7 +10,9 @@
 //
 // Local harness only: no remote binding, no secrets, binds 127.0.0.1.
 //
-// usage: node scripts/dev-server.mjs [--port 8787] [--cron-ms 10000] [--db /tmp/e06.sqlite] [--no-seed] [--verbose]
+// usage: node scripts/dev-server.mjs [--port 8787] [--host 127.0.0.1] [--cron-ms 10000] [--db /tmp/e06.sqlite] [--no-seed] [--verbose]
+// --host 0.0.0.0 makes the shim reachable from Docker containers via
+// host.docker.internal (E12-T01 local proof: go-watcher runs in Docker).
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, rmSync, existsSync, mkdirSync } from "node:fs";
@@ -22,10 +24,11 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MIGRATIONS = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql"];
 
 export function parseFlags(argv) {
-  const flags = { port: 8787, cronMs: 10_000, db: join(tmpdir(), "e06-drill.sqlite"), seed: true, verbose: false };
+  const flags = { port: 8787, host: "127.0.0.1", cronMs: 10_000, db: join(tmpdir(), "e06-drill.sqlite"), seed: true, verbose: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--port") flags.port = Number(argv[++i]);
+    else if (a === "--host") flags.host = argv[++i];
     else if (a === "--cron-ms") flags.cronMs = Number(argv[++i]);
     else if (a === "--db") flags.db = argv[++i];
     else if (a === "--no-seed") flags.seed = false;
@@ -133,7 +136,7 @@ async function main() {
     });
   });
 
-  await new Promise((resolve) => server.listen(flags.port, "127.0.0.1", resolve));
+  await new Promise((resolve) => server.listen(flags.port, flags.host, resolve));
   log(`ready on http://127.0.0.1:${flags.port} (db=${flags.db}, cron=${flags.cronMs}ms)`);
 
   // The production cron cadence (wrangler.toml [triggers] crons = "*/10 * * * * *").

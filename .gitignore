@@ -19,3 +19,7 @@ workers/.wrangler/
 
 # Go command binaries built in-place (e.g. `go build ./cmd/restart-drill`)
 /go-watcher/restart-drill
+
+# Docker prebuilt artifact (cross-compiled; rebuilt by `make strategy-build` /
+# docker compose build, never committed)
+/go-watcher/docker/

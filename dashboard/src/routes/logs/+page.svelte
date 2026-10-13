@@ -20,10 +20,19 @@
   void badgeFor;
 </script>
 
-<p style="color:#9ca3af;font-size:0.85rem">
+<p class="page-note">
   latency p50/p95 and data-gap metrics land with the E12 metrics wiring; this view is STALE-tolerant by design (docs/09 §9.1).
 </p>
 
 <DataPage title="logs — errors, fencing, rate-limit, gaps" result={result} badge={freshness} columns={[
   { key: "at", label: "at" }, { key: "incident", label: "incident" }, { key: "action", label: "action" },
 ]} rows={errorRows} />
+
+<style>
+  .page-note {
+    color: #6b7280;
+    font-size: 0.78rem;
+    margin-bottom: 12px;
+    padding-left: 4px;
+  }
+</style>

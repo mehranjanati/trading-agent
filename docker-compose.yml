@@ -1,0 +1,40 @@
+# docker-compose.yml — E12-T01 (local proof): Go watcher + Redis in Docker.
+# Per user request ONLY the Go plane is containerised: the Workers API shim
+# (:8787, scripts/dev-server.mjs) and the dashboard (:3000) keep running on the
+# host. On macOS host.docker.internal reaches the host's 8787 out of the box;
+# on Linux (Hetzner deploy) add to go-watcher:
+#   extra_hosts: ["host.docker.internal:host-gateway"]
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ta-redis
+    # Host 6379 = an existing local redis, 6380 = vibesdk-redis → publish 6381.
+    # Inside the compose network the watcher uses redis:6379 regardless.
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  go-watcher:
+    build: ./go-watcher
+    container_name: ta-go-watcher
+    environment:
+      GO_PORT: "8080"
+      REDIS_ADDR: redis:6379
+      # E12-T01: heartbeat/cold-start target is the DEPLOYED Workers API
+      # (https://trading-agent-control.apjkala25.workers.dev). The Mac keeps
+      # pushing; Workers never dials the local Go plane.
+      WORKERS_URL: https://trading-agent-control.apjkala25.workers.dev
+    ports:
+      - "8080:8080"
+    volumes:
+      # Phase 1 dev affordance: live strategy registry edits without rebuild.
+      # The image's /strategies copy is the deploy truth.
+      - ./go-watcher/strategies/samples:/strategies:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped

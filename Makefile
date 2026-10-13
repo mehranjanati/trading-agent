@@ -1,6 +1,21 @@
+# strategy-build: Build+register a strategy .wasm from a Go source dir
+# (usage: make strategy-build SRC=path ID=sma-cross VERSION=0.3.0).
+# The source dir must be a standalone module (own go.mod, stdlib-only main
+# package) — never part of go-watcher/ itself, so AI output can't import the
+# watcher (or wazero): the wasm guest is unprivileged by construction.
+strategy-build: ## Build+register a strategy .wasm from a Go source dir (usage: make strategy-build SRC=path ID=sma-cross VERSION=0.3.0)
+strategy-build:
+	@test -n "$(SRC)" || (echo "usage: make strategy-build SRC=path/to/strategy ID=sma-cross VERSION=0.3.0" && exit 1)
+	@test -n "$(ID)" || (echo "usage: make strategy-build SRC=path/to/strategy ID=sma-cross VERSION=0.3.0" && exit 1)
+	@test -n "$(VERSION)" || (echo "usage: make strategy-build SRC=path/to/strategy ID=sma-cross VERSION=0.3.0" && exit 1)
+	@command -v go >/dev/null || (echo "go toolchain required" && exit 1)
+	@mkdir -p go-watcher/strategies/samples
+	@cd "$(SRC)" && GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$(CURDIR)/go-watcher/strategies/samples/$(ID)-$(VERSION).wasm" .
+	@ls -la "go-watcher/strategies/samples/$(ID)-$(VERSION).wasm"
+	@echo "add to go-watcher/strategies/samples/registry.json: {\"id\":\"$(ID)\",\"version\":\"$(VERSION)\",\"file\":\"$(ID)-$(VERSION).wasm\",\"configuration\":{}}"
+
 .PHONY: check lint validate secrets test dev
 check: lint validate secrets test
-	@echo "make check: OK"
 lint:
 	@./scripts/check.sh
 validate:

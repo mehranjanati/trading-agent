@@ -1,14 +1,16 @@
 <script lang="ts">
+  import "../app.css";
   import ModeBanner from "$lib/components/ModeBanner.svelte";
   import { getHealth, modeBanner } from "$lib/api";
   import { onMount } from "svelte";
   import type { Health } from "$lib/types";
+  import { page } from "$app/stores";
 
   export let data: { result: { ok: boolean; data?: Health; at?: string; ageMs?: number } | null };
 
   const routes = [
     ["/", "overview"], ["/signals", "signals"], ["/watches", "watches"], ["/zones", "zones"],
-    ["/events", "events"], ["/analysis", "analysis"], ["/approvals", "approvals"],
+    ["/events", "events"], ["/analysis", "analysis"], ["/analyze", "analyze"], ["/approvals", "approvals"],
     ["/orders", "orders"], ["/failover", "failover"], ["/logs", "logs"], ["/strategy", "strategy"],
   ];
 
@@ -26,21 +28,68 @@
   });
 
   $: banner = health ? modeBanner(health.mode, health.reasons) : modeBanner("D1_DOWN", [error ?? "health unreadable"]);
+  $: currentPath = $page.url.pathname;
 </script>
 
-<nav>
-  {#each routes as [href, label]}<a href={href}>{label}</a>{/each}
-</nav>
+<div class="app">
+  <nav>
+    {#each routes as [href, label]}
+      <a href={href} class:active={currentPath === href}>{label}</a>
+    {/each}
+  </nav>
 
-<ModeBanner banner={banner} />
+  <ModeBanner banner={banner} />
 
-<main>
-  <slot />
-</main>
+  <main>
+    <slot />
+  </main>
+</div>
 
 <style>
-  nav { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #262b36; }
-  nav a { color: #9ca3af; text-decoration: none; font-size: 0.9rem; }
-  nav a:hover { color: #e6e9ef; }
-  main { padding: 14px; max-width: 1100px; }
+  .app {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 10px 16px;
+    border-bottom: 1px solid #1e2330;
+    background: #0d1117;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  nav a {
+    color: #8b949e;
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: color 0.15s, background 0.15s;
+    white-space: nowrap;
+  }
+
+  nav a:hover {
+    color: #e6e9ef;
+    background: #161b22;
+  }
+
+  nav a.active {
+    color: #e6e9ef;
+    background: #1f2937;
+  }
+
+  main {
+    flex: 1;
+    padding: 20px;
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+  }
 </style>

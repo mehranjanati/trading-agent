@@ -3,15 +3,20 @@ main = "src/index.mjs"
 compatibility_date = "2026-10-01"
 
 [triggers]
-crons = ["*/10 * * * * *"] # E06-T01: health evaluator tick
+# E12-T01: Cloudflare cron triggers are 5-field (1-minute minimum); the 10s
+# 6-field dev tick cannot deploy. The §6.1 15s rule degrades to ≤60s detection
+# here — the heartbeat row age is what evaluate() reads, so the fidelity loss
+# is bounded by this cron, not by the 5s publisher.
+crons = ["* * * * *"]
 
 # E05-T01: D1 binding (per-env database_id set at deploy; local uses --local).
 [[d1_databases]]
 binding = "DB"
 database_name = "trading_dev"
-database_id = "local-dev-placeholder"
+database_id = "56e627b8-cad8-4b27-9977-d29c0338de1e"
+migrations_dir = "../migrations"
 
 [vars]
-ENV = "dev"
+ENV = "paper"
 HUMAN_APPROVAL_REQUIRED = "true"
 

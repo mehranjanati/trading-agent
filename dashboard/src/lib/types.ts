@@ -42,3 +42,56 @@ export interface RecoveryIncident {
 export interface StrategyVersion {
   version: string; config_json: string; activated_by: string; at: string;
 }
+
+// E14-T01: deep-analysis types (advisory only, D-08 preserved).
+export interface AnalyzeRequest {
+  symbol: string;
+  direction?: "LONG" | "SHORT";
+  timeframes?: string[];
+  strategies: { id: string; version?: string; config?: Record<string, unknown> }[];
+  position?: { entry: string; size: string; leverage: number };
+}
+
+export interface AnalyzeResponse {
+  id: string;
+  symbol: string;
+  at: string;
+  aggregate: {
+    bias: "LONG" | "SHORT" | "FLAT";
+    confidence: number;
+    agree: number;
+    disagree: number;
+    flat: number;
+    errors: number;
+    n: number;
+    explanation: string;
+  };
+  verdicts: {
+    strategy_id: string;
+    strategy_version: string;
+    strategy_sha256: string;
+    timeframe: string;
+    invocation_id: string;
+    input_hash: string;
+    result: {
+      contract_version: string;
+      strategy_id: string;
+      strategy_version: string;
+      invocation_id: string;
+      status: "SIGNAL" | "NO_SIGNAL" | "ERROR";
+      decision: { bias: "LONG" | "SHORT" | "FLAT"; confidence: number };
+      signals: { kind: string; symbol: string }[];
+      proposed_state: Record<string, unknown>;
+      diagnostics: { reason: string; code: string; logs: string[] };
+    };
+    data_source: string;
+  }[];
+  suggest_zones: {
+    timeframe: string;
+    atr: string;
+    trigger_long: string;
+    inval_long: string;
+    trigger_short: string;
+    inval_short: string;
+  };
+}

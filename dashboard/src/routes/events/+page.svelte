@@ -21,4 +21,13 @@
   { key: "at", label: "at" }, { key: "type", label: "incident" }, { key: "action", label: "action" }, { key: "actor", label: "actor" },
 ]} rows={entries} />
 
-<p style="color:#9ca3af;font-size:0.8rem">gaps are shown explicitly — the timeline never interpolates (docs/09 §9.4)</p>
+<p class="page-note">gaps are shown explicitly — the timeline never interpolates (docs/09 §9.4)</p>
+
+<style>
+  .page-note {
+    color: #6b7280;
+    font-size: 0.78rem;
+    margin-top: 8px;
+    padding-left: 4px;
+  }
+</style>

@@ -2,10 +2,16 @@
 // call is a GET against the Workers API; there is deliberately no helper that
 // POSTs an order or an approval — the dashboard never submits (D-08). Every
 // response carries `at`, so each widget can derive its own freshness badge.
+//
+// E14-T01: /analyze is an exception — it POSTs to the Go watcher (advisory
+// only, never orders/approvals). D-08 is preserved: the dashboard still never
+// submits orders.
 import type { Health, Watch, Signal, AnalysisRun, Approval, OrderIntent, Position, RecoveryIncident, StrategyVersion, BadgeLabel } from "./types";
 import { badge, modeBanner, actionBlocker } from "./freshness.mjs";
 
 export const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? "http://127.0.0.1:8787";
+// Go watcher :8080 — advisory analysis only (no orders, no approvals).
+export const ANALYZE_BASE: string = (import.meta.env?.VITE_ANALYZE_BASE as string | undefined) ?? "http://127.0.0.1:8080";
 
 export type Result<T> = { ok: true; data: T; at: string; ageMs: number } | { ok: false; error: string };
 
@@ -17,6 +23,39 @@ export async function getJson<T>(path: string): Promise<Result<T>> {
     const body = await res.json();
     const at: string = body?.at ?? new Date().toISOString();
     return { ok: true, data: body as T, at, ageMs: Date.now() - Date.parse(at) };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** POST to the Go watcher /analyze (advisory only, D-08 preserved). */
+export async function postAnalyze(body: AnalyzeRequest): Promise<Result<AnalyzeResponse>> {
+  try {
+    const res = await fetch(`${ANALYZE_BASE}/analyze`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: data.at ?? new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** POST /api/watches — the ONLY write the dashboard performs (D-08: orders
+ *  and approvals are never submitted from the dashboard). */
+export async function postWatch(body: { symbol: string; direction: "LONG" | "SHORT"; trigger_json: string; invalidation_json: string }): Promise<Result<{ id: string }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/watches`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader", accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

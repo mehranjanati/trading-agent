@@ -52,8 +52,13 @@ func main() {
 		go publishLoop(base)
 	}
 
+	// Phase 1 (AI strategies): advisory deep-analysis engine. Never gates
+	// readiness: the heartbeat plane is safety-critical, analysis is not.
+	initStrategies()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
+	mux.HandleFunc("/analyze", serveAnalyze)
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if !ready.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -85,6 +90,14 @@ func coldStart(base string) error {
 	}
 	if _, err := redisx.Do("DEL", "watch:active-ids"); err != nil {
 		return fmt.Errorf("redis: %w", err)
+	}
+	// An empty ACTIVE set is a valid cold-start state (fresh paper deploy has
+	// no watches yet): DEL alone is the reload. SADD with zero members is a
+	// Redis protocol error, so it must be skipped (E12-T01 remote-D1 find).
+	if len(p.Watches) == 0 {
+		activeN.Store(0)
+		counters.Reloads.Add(1)
+		return nil
 	}
 	args := []string{"SADD", "watch:active-ids"}
 	for _, w := range p.Watches {

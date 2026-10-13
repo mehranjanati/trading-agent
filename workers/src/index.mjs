@@ -3,7 +3,7 @@
 // E06-T02-S3: cron composes the reconcile sweep + lease renewal into the rejoin gate.
 // TODO(E05-T02 phase): replace X-Role stub with OIDC middleware before staging.
 // D1 binding: env.DB (wrangler.toml). Local tests inject a sqlite-backed fake.
-import { err } from "./errors.mjs";
+import { err, CORS } from "./errors.mjs";
 import { createStore } from "./idempotency.mjs";
 import { writeErr, recordIncident } from "./_shared.mjs";
 import { watchRoutes } from "./routes.mjs";
@@ -23,6 +23,9 @@ export default {
   async fetch(req, env) {
     const u = new URL(req.url);
     const p = u.pathname;
+    // E12-T01: CORS preflight — the Pages dashboard may probe before a GET.
+    // Methods/headers mirror the CORS allow-list (reads only; D-08).
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
     try {
       if (req.method === "POST" && p === "/api/health:heartbeat") return health.heartbeat(req, env);
       if (req.method === "GET" && p === "/api/health") return health.status(req, env);

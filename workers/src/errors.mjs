@@ -14,9 +14,20 @@ export function err(code, message, opts = {}) {
       retryable: opts.retryable ?? (status === 429 || status === 503),
       ...(opts.extra ?? {}),
     },
-    { status },
+    { status, headers: CORS },
   );
 }
+// E12-T01: the Pages dashboard (*.pages.dev) refreshes client-side (onMount)
+// against this API on a different origin (workers.dev). CORS deliberately
+// allows browser READS only (GET/HEAD) — POST is excluded from allow-methods so
+// a cross-origin browser can never submit orders/approvals (D-08, read-only
+// BFF). Non-browser callers (Go watcher, drills) are unaffected by CORS.
+export const CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, HEAD, OPTIONS",
+  "access-control-allow-headers": "accept, content-type, x-role, x-agent-token",
+  "access-control-max-age": "86400",
+};
 export function ok(data, status = 200) {
-  return Response.json(data, { status });
+  return Response.json(data, { status, headers: CORS });
 }

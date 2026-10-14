@@ -13,7 +13,7 @@ crons = ["* * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "trading_dev"
-database_id = "56e627b8-cad8-4b27-9977-d29c0338de1e"
+database_id = "2f21170c-1a7f-4512-a11f-68ddd473f4a6"
 migrations_dir = "../migrations"
 
 [vars]

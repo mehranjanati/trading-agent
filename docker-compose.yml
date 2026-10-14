@@ -25,9 +25,11 @@ services:
       GO_PORT: "8080"
       REDIS_ADDR: redis:6379
       # E12-T01: heartbeat/cold-start target is the DEPLOYED Workers API
-      # (https://trading-agent-control.apjkala25.workers.dev). The Mac keeps
+      # (https://trading-agent-control.mehranjannati.workers.dev — account
+      # fa101008; re-deployed there 2026-10-14 after the Apjkala25 account
+      # turned out to lack R2 at the account level, code 10042). The Mac keeps
       # pushing; Workers never dials the local Go plane.
-      WORKERS_URL: https://trading-agent-control.apjkala25.workers.dev
+      WORKERS_URL: https://trading-agent-control.mehranjannati.workers.dev
     ports:
       - "8080:8080"
     volumes:

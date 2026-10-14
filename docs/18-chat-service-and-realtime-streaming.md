@@ -10,13 +10,13 @@
 | Piece | Where | Role |
 |---|---|---|
 | Session store | Redis (`ta-redis`) | `chat:{id}:meta` HASH{created_at, principles} + `chat:{id}:msgs` LIST of JSON turns, both 24h TTL, refreshed on write |
-| Chat service | `go-watcher/cmd/chatd` (:8081) | HTTP for session CRUD, WebSocket for the turn loop |
+| Chat service | routes inside `go-watcher` (:8080) | HTTP for session CRUD, WebSocket for the turn loop — same binary/port as the watcher, no second process |
 | AI plane | Worker `POST /api/strategy:chat:stream` | owns the `AI` binding (no keys in Go); passes the model's SSE through untouched, reports the model on `x-ai-model` |
-| Client | dashboard `/chat` | WS when chatd is reachable, Worker REST (`/api/strategy:chat`) otherwise |
+| Client | dashboard `/chat` | WS when the Go chat routes are reachable, Worker REST (`/api/strategy:chat`) otherwise |
 
 ## 18.2 Contract
 
-HTTP (chatd):
+HTTP:
 
 - `POST /api/chat/create {principles?}` -> `201 {id}`
 - `GET /api/chat/{id}` -> `200 {messages[], principles}` (empty for unknown/TTL-expired id)
@@ -49,9 +49,39 @@ fail-closed.
 
 ## 18.5 Deployment note
 
-`chatd` shares the `go-watcher` image (prebuilt binary `docker/chatd`,
-entrypoint override in compose). Local dev: `:8081`. Public Pages cannot reach
-`localhost:8081` (browser local-network rules) — until a Cloudflare Tunnel or
-the Hetzner host exposes it, the cloud dashboard automatically renders the
-"REST fallback" badge and uses the Worker endpoint. To point Pages at a public
-chatd, build with `VITE_CHAT_BASE`/`VITE_CHAT_WS_BASE` (wss://).
+The chat routes are mounted in the `go-watcher` binary itself — one process,
+one port (`:8080`), one Docker service. Mounting is conditional on
+`WORKERS_URL` being set, since the AI plane is delegated to the Worker:
+
+```go
+if base != "" {
+    s := &chat.Service{Store: chat.NewStore(), AI: chat.NewAIClient(base), Origins: origins}
+    mux.Handle("/api/chat/", s)
+    mux.Handle("/ws/chat/", s)
+}
+```
+
+Public Pages cannot reach `localhost:8080` (browser local-network rules) —
+until a Cloudflare Tunnel or the Hetzner host exposes it, the cloud dashboard
+automatically renders the "REST fallback" badge and uses the Worker endpoint.
+To point Pages at a public host, build with `VITE_CHAT_BASE` /
+`VITE_CHAT_WS_BASE` (wss://), and set `CHAT_ORIGINS` to the allowed WebSocket
+origins so the socket rejects foreign `Origin` headers.
+
+
+## 18.6 Implementation notes
+
+- **Routing.** The service is mounted on a bare prefix (`/api/chat/`), so
+  `Service.ServeHTTP` does its own path+method dispatch and
+  `r.PathValue("id")` would silently return `""` (it only resolves against Go
+  1.22 `ServeMux` patterns). The router stores the id in the request context
+  and handlers read it through `chatID(r)`; `TestHandlersReceiveRoutedID`
+  pins this.
+- **SSE mirror typing.** Workers AI echoes `delta.content` into a top-level
+  `response` field with the *same JSON type*, so a numeric answer arrives as
+  `"response":2`. Those fields are therefore `json.RawMessage` + `rawText`:
+  a `string` field fails the frame's whole unmarshal and the raw JSON leaks to
+  the user.
+- **CORS.** The chat routes answer `OPTIONS` preflight themselves (204 with
+  `allow-methods: GET, POST, DELETE, OPTIONS`), since they are served by the
+  Go watcher and not by the Worker's `corsFor` layer.

@@ -6,12 +6,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"trading-agent/go-watcher/chat"
 	"trading-agent/go-watcher/heartbeat"
 	"trading-agent/go-watcher/metrics"
 	"trading-agent/go-watcher/redisx"
@@ -67,6 +70,20 @@ func main() {
 		}
 		fmt.Fprintln(w, "ready")
 	})
+	if base != "" {
+		// CHAT_ORIGINS is a comma-separated WebSocket Origin allow-list; unset
+		// (local dev) accepts any Origin.
+		var origins []string
+		for _, o := range strings.Split(os.Getenv("CHAT_ORIGINS"), ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				origins = append(origins, o)
+			}
+		}
+		s := &chat.Service{Store: chat.NewStore(), AI: chat.NewAIClient(base), Origins: origins}
+		mux.Handle("/api/chat/", s)
+		mux.Handle("/ws/chat/", s)
+	}
+
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, "active_watches=%d snapshot_at=%v\n", activeN.Load(), snapshotAt.Load())
 		_, _ = w.Write([]byte(counters.Render()))
@@ -159,4 +176,17 @@ func lastStreamID() (string, error) {
 		return "", nil
 	}
 	return items[0], nil
+}
+
+// setChatPathValue stores a route parameter in the request context so that
+// r.PathValue(key) works inside handler functions. The Go 1.22 ServeMux
+// does this automatically when patterns contain {key}; since we dispatch
+// manually here we do it ourselves.
+type chatPathKey struct{ name string }
+
+var idKey = chatPathKey{"id"}
+
+func setChatPathValue(r *http.Request, key, value string) *http.Request {
+	ctx := context.WithValue(r.Context(), key, value)
+	return r.WithContext(ctx)
 }

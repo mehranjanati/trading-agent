@@ -107,9 +107,9 @@ func extractCodeBlocks(text string) []CodeBlock {
 // field; older/simple models use `result`. `delta.reasoning` is
 // chain-of-thought and is deliberately NEVER surfaced.
 type sseEvent struct {
-	Response string `json:"response"`
-	Result   string `json:"result"`
-	Model    string `json:"model"`
+	Response json.RawMessage `json:"response"`
+	Result   json.RawMessage `json:"result"`
+	Model    string          `json:"model"`
 	Choices  []struct {
 		Delta struct {
 			Content string `json:"content"`
@@ -117,6 +117,10 @@ type sseEvent struct {
 	} `json:"choices"`
 }
 
+// Response/Result are RawMessage, not string: the mirror field echoes
+// delta.content verbatim, so a numeric answer arrives as JSON `2` and a typed
+// string field would fail the whole frame's unmarshal -- silently degrading the
+// stream into raw JSON echoed at the user.
 // parseSSEFrame extracts the delta text from one `data: ...` line. Returns
 // ("", false) for keep-alives/comments; done=true marks the [DONE] sentinel.
 func parseSSEFrame(line string) (text string, done bool, ok bool) {
@@ -132,14 +136,14 @@ func parseSSEFrame(line string) (text string, done bool, ok bool) {
 	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 		return payload, false, true // tolerate non-JSON deltas as raw text
 	}
-	if ev.Response != "" {
-		return ev.Response, false, true
+	if t := rawText(ev.Response); t != "" {
+		return t, false, true
 	}
 	if len(ev.Choices) > 0 && ev.Choices[0].Delta.Content != "" {
 		return ev.Choices[0].Delta.Content, false, true
 	}
-	if ev.Result != "" {
-		return ev.Result, false, true
+	if t := rawText(ev.Result); t != "" {
+		return t, false, true
 	}
 	return "", false, false
 }
@@ -157,4 +161,17 @@ func frameModel(line string) string {
 		return ""
 	}
 	return ev.Model
+}
+
+// rawText renders a raw JSON scalar field as plain text: strings lose their
+// quotes, other scalars keep their literal form, null/absent is "".
+func rawText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return strings.TrimSpace(string(raw))
 }

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -264,5 +265,251 @@ func TestStreamCodeFenceAcrossChunks(t *testing.T) {
 	}
 	if len(res.CodeBlocks) != 1 || res.CodeBlocks[0].Language != "go" || res.CodeBlocks[0].Code != "package main" {
 		t.Fatalf("split fence not reassembled: %+v text=%q", res.CodeBlocks, res.Text)
+	}
+}
+
+// ── ServeHTTP routing + CORS + WS origin gate ───────────────────────────────
+
+// nilStore keeps the HTTP routing tests off Redis: a store that fails every op
+// still proves the router reached the right handler (502, not 404).
+type nilStore struct{}
+
+func (nilStore) Create(string, string) error        { return nil }
+func (nilStore) Append(string, Message) error       { return errStore }
+func (nilStore) Messages(string) ([]Message, error) { return nil, errStore }
+func (nilStore) Principles(string) (string, error)  { return "", errStore }
+func (nilStore) SetPrinciples(string, string) error { return errStore }
+func (nilStore) Delete(string) error                { return errStore }
+
+var errStore = fmt.Errorf("no redis")
+
+func newSvc(origins ...string) *Service {
+	return &Service{Store: nilStore{}, AI: nil, Origins: origins}
+}
+
+func TestRoutePreflightReturns204(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "/api/chat/create", nil)
+	rec := httptest.NewRecorder()
+	newSvc().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS preflight must be 204, got %d", rec.Code)
+	}
+	if rec.Header().Get("access-control-allow-origin") != "*" {
+		t.Fatal("preflight must advertise allow-origin")
+	}
+	if rec.Header().Get("access-control-allow-methods") == "" {
+		t.Fatal("preflight must advertise allow-methods")
+	}
+}
+
+func TestRouteCreateReturns201(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/create", strings.NewReader(`{"principles":"x"}`))
+	rec := httptest.NewRecorder()
+	newSvc().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create must be 201, got %d", rec.Code)
+	}
+}
+
+func TestRouteGetDeleteReachStore(t *testing.T) {
+	// errStore proves dispatch happened: a router miss would answer 404.
+	for _, m := range []string{http.MethodGet, http.MethodDelete} {
+		req := httptest.NewRequest(m, "/api/chat/chat_1_abc", nil)
+		rec := httptest.NewRecorder()
+		newSvc().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("%s /api/chat/{id} must reach the store (502), got %d", m, rec.Code)
+		}
+	}
+}
+
+func TestRoutePrinciplesReachesStore(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/chat_1_abc/principles", strings.NewReader(`{"content":"p"}`))
+	rec := httptest.NewRecorder()
+	newSvc().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("principles must reach the store (502), got %d", rec.Code)
+	}
+}
+
+func TestRouteUnknownPathsAre404(t *testing.T) {
+	for _, p := range []string{"/", "/api/chat", "/api/chat/", "/nope", "/api/chat/a/b/c"} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rec := httptest.NewRecorder()
+		newSvc().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s must be 404, got %d", p, rec.Code)
+		}
+	}
+}
+
+func TestRouteWSPathIsDispatchedNot404(t *testing.T) {
+	// websocket.Accept rejects a non-upgrade request with 400 (it writes the
+	// 426/400 itself), which is still proof the router reached handleWS.
+	req := httptest.NewRequest(http.MethodGet, "/ws/chat/chat_1_abc", nil)
+	rec := httptest.NewRecorder()
+	newSvc().ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		t.Fatal("/ws/chat/{id} must be routed to handleWS, got 404")
+	}
+}
+
+func TestWSOriginAllowListRejectsForeignOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/ws/chat/chat_1_abc", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	newSvc("https://dash.example").ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign Origin must be 403, got %d", rec.Code)
+	}
+}
+
+func TestWSOriginAllowListAcceptsListedOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/ws/chat/chat_1_abc", nil)
+	req.Header.Set("Origin", "https://dash.example")
+	rec := httptest.NewRecorder()
+	newSvc("https://dash.example").ServeHTTP(rec, req)
+	if rec.Code == http.StatusForbidden {
+		t.Fatal("listed Origin must pass the gate")
+	}
+}
+
+func TestWSNoAllowListAcceptsAnyOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/ws/chat/chat_1_abc", nil)
+	req.Header.Set("Origin", "https://anything.example")
+	rec := httptest.NewRecorder()
+	newSvc().ServeHTTP(rec, req)
+	if rec.Code == http.StatusForbidden {
+		t.Fatal("empty allow-list must accept any Origin (local dev)")
+	}
+}
+
+func TestOriginAllowed(t *testing.T) {
+	if !originAllowed("https://a", []string{"https://a", "https://b"}) {
+		t.Fatal("exact match must be allowed")
+	}
+	if originAllowed("https://a.evil", []string{"https://a"}) {
+		t.Fatal("prefix is not a match — no wildcard expansion")
+	}
+	if originAllowed("https://c", []string{"https://a"}) {
+		t.Fatal("unlisted origin must be rejected")
+	}
+}
+
+func TestRouteCreateBodyIsExact(t *testing.T) {
+	// The 201 body must be the only thing on the wire: a handler that falls
+	// through to http.NotFound appends "404 page not found" and corrupts the
+	// JSON the dashboard parses.
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/create", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	newSvc().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create must be 201, got %d", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body must be pure JSON, got %q: %v", rec.Body.String(), err)
+	}
+	id, _ := body["id"].(string)
+	if id == "" {
+		t.Fatal("create must return the new session id")
+	}
+}
+
+// idStore records the id each handler actually received, proving the router's
+// context value survives into the handler (r.PathValue cannot see it).
+type idStore struct{ got []string }
+
+func (s *idStore) Create(id, _ string) error          { s.got = append(s.got, id); return nil }
+func (s *idStore) Append(id string, _ Message) error  { s.got = append(s.got, id); return nil }
+func (s *idStore) Messages(string) ([]Message, error) { return nil, nil }
+func (s *idStore) Principles(id string) (string, error) {
+	s.got = append(s.got, id)
+	return "P", nil
+}
+func (s *idStore) SetPrinciples(id, _ string) error { s.got = append(s.got, id); return nil }
+func (s *idStore) Delete(id string) error           { s.got = append(s.got, id); return nil }
+
+func TestHandlersReceiveRoutedID(t *testing.T) {
+	const want = "chat_1_abc"
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/chat/" + want},
+		{http.MethodDelete, "/api/chat/" + want},
+	} {
+		st := &idStore{}
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		svc := &Service{Store: st}
+		svc.ServeHTTP(httptest.NewRecorder(), req)
+		if len(st.got) != 1 || st.got[0] != want {
+			t.Fatalf("%s %s: handler got %v, want [%s]", tc.method, tc.path, st.got, want)
+		}
+	}
+}
+
+func TestHandleGetReturnsPrinciples(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/chat_1_abc", nil)
+	rec := httptest.NewRecorder()
+	svc := &Service{Store: &idStore{}}
+	svc.ServeHTTP(rec, req)
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("bad JSON %q: %v", rec.Body.String(), err)
+	}
+	if body["principles"] != "P" {
+		t.Fatalf("principles must round-trip from the store, got %v", body["principles"])
+	}
+}
+
+// ── SSE mirror-field typing ─────────────────────────────────────────────────
+
+func TestParseSSEFrameNumericResponseMirror(t *testing.T) {
+	// Workers AI mirrors delta.content into a top-level `response` field with
+	// the SAME JSON type, so "2" arrives as the number 2. A string-typed field
+	// fails the frame unmarshal and the raw JSON leaks to the user.
+	got, done, ok := parseSSEFrame(`data: {"response":2,"choices":[{"delta":{"content":"2"}}]}`)
+	if done || !ok {
+		t.Fatalf("frame must parse, got done=%v ok=%v text=%q", done, ok, got)
+	}
+	if got != "2" {
+		t.Fatalf("numeric mirror must yield 2, got %q", got)
+	}
+}
+
+func TestParseSSEFrameStringResponseMirror(t *testing.T) {
+	got, _, ok := parseSSEFrame(`data: {"response":"hi"}`)
+	if !ok || got != "hi" {
+		t.Fatalf("string mirror must yield hi unquoted, got ok=%v %q", ok, got)
+	}
+}
+
+func TestParseSSEFrameNullResponseFallsThrough(t *testing.T) {
+	// A null mirror is not text; the content delta still wins.
+	got, _, ok := parseSSEFrame(`data: {"response":null,"choices":[{"delta":{"content":"ok"}}]}`)
+	if !ok || got != "ok" {
+		t.Fatalf("null mirror must fall through to content, got ok=%v %q", ok, got)
+	}
+}
+
+func TestParseSSEFrameNeverSurfacesReasoning(t *testing.T) {
+	for _, frame := range []string{
+		`data: {"choices":[{"delta":{"reasoning":"thinking hard"}}]}`,
+		`data: {"choices":[{"delta":{"reasoning":"a","reasoning_content":"b"}}]}`,
+		`data: {"response":null,"choices":[{"delta":{"reasoning":"a"}}]}`,
+	} {
+		got, done, ok := parseSSEFrame(frame)
+		if ok || done || got != "" {
+			t.Fatalf("reasoning-only frame must yield nothing, got ok=%v done=%v %q (%s)", ok, done, got, frame)
+		}
+	}
+}
+
+func TestParseSSEFrameSentinelAndNoise(t *testing.T) {
+	if _, done, _ := parseSSEFrame("data: [DONE]"); !done {
+		t.Fatal("[DONE] must mark the end")
+	}
+	for _, noise := range []string{":keep-alive", "", "event: ping", "id: 1"} {
+		if _, done, ok := parseSSEFrame(noise); done || ok {
+			t.Fatalf("%q must be ignored, got done=%v ok=%v", noise, done, ok)
+		}
 	}
 }

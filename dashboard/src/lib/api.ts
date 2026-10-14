@@ -12,9 +12,10 @@ import { badge, modeBanner, actionBlocker } from "./freshness.mjs";
 export const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? "http://127.0.0.1:8787";
 // Go watcher :8080 — advisory analysis only (no orders, no approvals).
 export const ANALYZE_BASE: string = (import.meta.env?.VITE_ANALYZE_BASE as string | undefined) ?? "http://127.0.0.1:8080";
-// Go chatd :8081 — chat sessions (Redis) + WebSocket streaming. Advisory only.
-export const CHAT_BASE: string = (import.meta.env?.VITE_CHAT_BASE as string | undefined) ?? "http://127.0.0.1:8081";
-/** ws:// host for chatd; https pages must set VITE_CHAT_WS_BASE to a wss:// tunnel. */
+// Chat sessions (Redis) + WebSocket streaming live inside the Go watcher
+// (:8080) — one binary, one port. Advisory only: no orders, no approvals.
+export const CHAT_BASE: string = (import.meta.env?.VITE_CHAT_BASE as string | undefined) ?? ANALYZE_BASE;
+/** ws:// host for the chat turn loop; https pages must set VITE_CHAT_WS_BASE to a wss:// tunnel. */
 export const CHAT_WS_BASE: string =
   (import.meta.env?.VITE_CHAT_WS_BASE as string | undefined) ??
   CHAT_BASE.replace(/^http/, "ws");
@@ -141,15 +142,15 @@ export async function postDraft(body: {
   }
 }
 
-// ── Go chat service (chatd :8081) ─ Redis sessions, WebSocket streaming ─────
+// ── Chat service (inside go-watcher :8080) ─ Redis sessions, WS streaming ────
 // Advisory plane only: create/read/delete sessions and save principles.
-// The real-time turn loop runs over chatSocket(). If chatd is unreachable
-// (e.g. public Pages without a tunnel), the /chat page falls back to the
-// Worker REST endpoint postChat above.
+// The real-time turn loop runs over chatSocket(). If the Go chat routes are
+// unreachable (e.g. public Pages without a tunnel), the /chat page falls back
+// to the Worker REST endpoint postChat above.
 
 export type ChatStoredMessage = { role: string; content: string; timestamp: string };
 
-/** Availability probe: any HTTP reply from chatd means the service is up. */
+/** Availability probe: any HTTP reply from the chat routes means the service is up. */
 export async function chatServiceUp(): Promise<boolean> {
   try {
     const ac = new AbortController();

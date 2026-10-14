@@ -2,18 +2,18 @@
 //
 // HTTP (state ops):
 //
-//	POST /api/chat/create        {principles?}          → {id}
-//	GET  /api/chat/{id}                                 → {messages, principles}
-//	DELETE /api/chat/{id}                               → {}
-//	POST /api/chat/{id}/principles {content}            → {}
+//	POST /api/chat/create        {principles?}          -> {id}
+//	GET  /api/chat/{id}                                 -> {messages, principles}
+//	DELETE /api/chat/{id}                               -> {}
+//	POST /api/chat/{id}/principles {content}            -> {}
 //
 // WebSocket /ws/chat/{id} (real-time turn loop):
 //
-//	client → {"type":"message","content":"..."}  (user turn)
-//	client → {"type":"principles","content":"..."}
-//	server → {"type":"chunk","text":"..."}        (streamed deltas)
-//	server → {"type":"done","codeBlocks":[...]}   (turn complete, persisted)
-//	server → {"type":"error","error":"..."}
+//	client -> {"type":"message","content":"..."}  (user turn)
+//	client -> {"type":"principles","content":"..."}
+//	server -> {"type":"chunk","text":"..."}        (streamed deltas)
+//	server -> {"type":"done","codeBlocks":[...]}   (turn complete, persisted)
+//	server -> {"type":"error","error":"..."}
 package chat
 
 import (
@@ -27,13 +27,47 @@ import (
 	"github.com/coder/websocket"
 )
 
-// Service wires the store + AI client for the mux.
-type Service struct {
-	Store *Store
-	AI    *AIClient
+// SessionStore is the persistence seam the HTTP/WS handlers talk through.
+// *Store (Redis) is the production implementation; tests substitute a stub so
+// routing can be proven without a live Redis.
+type SessionStore interface {
+	Create(id, principles string) error
+	Append(id string, m Message) error
+	Messages(id string) ([]Message, error)
+	Principles(id string) (string, error)
+	SetPrinciples(id, principles string) error
+	Delete(id string) error
 }
 
-// wsIn is the client → server WS envelope.
+type Service struct {
+	Store SessionStore
+	AI    *AIClient
+	// Origins is the accepted WebSocket Origin allow-list. Empty means "any
+	// origin" (local dev / same-host deployments); browsers always send Origin,
+	// so an explicit list is the fail-closed option for public tunnels.
+	Origins []string
+}
+
+// chatCORS — advisory-only routes, so every method/header is permitted, but
+// only the declared headers are advertised (the browser enforces the list).
+var chatCORS = map[string]string{
+	"access-control-allow-origin":  "*",
+	"access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+	"access-control-allow-headers": "content-type, accept",
+	"access-control-max-age":       "600",
+}
+
+func withChatCORS(w http.ResponseWriter, r *http.Request) bool {
+	for k, v := range chatCORS {
+		w.Header().Set(k, v)
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return false
+	}
+	return true
+}
+
 type wsIn struct {
 	Type    string `json:"type"`
 	Content string `json:"content"`
@@ -51,21 +85,6 @@ func writeChatErr(w http.ResponseWriter, code int, errCode, msg string) {
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
 
-// Handler builds the chat mux (path patterns need Go 1.22+).
-func (s *Service) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/chat/create", s.handleCreate)
-	mux.HandleFunc("GET /api/chat/{id}", s.handleGet)
-	mux.HandleFunc("DELETE /api/chat/{id}", s.handleDelete)
-	mux.HandleFunc("POST /api/chat/{id}/principles", s.handlePrinciples)
-	mux.HandleFunc("/ws/chat/{id}", s.handleWS)
-	return mux
-}
-
-func newID() string {
-	return fmt.Sprintf("chat_%d_%s", time.Now().UnixMilli(), randomSuffix())
-}
-
 func randomSuffix() string {
 	const cs = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 6)
@@ -74,6 +93,10 @@ func randomSuffix() string {
 		b[i] = cs[int(now>>uint(i*3))%len(cs)]
 	}
 	return string(b)
+}
+
+func newID() string {
+	return fmt.Sprintf("chat_%d_%s", time.Now().UnixMilli(), randomSuffix())
 }
 
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +115,7 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := chatID(r)
 	msgs, err := s.Store.Messages(id)
 	if err != nil {
 		writeChatErr(w, http.StatusBadGateway, "REDIS", err.Error())
@@ -103,7 +126,7 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := chatID(r)
 	if err := s.Store.Delete(id); err != nil {
 		writeChatErr(w, http.StatusBadGateway, "REDIS", err.Error())
 		return
@@ -112,7 +135,7 @@ func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handlePrinciples(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := chatID(r)
 	var body struct {
 		Content string `json:"content"`
 	}
@@ -127,11 +150,21 @@ func (s *Service) handlePrinciples(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true})
 }
 
-// handleWS is the real-time turn loop: one user message → streamed chunks →
-// done (persisted). The socket stays open for further turns.
 func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	c, err := websocket.Accept(w, r, nil)
+	id := chatID(r)
+	// Same-origin (or Origin-less, e.g. a CLI dial) is always allowed. A
+	// browser Origin is matched against the configured allow-list; an empty
+	// list means "accept any" for local dev.
+	accept := &websocket.AcceptOptions{InsecureSkipVerify: true}
+	if len(s.Origins) > 0 {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if !originAllowed(origin, s.Origins) {
+				writeChatErr(w, http.StatusForbidden, "ORIGIN", "origin not allowed")
+				return
+			}
+		}
+	}
+	c, err := websocket.Accept(w, r, accept)
 	if err != nil {
 		return
 	}
@@ -145,7 +178,7 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		wctx, wcancel := context.WithTimeout(ctx, wsWriteTimeout)
+		wctx, wcancel := context.WithTimeout(ctx, 30*time.Second)
 		defer wcancel()
 		return c.Write(wctx, websocket.MessageText, raw)
 	}
@@ -153,7 +186,7 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, raw, err := c.Read(ctx)
 		if err != nil {
-			return // client went away or socket closed
+			return
 		}
 		var in wsIn
 		if json.Unmarshal(raw, &in) != nil {
@@ -170,9 +203,6 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 				_ = send(ChatEvent{Type: "error", Error: "empty message"})
 				continue
 			}
-			// Persist the user turn BEFORE the model runs (fail-open chat
-			// history: a lost assistant reply is a transcript gap, never a
-			// lost user intent).
 			userMsg := Message{Role: "user", Content: in.Content, Timestamp: nowUTC()}
 			if err := s.Store.Append(id, userMsg); err != nil {
 				_ = send(ChatEvent{Type: "error", Error: err.Error()})
@@ -202,4 +232,78 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 			_ = send(ChatEvent{Type: "error", Error: "unknown type"})
 		}
 	}
+}
+
+type chatPathKey struct{ name string }
+
+var idKey = chatPathKey{"id"}
+
+func setChatPathValue(r *http.Request, key any, value string) *http.Request {
+	ctx := context.WithValue(r.Context(), key, value)
+	return r.WithContext(ctx)
+}
+
+// chatID reads the id the router attached. r.PathValue is NOT usable here:
+// it only resolves against Go 1.22 ServeMux patterns, and the service is
+// mounted on a plain prefix, so every handler would silently see "".
+func chatID(r *http.Request) string {
+	v, _ := r.Context().Value(idKey).(string)
+	return v
+}
+
+// originAllowed reports whether origin exactly matches an entry of allowed.
+func originAllowed(origin string, allowed []string) bool {
+	for _, a := range allowed {
+		if a == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// ServeHTTP dispatches incoming requests by path+method.
+func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !withChatCORS(w, r) {
+		return
+	}
+	path := r.URL.Path
+	method := r.Method
+
+	switch {
+	case path == "/api/chat/create" && method == "POST":
+		s.handleCreate(w, r)
+		return
+	case strings.HasPrefix(path, "/api/chat/") && !strings.HasSuffix(path, "/principles"):
+		parts := strings.Split(strings.TrimPrefix(path, "/api/chat/"), "/")
+		if len(parts) >= 1 && parts[0] != "" && len(parts) <= 2 {
+			id := parts[0]
+			if !strings.Contains(id, "/") {
+				r = setChatPathValue(r, idKey, id)
+				switch method {
+				case "GET":
+					s.handleGet(w, r)
+				case "DELETE":
+					s.handleDelete(w, r)
+				default:
+					http.NotFound(w, r)
+				}
+				return
+			}
+		}
+	case strings.HasSuffix(path, "/principles") && method == "POST":
+		id := strings.TrimSuffix(path[len("/api/chat/"):], "/principles")
+		if id != "" && !strings.Contains(id, "/") {
+			r = setChatPathValue(r, idKey, id)
+			s.handlePrinciples(w, r)
+			return
+		}
+	case strings.HasPrefix(path, "/ws/chat/"):
+		id := strings.TrimPrefix(path, "/ws/chat/")
+		if id != "" && !strings.Contains(id, "/") {
+			r = setChatPathValue(r, idKey, id)
+			s.handleWS(w, r)
+			return
+		}
+	}
+	http.NotFound(w, r)
 }

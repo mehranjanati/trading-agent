@@ -28,7 +28,7 @@
   let principles = "";
   let principlesOpen = false;
 
-  // WS mode: chatd (Go + Redis + WebSocket). Rest mode: Worker POST fallback.
+  // WS mode: the chat routes inside go-watcher. REST mode: Worker POST fallback.
   let mode: "ws" | "rest" = "rest";
   let sessionId = "";
   let live = ""; // streamed assistant text, committed on "done"
@@ -58,7 +58,7 @@
           sessionId = res.data.id;
           localStorage.setItem("chat_session_id", sessionId);
         } else {
-          mode = "rest"; // chatd answered the probe but create failed -> fallback
+          mode = "rest"; // the probe answered but create failed -> fallback
         }
       }
       if (mode === "ws") openSocket();
@@ -221,7 +221,7 @@
           <Badge variant="outline" class="border-amber-500 text-amber-500">reconnecting...</Badge>
         {/if}
       {:else}
-        <Badge variant="outline" title="chatd (Go/Redis/WS) unavailable - using the Worker REST endpoint">REST fallback</Badge>
+        <Badge variant="outline" title="chat routes (go-watcher :8080) unavailable - using the Worker REST endpoint">REST fallback</Badge>
       {/if}
     </div>
     <div class="flex gap-2">

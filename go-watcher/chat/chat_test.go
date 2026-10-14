@@ -153,7 +153,7 @@ func TestStreamAssemblesChunksAndModel(t *testing.T) {
 
 	c := NewAIClient(srv.URL)
 	var chunks []string
-	res, err := c.Stream(context.Background(), []Message{msg("user", "write a strategy")}, "Max risk 2%", func(s string) {
+	res, err := c.Stream(context.Background(), "", []Message{msg("user", "write a strategy")}, "Max risk 2%", func(s string) {
 		chunks = append(chunks, s)
 	})
 	if err != nil {
@@ -179,7 +179,7 @@ func TestStreamSurfacesWorkerError(t *testing.T) {
 		fmt.Fprint(w, `{"code":"VALIDATION","message":"messages array required (min 1)"}`)
 	}))
 	defer srv.Close()
-	_, err := NewAIClient(srv.URL).Stream(context.Background(), nil, "", nil)
+	_, err := NewAIClient(srv.URL).Stream(context.Background(), "", nil, "", nil)
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("worker error must surface, got %v", err)
 	}
@@ -234,7 +234,7 @@ func TestStreamRealChunkShapeWithoutHeader(t *testing.T) {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
-	res, err := NewAIClient(srv.URL).Stream(context.Background(), []Message{msg("user", "go")}, "", nil)
+	res, err := NewAIClient(srv.URL).Stream(context.Background(), "", []Message{msg("user", "go")}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestStreamCodeFenceAcrossChunks(t *testing.T) {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
-	res, err := NewAIClient(srv.URL).Stream(context.Background(), []Message{msg("user", "go")}, "", nil)
+	res, err := NewAIClient(srv.URL).Stream(context.Background(), "", []Message{msg("user", "go")}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

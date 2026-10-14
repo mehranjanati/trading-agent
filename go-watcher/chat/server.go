@@ -69,8 +69,69 @@ func withChatCORS(w http.ResponseWriter, r *http.Request) bool {
 }
 
 type wsIn struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
+	Type    string   `json:"type"`
+	ID      string   `json:"id,omitempty"` // client-generated turn id (crypto.randomUUID)
+	Content string   `json:"content"`
+	Image   *wsImage `json:"image,omitempty"`
+}
+
+// wsImage is the inline chart a client attaches to a user turn. DataURL is a
+// base64 data URL the client already downscaled (max 1568px longest edge,
+// JPEG q0.85); the Worker stores the decoded bytes in R2 and a metadata row in
+// D1. A top-level `image` request parameter is deprecated in Workers AI — the
+// image must ride a `user` content part, which the AI client builds.
+type wsImage struct {
+	MediaType string `json:"mediaType"`
+	DataURL   string `json:"dataUrl"`
+	Detail    string `json:"detail,omitempty"` // low|high|auto
+}
+
+const (
+	// maxWSReadBytes is the inbound frame cap: one downscaled chart (≤1.5 MB
+	// decoded) plus base64 overhead and the JSON envelope.
+	maxWSReadBytes = 4 << 20
+	// maxImageDataURL bounds the inline data URL before it is decoded.
+	maxImageDataURL = 2 << 20
+)
+
+// imageTypes is the media-type allow-list, mirrored by the Worker.
+var imageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true}
+
+// buildUserMessage validates an inbound turn and assembles the stored message.
+// The second return value is a non-empty error string when the turn is rejected
+// (the message is still returned so the client can correlate the error).
+func buildUserMessage(in wsIn) (Message, string) {
+	m := Message{ID: strings.TrimSpace(in.ID), Role: "user", Content: strings.TrimSpace(in.Content), Timestamp: nowUTC()}
+	if m.ID == "" {
+		m.ID = newMessageID()
+	}
+	if in.Image == nil {
+		return m, ""
+	}
+	img := in.Image
+	mediaType := strings.ToLower(strings.TrimSpace(img.MediaType))
+	if !imageTypes[mediaType] {
+		return m, "unsupported image type (want png/jpeg/webp)"
+	}
+	if !strings.HasPrefix(img.DataURL, "data:"+mediaType+";base64,") {
+		return m, "image dataUrl does not match its mediaType"
+	}
+	if len(img.DataURL) > maxImageDataURL {
+		return m, "image too large - downscale before upload"
+	}
+	detail := img.Detail
+	if detail != "low" && detail != "high" && detail != "auto" {
+		detail = "low"
+	}
+	if m.Content == "" {
+		m.Content = "Analyze the attached chart."
+	}
+	m.Attachments = []Attachment{{MediaType: mediaType, DataURL: img.DataURL, Detail: detail}}
+	return m, ""
+}
+
+func newMessageID() string {
+	return fmt.Sprintf("msg_%d_%s", time.Now().UnixMilli(), randomSuffix())
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -171,7 +232,7 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer c.CloseNow()
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
-	c.SetReadLimit(64 * 1024)
+	c.SetReadLimit(maxWSReadBytes)
 
 	send := func(ev ChatEvent) error {
 		raw, err := json.Marshal(ev)
@@ -199,35 +260,39 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 				_ = send(ChatEvent{Type: "error", Error: err.Error()})
 			}
 		case "message":
-			if strings.TrimSpace(in.Content) == "" {
+			if strings.TrimSpace(in.Content) == "" && in.Image == nil {
 				_ = send(ChatEvent{Type: "error", Error: "empty message"})
 				continue
 			}
-			userMsg := Message{Role: "user", Content: in.Content, Timestamp: nowUTC()}
+			userMsg, verr := buildUserMessage(in)
+			if verr != "" {
+				_ = send(ChatEvent{Type: "error", MessageID: userMsg.ID, Error: verr})
+				continue
+			}
 			if err := s.Store.Append(id, userMsg); err != nil {
-				_ = send(ChatEvent{Type: "error", Error: err.Error()})
+				_ = send(ChatEvent{Type: "error", MessageID: userMsg.ID, Error: err.Error()})
 				continue
 			}
 			history, err := s.Store.Messages(id)
 			if err != nil {
-				_ = send(ChatEvent{Type: "error", Error: err.Error()})
+				_ = send(ChatEvent{Type: "error", MessageID: userMsg.ID, Error: err.Error()})
 				continue
 			}
 			principles, _ := s.Store.Principles(id)
 			window := ApplyWindow(history, principles)
-			res, err := s.AI.Stream(ctx, window, principles, func(chunk string) {
+			res, err := s.AI.Stream(ctx, id, window, principles, func(chunk string) {
 				_ = send(ChatEvent{Type: "chunk", Text: chunk})
 			})
 			if err != nil {
-				_ = send(ChatEvent{Type: "error", Error: err.Error()})
+				_ = send(ChatEvent{Type: "error", MessageID: userMsg.ID, Error: err.Error()})
 				continue
 			}
-			aiMsg := Message{Role: "assistant", Content: res.Text, Timestamp: nowUTC()}
+			aiMsg := Message{ID: newMessageID(), Role: "assistant", Content: res.Text, Timestamp: nowUTC()}
 			if err := s.Store.Append(id, aiMsg); err != nil {
-				_ = send(ChatEvent{Type: "error", Error: err.Error()})
+				_ = send(ChatEvent{Type: "error", MessageID: userMsg.ID, Error: err.Error()})
 				continue
 			}
-			_ = send(ChatEvent{Type: "done", Text: res.Text, CodeBlocks: res.CodeBlocks, Model: res.Model})
+			_ = send(ChatEvent{Type: "done", Text: res.Text, CodeBlocks: res.CodeBlocks, Model: res.Model, MessageID: userMsg.ID})
 		default:
 			_ = send(ChatEvent{Type: "error", Error: "unknown type"})
 		}

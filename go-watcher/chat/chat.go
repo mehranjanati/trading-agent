@@ -29,13 +29,34 @@ const (
 	msgTTL           = 24 * time.Hour
 	sseReadTimeout   = 120 * time.Second
 	wsWriteTimeout   = 30 * time.Second
+	// imageTokens is the prompt cost of one chart image at detail:"low",
+	// measured live: a 1600x900 screenshot ≈ 1432 tokens. The window budget must
+	// pay for images too, or the assembled request overflows the model.
+	imageTokens = 1500
+	// maxImageTurns bounds how many image-bearing turns carry their bytes to
+	// the model. Re-sending every chart on every turn would dominate the bill;
+	// older charts degrade to a text marker the model has already seen.
+	maxImageTurns = 2
 )
 
 // Message is one stored conversation turn.
 type Message struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Timestamp string `json:"timestamp"`
+	ID          string       `json:"id,omitempty"`
+	Role        string       `json:"role"`
+	Content     string       `json:"content"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+	Timestamp   string       `json:"timestamp"`
+}
+
+// Attachment is one chart image on a user turn (ADR-010). The bytes live in R2
+// (the Worker writes them; D1's 2 MB per-value cap cannot hold a base64 blob)
+// and ride inline in DataURL so a live turn, and the newest maxImageTurns
+// image-bearing turns, can carry them to the model.
+type Attachment struct {
+	MediaType string `json:"mediaType"`
+	DataURL   string `json:"dataUrl,omitempty"`
+	Detail    string `json:"detail,omitempty"` // low|high|auto
+	Bytes     int    `json:"bytes,omitempty"`
 }
 
 // CodeBlock is one fenced block extracted from an assistant reply.
@@ -50,21 +71,28 @@ type ChatEvent struct {
 	Text       string      `json:"text,omitempty"`
 	CodeBlocks []CodeBlock `json:"codeBlocks,omitempty"`
 	Model      string      `json:"model,omitempty"`
-	Error      string      `json:"error,omitempty"`
+	// MessageID echoes the client's turn id (crypto.randomUUID) so the client
+	// can tie a saved strategy draft back to the exact chart that produced it.
+	MessageID string `json:"messageId,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // estimateTokens is a cheap heuristic (~4 chars/token); the window is a
 // budget, not an exact count — the model tolerates ±10%.
 func estimateTokens(s string) int { return len(s) / 4 }
 
+// attachmentTokens is the image share of a turn's prompt cost.
+func attachmentTokens(m Message) int { return len(m.Attachments) * imageTokens }
+
 // ApplyWindow enforces the context budget: keep principles (they are policy)
-// and the newest messages that fit; never emit an empty history.
+// and the newest messages that fit; never emit an empty history. Attachments
+// count against the budget as well as text.
 func ApplyWindow(msgs []Message, principles string) []Message {
 	budget := maxContextTokens - estimateTokens(principles) - 512
 	total := 0
 	keep := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
-		total += estimateTokens(msgs[i].Content)
+		total += estimateTokens(msgs[i].Content) + attachmentTokens(msgs[i])
 		if total > budget {
 			break
 		}

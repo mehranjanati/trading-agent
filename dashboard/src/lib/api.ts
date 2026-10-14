@@ -170,8 +170,15 @@ export async function postDraft(body: {
 export type ChatStoredAttachment = { mediaType: string; dataUrl?: string; detail?: string; bytes?: number };
 export type ChatStoredMessage = { id?: string; role: string; content: string; attachments?: ChatStoredAttachment[]; timestamp: string };
 
-/** Availability probe: any HTTP reply from the chat routes means the service is up. */
+/** Availability probe: any HTTP reply from the chat routes means the service is up.
+ *  NOTE: /api/chat/* lives in the Go watcher only — the Worker answers 501
+ *  (NOT_IMPLEMENTED), which correctly means "REST fallback mode". The 501 is
+ *  expected on Pages, so this probe never logs it (console noise, not an error). */
 export async function chatServiceUp(): Promise<boolean> {
+  // On a Pages deployment CHAT_BASE is the Worker, which has no /api/chat/*
+  // routes (they live in go-watcher). Skip the probe entirely and go straight
+  // to the Worker REST endpoint — no failed request, no console noise.
+  if (CHAT_BASE.includes("workers.dev")) return false;
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 1500);

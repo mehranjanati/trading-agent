@@ -42,6 +42,13 @@ type SessionStore interface {
 type Service struct {
 	Store SessionStore
 	AI    *AIClient
+	// Market builds the per-turn live price context (system message text).
+	// It is called with the turn's texts so the snapshot universe includes
+	// the symbols the user actually asked about. Nil (tests, degraded
+	// deployments) means no market context is injected — the model then
+	// truthfully reports it has no live data. Fail-soft by design: chat is
+	// advisory, so a price outage must never block a turn.
+	Market func(ctx context.Context, texts ...string) string
 	// Origins is the accepted WebSocket Origin allow-list. Empty means "any
 	// origin" (local dev / same-host deployments); browsers always send Origin,
 	// so an explicit list is the fail-closed option for public tunnels.
@@ -280,6 +287,18 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			principles, _ := s.Store.Principles(id)
 			window := ApplyWindow(history, principles)
+			// Market context: the model has no market access of its own, so
+			// every turn carries a fresh price snapshot as an ephemeral system
+			// message at the head of the outbound window. It is NOT stored —
+			// only the user/assistant turns are persisted above/below, so a
+			// later turn never quotes yesterday's injected price as history.
+			// Fail-soft: a snapshot outage (Market nil or Fetch empty) yields
+			// an explicit "unavailable" line, never a fabricated number.
+			if s.Market != nil {
+				if ctxMsg := s.Market(ctx, outboundTexts(history)...); ctxMsg != "" {
+					window = append([]Message{{Role: "system", Content: ctxMsg, Timestamp: nowUTC()}}, window...)
+				}
+			}
 			res, err := s.AI.Stream(ctx, id, window, principles, func(chunk string) {
 				_ = send(ChatEvent{Type: "chunk", Text: chunk})
 			})
@@ -300,6 +319,27 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 type chatPathKey struct{ name string }
+
+// outboundTexts returns the turn texts the symbol extractor scans. Cap: the
+// last 4 non-empty turns (the user's question plus enough assistant context
+// to catch "and ETH" follow-ups) — scanning a whole 24h session would both
+// burn the snapshot budget and resurrect symbols from pages ago.
+func outboundTexts(history []Message) []string {
+	n := len(history)
+	if n > 4 {
+		history = history[n-4:]
+	}
+	out := make([]string, 0, len(history))
+	for _, m := range history {
+		if m.Role == "system" { // never re-scan an injected market line
+			continue
+		}
+		if t := strings.TrimSpace(m.Content); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
 var idKey = chatPathKey{"id"}
 

@@ -17,6 +17,7 @@ import (
 	"trading-agent/go-watcher/chat"
 	"trading-agent/go-watcher/heartbeat"
 	"trading-agent/go-watcher/metrics"
+	"trading-agent/go-watcher/prices"
 	"trading-agent/go-watcher/redisx"
 	"trading-agent/go-watcher/snapshot"
 	"trading-agent/go-watcher/stream"
@@ -79,7 +80,14 @@ func main() {
 				origins = append(origins, o)
 			}
 		}
-		s := &chat.Service{Store: chat.NewStore(), AI: chat.NewAIClient(base), Origins: origins}
+		// Market = the live price context every turn carries to the model
+		// (Redis last-tick, then Toobit/Binance REST). Bounded + fail-soft
+		// inside prices.Fetch: an empty snapshot renders an explicit
+		// "unavailable" system line instead of blocking the turn.
+		market := func(ctx context.Context, texts ...string) string {
+			return prices.FetchAndRender(ctx, texts...)
+		}
+		s := &chat.Service{Store: chat.NewStore(), AI: chat.NewAIClient(base), Market: market, Origins: origins}
 		mux.Handle("/api/chat/", s)
 		mux.Handle("/ws/chat/", s)
 	}

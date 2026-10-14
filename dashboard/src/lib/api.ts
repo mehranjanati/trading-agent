@@ -12,7 +12,9 @@ import { badge, modeBanner, actionBlocker } from "./freshness.mjs";
 // Production Worker — the fallback when no VITE_* env is baked in (Pages
 // deploys must set VITE_API_BASE at build time; this default keeps a stale
 // or env-less bundle from ever pointing at localhost in production).
-const PROD_WORKER = "https://trading-agent-control.apjkala25.workers.dev";
+// 2026-10-14: production moved to the fa101008 account after Apjkala25 lost
+// R2 at the account level — the old apjkala25 URL is no longer the live API.
+const PROD_WORKER = "https://trading-agent-control.mehranjannati.workers.dev";
 
 export const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? PROD_WORKER;
 // Go watcher :8080 — advisory analysis only (no orders, no approvals).

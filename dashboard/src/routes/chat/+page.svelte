@@ -13,13 +13,17 @@
     deleteChatSession,
     postChatPrinciples,
     chatSocket,
+    downscaleImage,
+    MAX_IMAGE_EDGE,
+    type ChartAttachment,
+    type ChatOutboundMessage,
   } from "$lib/api";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
 
-  type Message = { role: "user" | "assistant"; content: string; timestamp: string };
+  type Message = { id?: string; role: "user" | "assistant"; content: string; timestamp: string; image?: string };
   type CodeBlock = { language: string; code: string };
-  type WsEvent = { type: string; text?: string; error?: string; codeBlocks?: CodeBlock[] };
+  type WsEvent = { type: string; text?: string; error?: string; codeBlocks?: CodeBlock[]; messageId?: string };
 
   let messages: Message[] = [];
   let input = "";
@@ -27,6 +31,14 @@
   let error: string | null = null;
   let principles = "";
   let principlesOpen = false;
+  // Chart attachment for the next turn (ADR-010): downscaled client-side, then
+  // carried as an image_url content part.
+  let attachment: ChartAttachment | null = null;
+  let attachBusy = false;
+  let fileInput: HTMLInputElement | undefined;
+  // The turn id whose reply is on screen — saved with a draft so the code can
+  // be traced back to the chart it came from.
+  let lastTurnId = "";
 
   // WS mode: the chat routes inside go-watcher. REST mode: Worker POST fallback.
   let mode: "ws" | "rest" = "rest";
@@ -46,7 +58,13 @@
       if (sessionId) {
         const res = await getChatSession(sessionId);
         if (res.ok) {
-          messages = res.data.messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content, timestamp: m.timestamp }));
+          messages = res.data.messages.map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            timestamp: m.timestamp,
+            image: m.attachments?.[0]?.dataUrl,
+          }));
           if (res.data.principles) principles = res.data.principles;
         } else {
           sessionId = ""; // stale id (Redis TTL) -> fresh session
@@ -93,6 +111,7 @@
         live += msg.text ?? "";
       } else if (msg.type === "done") {
         const content = msg.text ?? live;
+        if (msg.messageId) lastTurnId = msg.messageId;
         messages = [...messages, { role: "assistant", content, timestamp: new Date().toISOString() }];
         live = "";
         loading = false;
@@ -113,7 +132,7 @@
           setTimeout(openSocket, 1500 * reconnects);
         } else {
           mode = "rest";
-          localStorage.setItem("chat_messages", JSON.stringify(messages));
+          persistLocal();
         }
       }
     };
@@ -127,21 +146,73 @@
     if (mode === "ws") {
       if (sessionId) void postChatPrinciples(sessionId, principles);
     } else {
-      localStorage.setItem("chat_messages", JSON.stringify(messages));
+      persistLocal();
+    }
+  }
+
+  /** The client owns the turn id (ADR-010): Go stores it in Redis and the Worker
+   *  writes it to D1, so a saved draft can point back at its chart. */
+  function newTurnId(): string {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+  }
+
+  /** Charts are large — keep only the text transcript in localStorage. */
+  function persistLocal() {
+    localStorage.setItem(
+      "chat_messages",
+      JSON.stringify(messages.map((m) => ({ id: m.id, role: m.role, content: m.content, timestamp: m.timestamp }))),
+    );
+  }
+
+  /** Downscale a pasted/dropped chart before it becomes the pending attachment. */
+  async function attachFile(file: File | Blob | null | undefined) {
+    if (!file) return;
+    attachBusy = true;
+    error = null;
+    const img = await downscaleImage(file);
+    attachBusy = false;
+    if (!img) {
+      error = "Could not read that image (try a PNG or JPEG screenshot).";
+      return;
+    }
+    attachment = img;
+  }
+
+  function onPaste(e: ClipboardEvent) {
+    const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+    const file = item?.getAsFile();
+    if (file) {
+      e.preventDefault();
+      void attachFile(file);
     }
   }
 
   async function handleSend() {
-    if (!input.trim() || loading) return;
+    const text = input.trim() || (attachment ? "Analyze the attached chart." : "");
+    if ((!text && !attachment) || loading) return;
     loading = true;
     error = null;
-    const userMsg: Message = { role: "user", content: input.trim(), timestamp: new Date().toISOString() };
+    const turnId = newTurnId();
+    const img = attachment;
+    const userMsg: Message = { id: turnId, role: "user", content: text, timestamp: new Date().toISOString(), image: img?.dataUrl };
     messages = [...messages, userMsg];
     input = "";
+    attachment = null;
 
     if (mode === "ws" && ws && ws.readyState === WebSocket.OPEN) {
       live = "";
-      ws.send(JSON.stringify({ type: "message", content: userMsg.content }));
+      ws.send(
+        JSON.stringify({
+          type: "message",
+          id: turnId,
+          content: text,
+          ...(img ? { image: { mediaType: img.mediaType, dataUrl: img.dataUrl, detail: "low" } } : {}),
+        }),
+      );
       return; // the done event completes the turn
     }
     if (mode === "ws") {
@@ -150,13 +221,27 @@
       return;
     }
 
-    // REST path (Worker fallback): synchronous round-trip.
-    const res = await postChat({ messages: messages.map((m) => ({ role: m.role, content: m.content })), principles });
+    // REST path (Worker fallback): synchronous round-trip. The chart rides the
+    // newest user turn as an image_url content part.
+    const outbound: ChatOutboundMessage[] = messages.map((m) =>
+      m.id === turnId && img
+        ? {
+            id: m.id,
+            role: m.role,
+            content: [
+              { type: "text", text: m.content },
+              { type: "image_url", image_url: { url: img.dataUrl, detail: "low" } },
+            ],
+          }
+        : { id: m.id, role: m.role, content: m.content },
+    );
+    const res = await postChat({ session_id: sessionId || undefined, messages: outbound, principles });
     loading = false;
     if (!res.ok) {
       error = res.error;
       return;
     }
+    lastTurnId = turnId;
     messages = [...messages, { role: "assistant", content: res.data.response, timestamp: new Date().toISOString() }];
     saveToStorage();
     setTimeout(() => Prism.highlightAll(), 0);
@@ -166,7 +251,7 @@
     const strategy_id = prompt("Strategy ID (e.g., sma-cross):");
     if (!strategy_id) return;
     const version = prompt("Version (e.g., 0.1.0):") || "0.1.0";
-    const res = await postDraft({ strategy_id, version, code: codeBlock.code, prompt: messages[0]?.content ?? "" });
+    const res = await postDraft({ strategy_id, version, code: codeBlock.code, prompt: messages[0]?.content ?? "", message_id: lastTurnId || undefined });
     if (res.ok) {
       alert(`Draft saved: ${res.data.id}`);
     } else {
@@ -258,6 +343,9 @@
           {#each messages as msg}
             <div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
               <div class="max-w-[80%] {msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'} rounded-lg p-3">
+                {#if msg.image}
+                  <img src={msg.image} alt="attached chart" class="mb-2 max-h-48 rounded border border-black/10" />
+                {/if}
                 <div class="text-sm whitespace-pre-wrap">{msg.content}</div>
                 <div class="text-xs opacity-70 mt-1">{new Date(msg.timestamp).toLocaleTimeString()}</div>
               </div>
@@ -299,9 +387,32 @@
 
   <Card class="mt-6">
     <CardContent class="p-4">
+      {#if attachment}
+        <div class="mb-2 flex items-center gap-3">
+          <img src={attachment.dataUrl} alt="chart to send" class="h-16 rounded border border-border" />
+          <span class="text-xs text-muted-foreground">
+            {attachment.mediaType} · {(attachment.bytes / 1024).toFixed(0)} KB · downscaled to ≤{MAX_IMAGE_EDGE}px
+          </span>
+          <Button variant="outline" size="sm" onclick={() => (attachment = null)}>Remove</Button>
+        </div>
+      {/if}
       <div class="flex gap-2">
-        <Textarea bind:value={input} placeholder="Describe your strategy or ask a question..." rows={3} onkeydown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())} />
-        <Button onclick={handleSend} disabled={loading || !input.trim()} class="self-end">{loading ? "Sending..." : "Send"}</Button>
+        <input
+          bind:this={fileInput}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          class="hidden"
+          onchange={(e) => {
+            const el = e.currentTarget as HTMLInputElement;
+            void attachFile(el.files?.[0]);
+            el.value = "";
+          }}
+        />
+        <Button variant="outline" onclick={() => fileInput?.click()} disabled={attachBusy || loading} class="self-end" title="Attach a chart screenshot (or paste one into the box)">
+          {attachBusy ? "..." : "Chart"}
+        </Button>
+        <Textarea bind:value={input} placeholder="Describe your strategy, ask a question, or paste a chart screenshot..." rows={3} onpaste={onPaste} onkeydown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())} />
+        <Button onclick={handleSend} disabled={loading || (!input.trim() && !attachment)} class="self-end">{loading ? "Sending..." : "Send"}</Button>
       </div>
       {#if error}<div class="mt-2 p-2 bg-destructive/10 border border-destructive rounded text-destructive text-sm">{error}</div>{/if}
     </CardContent>

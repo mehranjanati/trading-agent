@@ -15,6 +15,9 @@ Binding rule: every deploy reads secrets from a manager, never from repo files.
 | `SIGNAL_HMAC_SECRET` | dev value | staging value | prod value | **yes** | single-secret form for the signal webhook (E07-T01-S2b); never in repo |
 | `SIGNAL_HMAC_SECRETS` | — | `{"<source>":"<secret>",…}` | per-source map | **yes** | keyed per source; overrides the single form when set |
 | D1 database | `trading_dev` | `trading_stg` | `trading_prod` | binding | per-env in wrangler |
+| R2 bucket (`CHAT_MEDIA`) | `trading-chat-media` | per-env | per-env | binding | chart bytes for chat turns (ADR-010); D1 keeps metadata only |
+| `AI_MODEL` | `@cf/qwen/qwen3-30b-a3b-fp8` | same | same | no | text-only chat turns |
+| `AI_VISION_MODEL` | `@cf/qwen/qwen3.8-27b` | same | same | no | chart turns (ADR-010); ~1432 prompt tokens per 1600x900 chart at `detail:"low"` |
 | Log level | `debug` | `info` | `warn` | no | JSON logs, trace evt IDs |
 
 Related: [Secret store wiring](./SECRET-STORE.md) · [Security §07](../07-security-and-threat-model.md).

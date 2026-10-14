@@ -452,4 +452,22 @@ describe("strategies-ai — chart-image turns (ADR-010)", () => {
     assert.equal(body.vision, true);
     assert.equal(body.attachments, 1);
   });
+
+  it("a saved draft records the turn id that produced it", async () => {
+    const { env } = visionEnv();
+    const r = await post(app, env, "/api/strategy:draft",
+      JSON.stringify({ strategy_id: "chart-draft", version: "0.1.0", code: "package main", prompt: "chart?", message_id: "msg-uuid-9" }));
+    assert.equal(r.status, 201);
+    const rows = sqlJson(`SELECT message_id FROM strategy_drafts WHERE strategy_id='chart-draft';`);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].message_id, "msg-uuid-9");
+  });
+
+  it("a text-only draft leaves message_id NULL", async () => {
+    const { env } = visionEnv();
+    await post(app, env, "/api/strategy:draft",
+      JSON.stringify({ strategy_id: "text-draft", version: "0.1.0", code: "package main" }));
+    const rows = sqlJson(`SELECT message_id FROM strategy_drafts WHERE strategy_id='text-draft';`);
+    assert.equal(rows[0].message_id, null);
+  });
 });

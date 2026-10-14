@@ -13,3 +13,4 @@ Format: Status / Context / Decision / Alternatives / Consequences / Verification
 | [007](./ADR-007-strategy-contract-lifecycle.md) | Strategy contract + lifecycle | PROPOSED |
 | [008](./ADR-008-wasm-persistence-isolation.md) | WASM persistence + isolation | PROPOSED |
 | [009](./ADR-009-wasm-supply-chain.md) | WASM supply chain (AI-generated) | PROPOSED |
+| [010](./ADR-010-multimodal-chart-chat.md) | Multimodal chart chat (vision, R2/D1, turn ids) | PROPOSED |

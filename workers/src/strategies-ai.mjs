@@ -290,7 +290,7 @@ export function generateRoutes() {
       if (!strategy_id || !version || !code) {
         const e = new Error("strategy_id, version, code required"); e.code = "VALIDATION"; throw e;
       }
-      const draft = await recordDraft(env, { strategy_id, version, prompt: b.prompt ?? "", code, model: "chat-extract", status: "generated", actor: roleOf(req) });
+      const draft = await recordDraft(env, { strategy_id, version, prompt: b.prompt ?? "", code, model: "chat-extract", status: "generated", actor: roleOf(req), message_id: b.message_id });
       return ok({ id: draft.id, status: "generated" }, 201);
     }),
   };
@@ -308,11 +308,11 @@ export function extractCodeBlocks(text) {
   return blocks;
 }
 
-export async function recordDraft(env, { strategy_id, version, prompt, code, model, status, actor, reason }) {
+export async function recordDraft(env, { strategy_id, version, prompt, code, model, status, actor, reason, message_id }) {
   const now = new Date().toISOString();
   const id = `dr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   await env.DB.prepare(
-    "INSERT INTO strategy_drafts(id,strategy_id,version,prompt,code,model,status,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-  ).bind(id, strategy_id, version, prompt, code, model, reason ? `${status}: ${reason}` : status, actor, now).run();
+    "INSERT INTO strategy_drafts(id,strategy_id,version,prompt,code,model,status,created_by,created_at,message_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+  ).bind(id, strategy_id, version, prompt, code, model, reason ? `${status}: ${reason}` : status, actor, now, message_id ?? null).run();
   return { id, at: now };
 }

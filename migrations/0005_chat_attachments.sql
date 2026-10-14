@@ -21,3 +21,8 @@ CREATE TABLE IF NOT EXISTS chat_attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_attach_msg ON chat_attachments(message_id);
 CREATE INDEX IF NOT EXISTS idx_chat_attach_session ON chat_attachments(session_id, created_at);
+
+-- Provenance: a draft generated from a chart turn records the turn id, so
+-- "which chart produced this code?" is a join, not a guess. NULL for drafts
+-- generated from text alone (the /api/strategy:generate path).
+ALTER TABLE strategy_drafts ADD COLUMN message_id TEXT;

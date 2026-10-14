@@ -102,11 +102,21 @@ export async function getStrategyDrafts(): Promise<Result<{ drafts: StrategyDraf
   }
 }
 
-/** POST /api/strategy:chat — multi-turn chat with AI. */
+/** One multimodal content part (OpenAI/Qwen shape) — a chart rides the `user`
+ *  turn as an image_url part; the deprecated top-level `image` param is unused. */
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: string } };
+
+/** A turn as sent to the Worker (content is a string, or parts when charted). */
+export type ChatOutboundMessage = { id?: string; role: string; content: string | ChatContentPart[] };
+
+/** POST /api/strategy:chat — multi-turn chat with AI (advisory only). */
 export async function postChat(body: {
-  messages: { role: string; content: string }[];
+  session_id?: string;
+  messages: ChatOutboundMessage[];
   principles?: string;
-}): Promise<Result<{ response: string; codeBlocks: { language: string; code: string }[]; model: string }>> {
+}): Promise<Result<{ response: string; codeBlocks: { language: string; code: string }[]; model: string; vision?: boolean }>> {
   try {
     const res = await fetch(`${API_BASE}/api/strategy:chat`, {
       method: "POST",
@@ -121,12 +131,14 @@ export async function postChat(body: {
   }
 }
 
-/** POST /api/strategy:draft — save extracted code as draft (no AI call). */
+/** POST /api/strategy:draft — save extracted code as draft (no AI call).
+ *  message_id links the draft to the chart turn that produced it (ADR-010). */
 export async function postDraft(body: {
   strategy_id: string;
   version: string;
   code: string;
   prompt?: string;
+  message_id?: string;
 }): Promise<Result<{ id: string; status: string }>> {
   try {
     const res = await fetch(`${API_BASE}/api/strategy:draft`, {
@@ -148,7 +160,8 @@ export async function postDraft(body: {
 // unreachable (e.g. public Pages without a tunnel), the /chat page falls back
 // to the Worker REST endpoint postChat above.
 
-export type ChatStoredMessage = { role: string; content: string; timestamp: string };
+export type ChatStoredAttachment = { mediaType: string; dataUrl?: string; detail?: string; bytes?: number };
+export type ChatStoredMessage = { id?: string; role: string; content: string; attachments?: ChatStoredAttachment[]; timestamp: string };
 
 /** Availability probe: any HTTP reply from the chat routes means the service is up. */
 export async function chatServiceUp(): Promise<boolean> {
@@ -218,6 +231,50 @@ export async function postChatPrinciples(id: string, content: string): Promise<b
 /** Open the real-time turn socket for a session. */
 export function chatSocket(id: string): WebSocket {
   return new WebSocket(`${CHAT_WS_BASE}/ws/chat/${encodeURIComponent(id)}`);
+}
+
+// ── Chart attachments (ADR-010) ──────────────────────────────────────────────
+// The client downscales BEFORE upload. Measured live: a 1600x900 chart costs
+// ~1432 prompt tokens at detail:"low" and the cost scales with resolution, so a
+// 4K screenshot would burn ~4x that for no extra insight. Longest edge 1568px
+// is the vision tower's sweet spot; screenshots re-encode as JPEG q0.85.
+
+/** MAX_IMAGE_EDGE is the longest-edge cap applied before upload. */
+export const MAX_IMAGE_EDGE = 1568;
+
+/** One downscaled chart ready for a turn (data URL + decoded size). */
+export type ChartAttachment = { mediaType: string; dataUrl: string; bytes: number };
+
+/** downscaleImage re-encodes a pasted/dropped image for a chat turn. Returns
+ *  null when the browser cannot decode it (the caller shows an error). */
+export async function downscaleImage(
+  file: Blob,
+  opts: { maxEdge?: number; quality?: number } = {},
+): Promise<ChartAttachment | null> {
+  const maxEdge = opts.maxEdge ?? MAX_IMAGE_EDGE;
+  const quality = opts.quality ?? 0.85;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    // JPEG has no alpha: a transparent PNG would otherwise come out black.
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const mediaType = "image/jpeg";
+    const dataUrl = canvas.toDataURL(mediaType, quality);
+    const b64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    return { mediaType, dataUrl, bytes: Math.floor((b64.length * 3) / 4) };
+  } catch {
+    return null;
+  }
 }
 
 export const getHealth = () => getJson<Health>("/api/health");

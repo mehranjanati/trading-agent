@@ -9,9 +9,16 @@
 import type { Health, Watch, Signal, AnalysisRun, Approval, OrderIntent, Position, RecoveryIncident, StrategyVersion, BadgeLabel, StrategyDraft, AnalyzeRequest, AnalyzeResponse } from "./types";
 import { badge, modeBanner, actionBlocker } from "./freshness.mjs";
 
-export const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? "http://127.0.0.1:8787";
+// Production Worker — the fallback when no VITE_* env is baked in (Pages
+// deploys must set VITE_API_BASE at build time; this default keeps a stale
+// or env-less bundle from ever pointing at localhost in production).
+const PROD_WORKER = "https://trading-agent-control.apjkala25.workers.dev";
+
+export const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? PROD_WORKER;
 // Go watcher :8080 — advisory analysis only (no orders, no approvals).
-export const ANALYZE_BASE: string = (import.meta.env?.VITE_ANALYZE_BASE as string | undefined) ?? "http://127.0.0.1:8080";
+// In production the Worker proxies advisory routes, so the Worker URL is the
+// safe fallback (never localhost — a Pages browser has no local server).
+export const ANALYZE_BASE: string = (import.meta.env?.VITE_ANALYZE_BASE as string | undefined) ?? PROD_WORKER;
 // Chat sessions (Redis) + WebSocket streaming live inside the Go watcher
 // (:8080) — one binary, one port. Advisory only: no orders, no approvals.
 export const CHAT_BASE: string = (import.meta.env?.VITE_CHAT_BASE as string | undefined) ?? ANALYZE_BASE;

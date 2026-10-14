@@ -17,7 +17,7 @@ import { CORS, corsFor, BROWSER_POST_PATHS } from "./errors.mjs";
 import { TEMPLATE_MAIN } from "./strategies-template.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql"]
+const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql", "migrations/0005_chat_attachments.sql"]
   .map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
 let dbFile;
 function sql(q) {
@@ -369,5 +369,87 @@ describe("browser CORS allow-list (fail closed on order paths)", () => {
     assert.equal(blocks[1].language, "python");
     assert.equal(blocks[2].language, "text");
     assert.deepEqual(extractCodeBlocks("no fences"), []);
+  });
+});
+
+describe("strategies-ai — chart-image turns (ADR-010)", () => {
+  const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const SSE = 'data: {"response":"ok"}\n\ndata: [DONE]\n\n';
+  const chartTurn = (text = "read this chart") => ({
+    id: "msg-uuid-9",
+    role: "user",
+    content: [{ type: "text", text }, { type: "image_url", image_url: { url: PNG, detail: "low" } }],
+  });
+
+  // visionEnv captures the run() options and every R2 put.
+  function visionEnv(extra = {}) {
+    const puts = [];
+    let seen = null;
+    const env = freshEnv({
+      AI_VISION_MODEL: "@cf/qwen/qwen3.8-27b",
+      AI: { run: async (_m, opts) => { seen = opts; return SSE; } },
+      CHAT_MEDIA: { put: async (k, b, o) => { puts.push({ k, len: b.length, type: o?.httpMetadata?.contentType }); } },
+      ...extra,
+    });
+    return { env, puts, seen: () => seen };
+  }
+
+  it("routes a chart turn to the vision model, /no_think on the TEXT part", async () => {
+    const { env, seen } = visionEnv();
+    const r = await post(app, env, "/api/strategy:chat:stream",
+      JSON.stringify({ session_id: "chat_1_x", messages: [chartTurn()] }));
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("x-ai-model"), "@cf/qwen/qwen3.8-27b");
+    assert.equal(r.headers.get("x-ai-vision"), "1");
+    const msgs = seen().messages;
+    const last = msgs.at(-1);
+    assert.ok(Array.isArray(last.content));
+    assert.equal(last.content[0].text, "read this chart\n/no_think");
+    assert.equal(last.content[1].type, "image_url");
+    // The regression this PR fixes: a plain `+=` on array content.
+    assert.ok(!JSON.stringify(msgs).includes("[object Object]"));
+    // Both reasoning switches ride along for a Qwen3 vision model.
+    assert.equal(seen().reasoning_effort, "low");
+    assert.equal(seen().chat_template_kwargs.enable_thinking, false);
+  });
+
+  it("persists the chart bytes to R2 and the metadata row to D1", async () => {
+    const { env, puts } = visionEnv();
+    const r = await post(app, env, "/api/strategy:chat:stream",
+      JSON.stringify({ session_id: "chat_1_x", messages: [chartTurn()] }));
+    assert.equal(r.headers.get("x-chat-attachments"), "1");
+    assert.equal(puts.length, 1);
+    assert.equal(puts[0].len, 70);
+    assert.equal(puts[0].type, "image/png");
+    assert.ok(puts[0].k.startsWith("chat/chat_1_x/msg-uuid-9/"));
+    const rows = sqlJson(`SELECT message_id, session_id, media_type, bytes, r2_key FROM chat_attachments;`);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].message_id, "msg-uuid-9");
+    assert.equal(rows[0].session_id, "chat_1_x");
+    assert.equal(rows[0].media_type, "image/png");
+    assert.equal(rows[0].bytes, 70);
+  });
+
+  it("a text-only turn keeps the text model and sends no reasoning switches", async () => {
+    const { env, seen, puts } = visionEnv({ AI_MODEL: "plain-model" });
+    const r = await post(app, env, "/api/strategy:chat:stream",
+      JSON.stringify({ messages: [{ role: "user", content: "just text" }] }));
+    assert.equal(r.headers.get("x-ai-model"), "plain-model");
+    assert.equal(r.headers.get("x-ai-vision"), null);
+    assert.equal(r.headers.get("x-chat-attachments"), null);
+    assert.equal(seen().reasoning_effort, undefined);
+    assert.equal(puts.length, 0);
+    assert.equal(seen().messages.at(-1).content, "just text\n/no_think");
+  });
+
+  it("the REST :chat route answers a chart turn with vision:true", async () => {
+    const { env } = visionEnv();
+    const r = await post(app, env, "/api/strategy:chat",
+      JSON.stringify({ session_id: "chat_1_x", messages: [chartTurn()] }));
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.model, "@cf/qwen/qwen3.8-27b");
+    assert.equal(body.vision, true);
+    assert.equal(body.attachments, 1);
   });
 });

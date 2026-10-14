@@ -26,8 +26,21 @@ HUMAN_APPROVAL_REQUIRED = "true"
 AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
 # Fallback model used when the primary output fails contract validation.
 AI_MODEL_FALLBACK = "@cf/qwen/qwen2.5-coder-32b-instruct"
+# Chart-vision model (multimodal chat). Selected automatically when a chat turn
+# carries an image content part. Probed live: qwen3.8-27b accepts OpenAI image
+# parts on the `user` role and answers a 1600x900 chart in ~1.2s / ~1432 prompt
+# tokens at detail:"low". Keep the vision model separate from AI_MODEL so the
+# cheap text model keeps serving text-only turns.
+AI_VISION_MODEL = "@cf/qwen/qwen3.8-27b"
 
 # AI strategy generation (chat → Go code). Workers AI binding, no API keys.
 [ai]
 binding = "AI"
+
+# ADR-010: chart screenshots attached to chat turns. D1 caps a row/string at
+# 2 MB, so the BYTES live here (key recorded in chat_attachments.r2_key) and D1
+# keeps only metadata. Bind per-env at deploy; local uses --local.
+[[r2_buckets]]
+binding = "CHAT_MEDIA"
+bucket_name = "trading-chat-media"
 

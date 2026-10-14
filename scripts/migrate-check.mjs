@@ -4,7 +4,7 @@ import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-const files = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql"];
+const files = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql", "migrations/0005_chat_attachments.sql"];
 const chain = files.map((f) => readFileSync(f, "utf8")).join("\n");
 const tmp = join(tmpdir(), `mig-check-${Date.now()}.sql`);
 const run = (sql) => {
@@ -14,7 +14,7 @@ const run = (sql) => {
   } finally { /* keep for next step; removed at end */ }
 };
 run(chain);
-console.log("migration chain 0001->0004: SQL valid");
+console.log("migration chain 0001->0005: SQL valid");
 for (const f of files) console.log(`  ${f}: included`);
 try {
   run(`${chain}\nINSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES('evt_1','t','w','{}','k1','now');\nINSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES('evt_2','t','w','{}','k1','now');\n`);

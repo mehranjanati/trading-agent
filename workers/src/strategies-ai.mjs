@@ -17,6 +17,7 @@
 import { ok, err, CORS } from "./errors.mjs";
 import { roleOf, guard, readBody } from "./_shared.mjs";
 import { TEMPLATE_MAIN } from "./strategies-template.mjs";
+import { hasImage, appendNoThink, reasoningOpts, persistAttachments, VISION_MODEL_DEFAULT } from "./chat-vision.mjs";
 
 // SYSTEM_PROMPT is the contract the model must obey. Keep tight: every
 // allowed import is enumerated, the envelope is verbatim, and any deviation
@@ -201,22 +202,36 @@ export function generateRoutes() {
       if (!env.AI) {
         const e = new Error("AI binding unavailable"); e.code = "DEGRADED"; throw e;
       }
-      const model = env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8";
+      // Vision routing (ADR-010): a turn carrying a chart image goes to the
+      // multimodal model, text-only turns stay on the cheap text model.
+      const vision = hasImage(messages);
+      const model = vision
+        ? (env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT)
+        : (env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8");
       // Build full message array: system (principles) + history
       const fullMessages = [];
       if (principles) {
         fullMessages.push({ role: "system", content: `Trading principles (apply to all strategies):\n${principles}` });
       }
       fullMessages.push(...messages);
-      // Append /no_think to last user message (Qwen3 reasoning mode blows timeout)
-      if (fullMessages.length > 0 && fullMessages[fullMessages.length - 1].role === "user") {
-        fullMessages[fullMessages.length - 1].content += "\n/no_think";
-      }
-      const aiRes = await env.AI.run(model, { messages: fullMessages, max_tokens: 4096 });
+      // /no_think disables Qwen3's reasoning trace (thinking mode blows the
+      // wall-clock and burns output tokens). appendNoThink keeps the directive
+      // on the TEXT part: on array (multimodal) content a plain `+=` would
+      // stringify it to "[object Object]" and the model would answer about that
+      // literal string instead of the chart.
+      const lastTurn = fullMessages[fullMessages.length - 1];
+      if (lastTurn?.role === "user") appendNoThink(lastTurn);
+      // Provenance only — chart bytes go to R2, metadata to D1. A storage
+      // outage must never silence the answer (chat is advisory).
+      let attachments = [];
+      try {
+        attachments = await persistAttachments(env, { sessionId: String(b.session_id ?? ""), messages: fullMessages });
+      } catch { attachments = []; }
+      const aiRes = await env.AI.run(model, { messages: fullMessages, max_tokens: 4096, ...reasoningOpts(model) });
       const text = typeof aiRes === "string" ? aiRes : (aiRes?.response ?? aiRes?.result ?? "");
       // Extract code blocks from response
       const codeBlocks = extractCodeBlocks(String(text ?? ""));
-      return ok({ response: text, codeBlocks, model }, 200);
+      return ok({ response: text, codeBlocks, model, vision, attachments: attachments.length }, 200);
     }),
     /** POST /api/strategy:chat:stream — streaming variant of :chat.
      *  Same validation and message assembly; the model runs with stream:true
@@ -235,21 +250,34 @@ export function generateRoutes() {
       if (!env.AI) {
         const e = new Error("AI binding unavailable"); e.code = "DEGRADED"; throw e;
       }
-      const model = env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8";
+      // Vision routing + provenance, identical to :chat (ADR-010).
+      const vision = hasImage(messages);
+      const model = vision
+        ? (env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT)
+        : (env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8");
       const fullMessages = [];
       if (principles) {
         fullMessages.push({ role: "system", content: `Trading principles (apply to all strategies):\n${principles}` });
       }
       fullMessages.push(...messages);
-      if (fullMessages.length > 0 && fullMessages[fullMessages.length - 1].role === "user") {
-        fullMessages[fullMessages.length - 1].content += "\n/no_think";
-      }
-      const aiRes = await env.AI.run(model, { messages: fullMessages, max_tokens: 4096, stream: true });
+      // The directive rides the TEXT part, never the array (see :chat).
+      const lastTurn = fullMessages[fullMessages.length - 1];
+      if (lastTurn?.role === "user") appendNoThink(lastTurn);
+      let attachments = [];
+      try {
+        attachments = await persistAttachments(env, { sessionId: String(b.session_id ?? ""), messages: fullMessages });
+      } catch { attachments = []; }
+      const aiRes = await env.AI.run(model, { messages: fullMessages, max_tokens: 4096, stream: true, ...reasoningOpts(model) });
       // Pass the model's SSE stream through untouched; the client parses
       // `data: {...}` frames and [DONE]. CORS mirrors the non-stream route.
       return new Response(aiRes, {
         status: 200,
-        headers: { "content-type": "text/event-stream; charset=utf-8", ...CORS, "cache-control": "no-cache", "x-ai-model": model },
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8", ...CORS, "cache-control": "no-cache",
+          "x-ai-model": model,
+          ...(vision ? { "x-ai-vision": "1" } : {}),
+          ...(attachments.length ? { "x-chat-attachments": String(attachments.length) } : {}),
+        },
       });
     }),
     saveDraft: safe(async (req, env) => {

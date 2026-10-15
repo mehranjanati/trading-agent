@@ -34,7 +34,14 @@ var (
 )
 
 func main() {
-	port := os.Getenv("GO_PORT")
+	// PORT is the platform-assigned port (Render/Fly/Heroku set it per deploy)
+	// and wins — a platform that routes to its PORT while we listen elsewhere
+	// is a dead service. GO_PORT is the repo-local override (docker-compose,
+	// dev shells); 8080 the bare-metal default.
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = os.Getenv("GO_PORT")
+	}
 	if port == "" {
 		port = "8080"
 	}

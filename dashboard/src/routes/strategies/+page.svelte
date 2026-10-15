@@ -51,7 +51,12 @@
     setTimeout(() => Prism.highlightAll(), 0);
   }
   function handleSaveGroup() {
-    if (!gname.trim() || pickedList.length === 0) return;
+    if (!gname.trim()) {
+      return alert('لطفاً نام گروهی وارد کنید');
+    }
+    if (pickedList.length === 0) {
+      return alert('حداقل یک استراتژی را تیک بزنید');
+    }
     saveGroup({ name: gname.trim(), members: pickedList.map((e) => ({ id: e.id, version: e.version })), job: gjob, createdAt: new Date().toISOString() });
     gname = ""; picked = {};
   }

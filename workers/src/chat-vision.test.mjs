@@ -48,15 +48,16 @@ describe("chat-vision — /no_think never stringifies array content", () => {
   });
 });
 
-describe("chat-vision — reasoning switches (probed live)", () => {
-  it("sends BOTH switches for a Qwen3 model", () => {
+describe("chat-vision — reasoning switches (probed live 2026-10-14)", () => {
+  it("sends top-level enable_thinking:false for a Qwen model", () => {
     const o = reasoningOpts("@cf/qwen/qwen3.8-27b");
-    assert.equal(o.reasoning_effort, "low");
-    assert.deepEqual(o.chat_template_kwargs, { enable_thinking: false });
+    assert.equal(o.enable_thinking, false);
+    assert.equal(o.reasoning_effort, undefined);
+    assert.equal(o.chat_template_kwargs, undefined);
   });
 
-  it("sends neither for a non-Qwen3 model", () => {
-    assert.deepEqual(reasoningOpts("@cf/qwen/qwen2.5-coder-32b-instruct"), {});
+  it("sends neither for a non-Qwen model", () => {
+    assert.deepEqual(reasoningOpts("@cf/mistral/mistral-7b"), {});
     assert.deepEqual(reasoningOpts(undefined), {});
   });
 });

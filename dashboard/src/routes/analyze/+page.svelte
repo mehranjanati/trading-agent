@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { postAnalyze, postWatch, badgeFor } from "$lib/api";
+  import { postAnalyze, badgeFor } from "$lib/api";
   import type { AnalyzeRequest, AnalyzeResponse } from "$lib/types";
+  import { proposalFromAnalyze } from "$lib/stalk";
+  import StalkSetup from "$lib/components/StalkSetup.svelte";
   import Badge from "$lib/components/Badge.svelte";
 
   // Form state
@@ -14,8 +16,8 @@
   let loading = false;
   let error: string | null = null;
   let result: AnalyzeResponse | null = null;
-  let watchRegistering = false;
-  let watchRegistered: string | null = null;
+
+  $: stalkProposal = result ? proposalFromAnalyze(result, (direction || result.aggregate?.bias || "LONG") === "SHORT" ? "SHORT" : "LONG") : null;
 
   const availableStrategies = [
     { id: "sma-cross", version: "0.1.0", name: "SMA Cross (fast)", config: { fast_window: 2, slow_window: 3, min_confidence: 0.55 } },
@@ -40,7 +42,6 @@
     loading = true;
     error = null;
     result = null;
-    watchRegistered = null;
     const body: AnalyzeRequest = {
       symbol,
       direction: direction || undefined,
@@ -55,29 +56,6 @@
       return;
     }
     result = res.data;
-  }
-
-  async function registerWatch() {
-    if (!result || !result.suggest_zones) return;
-    watchRegistering = true;
-    const trigger = direction === "SHORT"
-      ? `{"op":"<=","price":"${result.suggest_zones.trigger_short}"}`
-      : `{"op":">=","price":"${result.suggest_zones.trigger_long}"}`;
-    const inval = direction === "SHORT"
-      ? `{"op":">=","price":"${result.suggest_zones.inval_short}"}`
-      : `{"op":"<=","price":"${result.suggest_zones.inval_long}"}`;
-    const res = await postWatch({
-      symbol: result.symbol,
-      direction: (direction || "LONG") as "LONG" | "SHORT",
-      trigger_json: trigger,
-      invalidation_json: inval,
-    });
-    watchRegistering = false;
-    if (res.ok) {
-      watchRegistered = res.data.id;
-    } else {
-      error = `watch register failed: ${res.error}`;
-    }
   }
 
   function toggleTf(tf: string) {
@@ -188,9 +166,7 @@
         <div>inval LONG: {result.suggest_zones.inval_long}</div>
         <div>trigger SHORT: {result.suggest_zones.trigger_short}</div>
         <div>inval SHORT: {result.suggest_zones.inval_short}</div>
-        <button on:click={registerWatch} disabled={watchRegistering || !!watchRegistered} class="primary">
-          {watchRegistering ? "registering..." : watchRegistered ? `watch registered: ${watchRegistered}` : "register watch with these zones"}
-        </button>
+        <StalkSetup proposal={stalkProposal} contextLabel="from deep analysis {result.id}" />
       </div>
 
       <h2>per-strategy verdicts</h2>
@@ -362,10 +338,6 @@
   .zones-card div {
     margin-bottom: 6px;
     font-size: 0.9rem;
-  }
-  .zones-card button {
-    margin-top: 12px;
-    width: 100%;
   }
   .verdict-header {
     display: flex;

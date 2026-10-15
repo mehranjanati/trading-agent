@@ -228,7 +228,11 @@ export function generateRoutes() {
         attachments = await persistAttachments(env, { sessionId: String(b.session_id ?? ""), messages: fullMessages });
       } catch { attachments = []; }
       const aiRes = await env.AI.run(model, { messages: fullMessages, max_tokens: 4096, ...reasoningOpts(model) });
-      const text = typeof aiRes === "string" ? aiRes : (aiRes?.response ?? aiRes?.result ?? "");
+      // Qwen3 thinking trace: when thinking is on, the answer lands in
+      // message.reasoning / reasoning_content with content=null. Prefer real
+      // content; fall back to the reasoning text so the turn is never silent.
+      const firstMsg = aiRes?.choices?.[0]?.message ?? aiRes?.choices?.[0]?.delta ?? null;
+      const text = typeof aiRes === "string" ? aiRes : (aiRes?.response ?? aiRes?.result ?? firstMsg?.content ?? aiRes?.content ?? firstMsg?.reasoning_content ?? firstMsg?.reasoning ?? "");
       // Extract code blocks from response
       const codeBlocks = extractCodeBlocks(String(text ?? ""));
       return ok({ response: text, codeBlocks, model, vision, attachments: attachments.length }, 200);

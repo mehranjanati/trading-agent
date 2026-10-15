@@ -408,9 +408,12 @@ describe("strategies-ai — chart-image turns (ADR-010)", () => {
     assert.equal(last.content[1].type, "image_url");
     // The regression this PR fixes: a plain `+=` on array content.
     assert.ok(!JSON.stringify(msgs).includes("[object Object]"));
-    // Both reasoning switches ride along for a Qwen3 vision model.
-    assert.equal(seen().reasoning_effort, "low");
-    assert.equal(seen().chat_template_kwargs.enable_thinking, false);
+    // Top-level enable_thinking:false rides along for a Qwen vision model
+    // (live tail 2026-10-14: reasoning_effort + chat_template_kwargs do NOT
+    // stop the thinking trace — content comes back null).
+    assert.equal(seen().enable_thinking, false);
+    assert.equal(seen().reasoning_effort, undefined);
+    assert.equal(seen().chat_template_kwargs, undefined);
   });
 
   it("persists the chart bytes to R2 and the metadata row to D1", async () => {
@@ -430,14 +433,14 @@ describe("strategies-ai — chart-image turns (ADR-010)", () => {
     assert.equal(rows[0].bytes, 70);
   });
 
-  it("a text-only turn keeps the text model and sends no reasoning switches", async () => {
+  it("a text-only turn keeps the text model and sends no enable_thinking switch (plain-model is not Qwen)", async () => {
     const { env, seen, puts } = visionEnv({ AI_MODEL: "plain-model" });
     const r = await post(app, env, "/api/strategy:chat:stream",
       JSON.stringify({ messages: [{ role: "user", content: "just text" }] }));
     assert.equal(r.headers.get("x-ai-model"), "plain-model");
     assert.equal(r.headers.get("x-ai-vision"), null);
     assert.equal(r.headers.get("x-chat-attachments"), null);
-    assert.equal(seen().reasoning_effort, undefined);
+    assert.equal(seen().enable_thinking, undefined);
     assert.equal(puts.length, 0);
     assert.equal(seen().messages.at(-1).content, "just text\n/no_think");
   });

@@ -62,11 +62,14 @@ export function appendNoThink(msg) {
 }
 
 /** reasoningOpts returns the run() options that switch a Qwen3 model out of
- *  thinking mode. Both switches are required (see header); non-Qwen3 models get
- *  an empty object so we never send an option the model does not understand. */
+ *  thinking mode. Live tail (2026-10-14) proved reasoning_effort +
+ *  chat_template_kwargs do NOT stop the thinking trace on
+ *  @cf/qwen/qwen3-30b-a3b-fp8 — the answer lands in `reasoning` and `content`
+ *  comes back null. The only switch that works is enable_thinking:false at the
+ *  top level of the run() options (Workers AI maps it to the chat template). */
 export function reasoningOpts(model) {
-  if (!/qwen3/i.test(String(model ?? ""))) return {};
-  return { reasoning_effort: "low", chat_template_kwargs: { enable_thinking: false } };
+  if (!/qwen/i.test(String(model ?? ""))) return {};
+  return { enable_thinking: false };
 }
 
 /** decodeDataURL parses "data:<type>;base64,<payload>" into decoded bytes.

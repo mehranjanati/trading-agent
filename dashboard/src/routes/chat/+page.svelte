@@ -20,6 +20,8 @@
   } from "$lib/api";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
+  import StalkSetup from "$lib/components/StalkSetup.svelte";
+  import { extractSetupProposals } from "$lib/stalk";
 
   type Message = { id?: string; role: "user" | "assistant"; content: string; timestamp: string; image?: string };
   type CodeBlock = { language: string; code: string };
@@ -347,6 +349,15 @@
                   <img src={msg.image} alt="attached chart" class="mb-2 max-h-48 rounded border border-black/10" />
                 {/if}
                 <div class="text-sm whitespace-pre-wrap">{msg.content}</div>
+                {#if msg.role === "assistant"}
+                  {#each extractSetupProposals(msg.content) as sp}
+                    {#if sp.proposal}
+                      <StalkSetup proposal={{ ...sp.proposal, chat_session: sessionId || undefined, message_id: msg.id }} contextLabel="from chat turn" />
+                    {:else}
+                      <StalkSetup proposal={null} invalidReason={sp.error ?? "invalid proposal"} />
+                    {/if}
+                  {/each}
+                {/if}
                 <div class="text-xs opacity-70 mt-1">{new Date(msg.timestamp).toLocaleTimeString()}</div>
               </div>
             </div>
@@ -411,7 +422,7 @@
         <Button variant="outline" onclick={() => fileInput?.click()} disabled={attachBusy || loading} class="self-end" title="Attach a chart screenshot (or paste one into the box)">
           {attachBusy ? "..." : "Chart"}
         </Button>
-        <Textarea bind:value={input} placeholder="Describe your strategy, ask a question, or paste a chart screenshot..." rows={3} onpaste={onPaste} onkeydown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())} />
+        <Textarea bind:value={input} placeholder="Describe your strategy... or paste: setup BTCUSDT LONG @ trigger / invalidation (I'll shape it into a stalkable proposal)" rows={3} onpaste={onPaste} onkeydown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())} />
         <Button onclick={handleSend} disabled={loading || (!input.trim() && !attachment)} class="self-end">{loading ? "Sending..." : "Send"}</Button>
       </div>
       {#if error}<div class="mt-2 p-2 bg-destructive/10 border border-destructive rounded text-destructive text-sm">{error}</div>{/if}

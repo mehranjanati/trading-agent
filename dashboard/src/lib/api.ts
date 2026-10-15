@@ -61,8 +61,10 @@ export async function postAnalyze(body: AnalyzeRequest): Promise<Result<AnalyzeR
 }
 
 /** POST /api/watches — the ONLY write the dashboard performs (D-08: orders
- *  and approvals are never submitted from the dashboard). */
-export async function postWatch(body: { symbol: string; direction: "LONG" | "SHORT"; trigger_json: string; invalidation_json: string }): Promise<Result<{ id: string }>> {
+ *  and approvals are never submitted from the dashboard). Body shape matches
+ *  the backend validator (workers/src/validate.mjs:watchBody): trigger and
+ *  invalidation are OBJECTS {op, price}, never pre-stringified JSON. */
+export async function postWatch(body: { symbol: string; direction: "LONG" | "SHORT"; trigger: { op: string; price: string }; invalidation?: { op: string; price: string } }): Promise<Result<{ id: string }>> {
   try {
     const res = await fetch(`${API_BASE}/api/watches`, {
       method: "POST",

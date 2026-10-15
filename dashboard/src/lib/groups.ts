@@ -47,3 +47,13 @@ export function deleteGroup(name: string): void {
     return next;
   });
 }
+
+export function toggleMember(
+  members: { id: string; version?: string }[],
+  entry: { id: string; version?: string },
+): { id: string; version?: string }[] {
+  const key = (m: { id: string; version?: string }) => `${m.id}@${m.version ?? "latest"}`;
+  const k = key(entry);
+  if (members.some((m) => key(m) === k)) return members.filter((m) => key(m) !== k);
+  return [...members, { id: entry.id, version: entry.version }];
+}

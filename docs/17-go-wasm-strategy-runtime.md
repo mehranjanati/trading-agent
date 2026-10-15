@@ -30,6 +30,12 @@
 
 - Redis ns: strat:active:{id} HASH{version,sha256,activated_at} no TTL; strat:state:{id} JSON{version,state,at} TTL 7d; strat:lease:{inv} TTL 24h; strat:run:{inv} HASH{status,started,finished} TTL 24h. Atomic state via Lua CAS on (version,inv).
 - Artifacts: <store>/strategies/<id>/<ver>/module.wasm + manifest.json{id,ver,sha256,contract_ver,go_ver,flags,built_at,test_report}. Immutable publish (reject overwrite). D1 strategy_artifacts mirrors manifest+status.
+- Read endpoint: `GET /strategies/registry` (go-watcher, `registry_endpoint.go`)
+  serves the catalog the runner actually loaded — id/version/file/name/
+  description/sha256/configuration — so the dashboard library tab renders the
+  REAL pins (and the hash it will execute) instead of a hardcoded copy that can
+  drift from registry.json. Advisory read-only: no D1, no approval, no order.
+  `name`/`description` are optional registry.json labels.
 - Redis loss => rebuild from D1 active-snapshot (extended strategies[]). Store loss => fail-closed, HELD_UNCERTAIN.
 
 ## 17.4 Failures + observability

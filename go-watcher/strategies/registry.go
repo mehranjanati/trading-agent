@@ -1,7 +1,7 @@
 // Strategy registry: versioned WASM artifacts on disk + hot reload.
 //
 // Layout (STRATEGIES_DIR, default ./strategies/samples):
-//   registry.json                       — [{id, version, file, configuration}]
+//   registry.json                       — [{id, version, file, name?, description?, configuration}]
 //   <id>-<version>.wasm                 — wasip1 command modules
 // Versions are immutable: a file that changes under a loaded version is only
 // picked up by :reload (fail-closed reads keep serving the pinned bytes).
@@ -23,16 +23,22 @@ type Entry struct {
 	ID            string         `json:"id"`
 	Version       string         `json:"version"`
 	File          string         `json:"file"`
+	Name          string         `json:"name,omitempty"`
+	Description   string         `json:"description,omitempty"`
 	Configuration map[string]any `json:"configuration"`
 	WASM          []byte         `json:"-"`
 	SHA256        string         `json:"-"`
 }
 
-// manifestRow is the on-disk registry.json row.
+// manifestRow is the on-disk registry.json row. Name/Description are optional
+// catalog labels: the dashboard renders them verbatim so the pinned list has
+// exactly ONE source (this file), never a hardcoded copy in the UI.
 type manifestRow struct {
 	ID            string         `json:"id"`
 	Version       string         `json:"version"`
 	File          string         `json:"file"`
+	Name          string         `json:"name"`
+	Description   string         `json:"description"`
 	Configuration map[string]any `json:"configuration"`
 }
 
@@ -83,6 +89,7 @@ func (r *Registry) Reload() error {
 		}
 		by[row.ID+"@"+row.Version] = Entry{
 			ID: row.ID, Version: row.Version, File: row.File,
+			Name: row.Name, Description: row.Description,
 			Configuration: cfg, WASM: wasm, SHA256: hex.EncodeToString(sum[:]),
 		}
 	}

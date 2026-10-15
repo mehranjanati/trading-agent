@@ -54,3 +54,18 @@ func serveAnalyze(w http.ResponseWriter, r *http.Request) {
 	}
 	strategyEngine.ServeAnalyze(w, r)
 }
+
+// serveRegistry exposes the pinned catalog over HTTP (GET /strategies/registry).
+// A missing engine is reported in the same envelope as /analyze; the CORS header
+// is set here too so a browser can READ the 503 instead of seeing an opaque
+// network error.
+func serveRegistry(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if strategyEngine == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"code":"ENGINE_UNAVAILABLE","message":"strategy engine not initialised"}`))
+		return
+	}
+	strategyEngine.ServeRegistry(w, r)
+}

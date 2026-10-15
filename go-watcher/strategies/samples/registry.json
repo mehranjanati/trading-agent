@@ -3,6 +3,8 @@
     "id": "sma-cross",
     "version": "0.1.0",
     "file": "sma-cross-0.1.0.wasm",
+    "name": "SMA Cross (fast)",
+    "description": "fast 2 / slow 3 — golden fixture",
     "configuration": {
       "fast_window": 2,
       "slow_window": 3,
@@ -13,6 +15,8 @@
     "id": "sma-cross",
     "version": "0.2.0",
     "file": "sma-cross-0.2.0.wasm",
+    "name": "SMA Cross (slow)",
+    "description": "fast 5 / slow 20",
     "configuration": {
       "fast_window": 5,
       "slow_window": 20,
@@ -23,6 +27,8 @@
     "id": "sma-x-live",
     "version": "0.1.0",
     "file": "sma-x-live-0.1.0.wasm",
+    "name": "SMA-X Live",
+    "description": "fast 5 / slow 20",
     "configuration": {
       "fast_window": 5,
       "slow_window": 20,
@@ -33,6 +39,8 @@
     "id": "sma-x-v2",
     "version": "0.1.0",
     "file": "sma-x-v2-0.1.0.wasm",
+    "name": "SMA-X v2",
+    "description": "fast 5 / slow 20",
     "configuration": {
       "fast_window": 5,
       "slow_window": 20,

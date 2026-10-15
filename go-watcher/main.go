@@ -63,6 +63,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("/analyze", serveAnalyze)
+	// Pinned-WASM catalog for the dashboard library tab (advisory, read-only).
+	mux.HandleFunc("/strategies/registry", serveRegistry)
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if !ready.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)

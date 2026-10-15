@@ -9,7 +9,8 @@
   import type { StrategyDraft, StrategyVersion } from "$lib/types";
   import { groups, saveGroup, deleteGroup, toggleMember, type GroupJob } from "$lib/groups";
   import { groupValidationError, groupMembers, groupStatusText } from "$lib/groups-core.mjs";
-  import { catalogFromDrafts, entryKey, PINNED_REGISTRY, type LibraryEntry } from "$lib/library";
+  import { composeCatalog, entryKey, type LibraryEntry } from "$lib/library";
+  import { getStrategyRegistry, type RegistryEntry } from "$lib/registry";
   import { getSymbols, type SymbolsData } from "$lib/symbols";
   import { setups, touchSetup } from "$lib/setups";
   import Prism from "prismjs";
@@ -32,7 +33,17 @@
   let drafts = $state<StrategyDraft[]>([]);
   let versions = $state<StrategyVersion[]>([]);
   let symbols = $state<SymbolsData | null>(null);
-  let catalog: LibraryEntry[] = $derived(catalogFromDrafts(drafts));
+  // The pinned catalog is READ FROM the Go registry endpoint (registry.ts), not
+  // hardcoded: the Go plane owns the .wasm bytes, so only it can say which
+  // id@version the runner will actually execute (and with which sha256).
+  let pinned = $state<RegistryEntry[] | null>(null);
+  let registryError = $state<string | null>(null);
+  // composeCatalog falls back to the labelled offline mirror when the Go plane
+  // is unreachable, so the tab never renders blank; `source` tells the UI which
+  // one it got.
+  let catalogResult = $derived(composeCatalog(pinned, drafts));
+  let catalog: LibraryEntry[] = $derived(catalogResult.entries);
+  let pinnedList = $derived(catalog.filter((e) => e.kind === "pinned"));
   let gname = $state("");
   let gjob = $state<GroupJob>("entry");
   let picked = $state<Record<string, boolean>>({});
@@ -48,6 +59,11 @@
     if (v.ok) versions = v.data.versions;
     const s = await getSymbols();
     if (s.ok) symbols = s.data;
+    // Pinned catalog from the Go plane (advisory read). A failure is RECORDED,
+    // not thrown: composeCatalog then serves the labelled offline mirror.
+    const r = await getStrategyRegistry();
+    if (r.ok) pinned = r.data.strategies;
+    else registryError = r.error;
     Prism.highlightAll();
   });
   async function handleSubmit() {
@@ -94,11 +110,27 @@
     <Button variant={tab === "limits" ? "default" : "outline"} onclick={() => (tab = "limits")}>limits</Button>
   </div>
   {#if tab === "library"}
+    <div class="flex items-center gap-2 mb-3">
+      <Badge variant={catalogResult.source === "registry" ? "default" : "destructive"}>
+        {catalogResult.source === "registry" ? "live registry" : "offline fallback"}
+      </Badge>
+      <span class="text-xs text-muted-foreground">
+        {catalogResult.source === "registry"
+          ? `${pinnedList.length} pinned artifacts from GET /strategies/registry`
+          : `Go registry unreachable${registryError ? ` (${registryError})` : ""} — showing the checked-in mirror`}
+      </span>
+    </div>
     <div class="grid gap-4 md:grid-cols-2">
-      {#each PINNED_REGISTRY as p}
+      {#each pinnedList as p}
         <Card>
-          <CardHeader><CardTitle class="font-mono">{p.id}@{p.version}</CardTitle><CardDescription>{p.name} — {p.blurb}</CardDescription></CardHeader>
-          <CardContent><Badge variant="outline">pinned wasm</Badge></CardContent>
+          <CardHeader>
+            <CardTitle class="font-mono">{p.label}</CardTitle>
+            <CardDescription>{p.blurb}</CardDescription>
+          </CardHeader>
+          <CardContent class="space-y-1">
+            <Badge variant="outline">pinned wasm</Badge>
+            {#if p.sha256}<div class="text-xs text-muted-foreground font-mono break-all">sha256 {p.sha256.slice(0, 16)}…</div>{/if}
+          </CardContent>
         </Card>
       {/each}
     </div>

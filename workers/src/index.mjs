@@ -46,6 +46,10 @@ export default {
       if (req.method === "POST" && p === "/api/approvals") return misc.decideApproval(req, env);
       if (req.method === "GET" && p === "/api/strategy") return misc.listStrategy(req, env);
       if (req.method === "GET" && p === "/api/approvals") return misc.listApprovals(req, env);
+      if (req.method === "GET" && p === "/api/signals") return misc.listSignals(req, env);
+      if (req.method === "GET" && p === "/api/analysis") return misc.listAnalysis(req, env);
+      if (req.method === "GET" && p === "/api/orders:intents") return misc.listIntents(req, env);
+      if (req.method === "GET" && p === "/api/positions") return misc.listPositions(req, env);
       if (req.method === "GET" && p === "/api/symbols") {
         try {
           return ok({ ...(await listSymbols(env)), at: new Date().toISOString() });

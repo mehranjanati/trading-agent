@@ -162,5 +162,33 @@ export function miscRoutes() {
     listApprovals: safe(async (_req, env) => {
       return ok(await listApprovals(env));
     }),
+    /** GET /api/signals — recent ingested signals (newest first, bounded). */
+    listSignals: safe(async (_req, env) => {
+      const rows = await env.DB.prepare(
+        "SELECT id, watch_id, kind, payload_json, source, at FROM signals ORDER BY at DESC LIMIT 100",
+      ).all().catch(() => ({ results: [] }));
+      return ok({ signals: rows.results ?? [] });
+    }),
+    /** GET /api/analysis — recent analysis runs (newest first, bounded). */
+    listAnalysis: safe(async (_req, env) => {
+      const rows = await env.DB.prepare(
+        "SELECT id, watch_id, model, input_hash, output_json, confidence, at FROM analysis_runs ORDER BY at DESC LIMIT 100",
+      ).all().catch(() => ({ results: [] }));
+      return ok({ runs: rows.results ?? [] });
+    }),
+    /** GET /api/orders:intents — recent order intents (newest first, bounded). */
+    listIntents: safe(async (_req, env) => {
+      const rows = await env.DB.prepare(
+        "SELECT id, watch_id, approval_id, side, qty, leverage, client_order_id, status, at FROM order_intents ORDER BY at DESC LIMIT 100",
+      ).all().catch(() => ({ results: [] }));
+      return ok({ intents: rows.results ?? [] });
+    }),
+    /** GET /api/positions — current position snapshots (from fills only). */
+    listPositions: safe(async (_req, env) => {
+      const rows = await env.DB.prepare(
+        "SELECT symbol, size, entry_px, leverage, updated_at FROM positions ORDER BY symbol",
+      ).all().catch(() => ({ results: [] }));
+      return ok({ positions: rows.results ?? [] });
+    }),
   };
 }

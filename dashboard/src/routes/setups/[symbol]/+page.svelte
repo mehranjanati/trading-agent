@@ -1,0 +1,145 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { page } from "$app/stores";
+  import { goto } from "$app/navigation";
+  import { getWatches, getApprovals, getIntents, getPositions, postAnalyze } from "$lib/api";
+  import type { AnalyzeRequest, AnalyzeResponse } from "$lib/types";
+  import { getSymbols } from "$lib/symbols";
+  import { setups, touchSetup, deriveStatus } from "$lib/setups";
+  import { proposalFromAnalyze } from "$lib/stalk";
+  import StalkSetup from "$lib/components/StalkSetup.svelte";
+  $: symbol = String($page.params.symbol ?? "").toUpperCase();
+  const SYM_RE = /^[A-Z]{2,12}USDT$/;
+  let watches: any[] = [];
+  let approvals: any[] = [];
+  let intents: any[] = [];
+  let positions: any[] = [];
+  let tradeable: boolean | null = null;
+  let direction: "LONG" | "SHORT" | "" = "";
+  let analyzing = false;
+  let analyzeErr: string | null = null;
+  let result: AnalyzeResponse | null = null;
+  $: stalkProposal = result ? proposalFromAnalyze(result, (direction || result.aggregate?.bias || "LONG") === "SHORT" ? "SHORT" : "LONG") : null;
+  $: symWatches = watches.filter((w: any) => w.symbol === symbol);
+  $: watchIds = symWatches.map((w: any) => w.id);
+  $: symApprovals = approvals.filter((a: any) => watchIds.includes(a.watch_id));
+  $: symIntents = intents.filter((i: any) => watchIds.includes(i.watch_id));
+  $: symPosition = positions.find((p: any) => p.symbol === symbol);
+  $: status = deriveStatus(symbol, { positions, watches, approvals, watchIds });
+  async function refresh() {
+    const [w, a, i, p, s] = await Promise.all([getWatches(), getApprovals(), getIntents(), getPositions(), getSymbols()]);
+    if (w.ok) watches = (w.data as { watches: any[] }).watches;
+    if (a.ok) approvals = (a.data as { approvals: any[] }).approvals;
+    if (i.ok) intents = (i.data as { intents: any[] }).intents;
+    if (p.ok) positions = (p.data as { positions: any[] }).positions;
+    if (s.ok) tradeable = s.data.allowlist.includes(symbol);
+  }
+  async function runAnalyze() {
+    analyzing = true; analyzeErr = null; result = null;
+    const body: AnalyzeRequest = { symbol, direction: direction || undefined, strategies: [{ id: "sma-cross", version: "0.1.0", config: {} }] };
+    const res = await postAnalyze(body);
+    analyzing = false;
+    if (!res.ok) { analyzeErr = res.error; return; }
+    result = res.data;
+    touchSetup(symbol, { analyzes: [...($setups[symbol]?.analyzes ?? []), res.data.id] });
+  }
+  onMount(() => { refresh(); const t = setInterval(refresh, 5000); return () => clearInterval(t); });
+</script>
+{#if !SYM_RE.test(symbol)}
+  <div class="page"><div class="error">bad symbol — <a href="/setups">back to setups</a></div></div>
+{:else}
+  <div class="page">
+    <header>
+      <div>
+        <h1>{symbol}</h1>
+        <div class="badges">
+          <span class="pill {status === 'OPEN' ? 'open' : status === 'STALKING' ? 'stalk' : status === 'AWAITING-APPROVAL' ? 'await' : 'idle'}">{status}</span>
+          {#if tradeable === true}<span class="pill trade">tradeable</span>
+          {:else if tradeable === false}<span class="pill venue">venue-only</span>{/if}
+        </div>
+      </div>
+      <div class="actions">
+        <button on:click={() => goto(`/chat?symbol=${symbol}`)} class="primary">open {symbol} chat</button>
+        <a href="/setups">all setups</a>
+      </div>
+    </header>
+    {#if symPosition && symPosition.size !== "0"}
+      <section class="card attention">
+        <h2>open position</h2>
+        <div>size <strong>{symPosition.size}</strong> @ {symPosition.entry_px ?? "-"} (lev {symPosition.leverage ?? "-"})</div>
+      </section>
+    {/if}
+    <div class="grid">
+      <section class="card">
+        <h2>strategies in play</h2>
+        {#if ($setups[symbol]?.strategies ?? []).length === 0 && ($setups[symbol]?.groups ?? []).length === 0}
+          <p class="empty">none linked yet — link from <a href="/strategies">/strategies</a> or stalk below</p>
+        {:else}
+          {#each $setups[symbol]?.strategies ?? [] as s}<div class="row">{s.id}@{s.version ?? "latest"}</div>{/each}
+          {#each $setups[symbol]?.groups ?? [] as g}<div class="row">group: {g}</div>{/each}
+        {/if}
+      </section>
+      <section class="card">
+        <h2>quick analysis</h2>
+        <div class="row-btns">
+          <select bind:value={direction}>
+            <option value="">any</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option>
+          </select>
+          <button on:click={runAnalyze} disabled={analyzing} class="primary">{analyzing ? "analyzing..." : "analyze"}</button>
+        </div>
+        {#if analyzeErr}<div class="error">{analyzeErr}</div>{/if}
+        {#if result}
+          <div class="agg">aggregate <strong class={result.aggregate.bias.toLowerCase()}>{result.aggregate.bias}</strong> @ {result.aggregate.confidence}</div>
+          <div class="meta">{result.aggregate.explanation}</div>
+          <StalkSetup proposal={stalkProposal} contextLabel="from {result.id}" />
+        {/if}
+      </section>
+    </div>
+    <section class="card">
+      <h2>watches ({symWatches.length})</h2>
+      {#each symWatches as w}<div class="row">{w.id} - {w.direction} - {w.status} - v{w.version}</div>{/each}
+      {#if symWatches.length === 0}<p class="empty">no watches for {symbol}</p>{/if}
+    </section>
+    <section class="card">
+      <h2>approvals ({symApprovals.length})</h2>
+      {#each symApprovals as a}<div class="row">{a.id} - {a.decision} - {a.used_at ? "consumed" : "open"}</div>{/each}
+      {#if symApprovals.length === 0}<p class="empty">no approvals for {symbol}</p>{/if}
+    </section>
+    <section class="card">
+      <h2>orders ({symIntents.length})</h2>
+      {#each symIntents as i}<div class="row">{i.id} - {i.side} {i.qty} - {i.status}</div>{/each}
+      {#if symIntents.length === 0}<p class="empty">no orders for {symbol}</p>{/if}
+    </section>
+  </div>
+{/if}
+<style>
+  .page { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+  h1 { font-size: 1.6rem; margin: 0 0 8px; font-family: monospace; }
+  h2 { font-size: 1rem; margin: 0 0 10px; }
+  .badges { display: flex; gap: 6px; }
+  .pill { font-size: 0.75rem; padding: 2px 10px; border-radius: 20px; border: 1px solid #30363d; color: #8b949e; }
+  .pill.open { color: #22c55e; border-color: #22c55e; }
+  .pill.stalk { color: #eab308; border-color: #eab308; }
+  .pill.await { color: #f97316; border-color: #f97316; }
+  .pill.idle { color: #6b7280; }
+  .pill.trade { color: #22c55e; border-color: #22c55e; }
+  .pill.venue { color: #6b7280; }
+  .actions { display: flex; gap: 12px; align-items: center; }
+  .actions a { color: #8b949e; font-size: 0.85rem; }
+  button.primary { padding: 8px 16px; background: #238636; border: 1px solid #238636; border-radius: 6px; color: #e6e9ef; font-weight: 600; cursor: pointer; }
+  button.primary:disabled { opacity: 0.5; }
+  .card { background: #11151c; border: 1px solid #1e2330; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .card.attention { border-color: #22c55e; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .row { font-size: 0.85rem; font-family: monospace; color: #c9d1d9; padding: 4px 0; border-bottom: 1px solid #1e2330; }
+  .empty { color: #6b7280; font-size: 0.85rem; }
+  .empty a { color: #60a5fa; }
+  .row-btns { display: flex; gap: 8px; margin-bottom: 10px; }
+  .row-btns select { padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6e9ef; }
+  .agg { font-size: 1.1rem; margin-bottom: 4px; }
+  .agg .long { color: #22c55e; } .agg .short { color: #ef4444; } .agg .flat { color: #9ca3af; }
+  .meta { font-size: 0.8rem; color: #8b949e; margin-bottom: 8px; }
+  .error { padding: 10px; background: #2a0d0d; border: 1px solid #ef4444; border-radius: 6px; color: #ef4444; margin-bottom: 12px; }
+  .error a { color: #ef4444; }
+</style>

@@ -14,6 +14,7 @@ import { sweepApprovals, readCursor as readApprovalCursor, shouldSweep as should
 import { HOLDERS, holdsAuthority } from "./lease.mjs";
 import { tick as pollOnce, pollStatus } from "./fallback-poll.mjs";
 import { generateRoutes } from "./strategies-ai.mjs";
+import { listSymbols } from "./symbols.mjs";
 
 const store = createStore();
 const watches = watchRoutes(store);
@@ -45,6 +46,13 @@ export default {
       if (req.method === "POST" && p === "/api/approvals") return misc.decideApproval(req, env);
       if (req.method === "GET" && p === "/api/strategy") return misc.listStrategy(req, env);
       if (req.method === "GET" && p === "/api/approvals") return misc.listApprovals(req, env);
+      if (req.method === "GET" && p === "/api/symbols") {
+        try {
+          return ok({ ...(await listSymbols(env)), at: new Date().toISOString() });
+        } catch (e) {
+          return writeErr(e);
+        }
+      }
       if (req.method === "POST" && p === "/api/strategy:generate") return ai.generate(req, env);
       if (req.method === "POST" && p === "/api/strategy:chat") return ai.chat(req, env);
       if (req.method === "POST" && p === "/api/strategy:chat:stream") return ai.chatStream(req, env);

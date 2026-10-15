@@ -9,9 +9,8 @@
   export let data: { result: { ok: boolean; data?: Health; at?: string; ageMs?: number } | null };
 
   const routes = [
-    ["/", "overview"], ["/signals", "signals"], ["/watches", "watches"], ["/zones", "zones"],
-    ["/events", "events"], ["/analysis", "analysis"], ["/analyze", "analyze"], ["/chat", "chat"], ["/strategies", "strategies"], ["/approvals", "approvals"],
-    ["/orders", "orders"], ["/failover", "failover"], ["/logs", "logs"], ["/strategy", "strategy"],
+    ["/", "overview"], ["/setups", "setups"], ["/strategies", "strategies"],
+    ["/approvals", "approvals"], ["/logs", "logs"],
   ];
 
   let health: Health | null = data?.result?.ok ? (data.result.data as Health) : null;

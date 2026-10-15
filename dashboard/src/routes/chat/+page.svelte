@@ -18,6 +18,9 @@
     type ChartAttachment,
     type ChatOutboundMessage,
   } from "$lib/api";
+  import { page } from "$app/stores";
+  import { chatSessionKey, touchSetup } from "$lib/setups";
+  import { validateSymbolInput } from "$lib/symbols";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
   import StalkSetup from "$lib/components/StalkSetup.svelte";
@@ -52,11 +55,17 @@
   let reconnects = 0;
 
   onMount(async () => {
-    const savedPrinciples = localStorage.getItem("chat_principles");
+    // Per-symbol rooms: /chat?symbol=BTCUSDT reuses that room's session, so
+    // each coin keeps its own conversation. No param = legacy global session.
+    const roomSymbol = validateSymbolInput($page.url.searchParams.get("symbol") ?? "");
+    const sessionKey = roomSymbol ? chatSessionKey(roomSymbol) : "chat_session_id";
+    const msgKey = roomSymbol ? `chat_messages_${roomSymbol}` : "chat_messages";
+    const principlesKey = roomSymbol ? `chat_principles_${roomSymbol}` : "chat_principles";
+    const savedPrinciples = localStorage.getItem(principlesKey);
     if (savedPrinciples) principles = savedPrinciples;
     if (await chatServiceUp()) {
       mode = "ws";
-      sessionId = localStorage.getItem("chat_session_id") ?? "";
+      sessionId = localStorage.getItem(sessionKey) ?? "";
       if (sessionId) {
         const res = await getChatSession(sessionId);
         if (res.ok) {
@@ -76,15 +85,18 @@
         const res = await postChatCreate(principles);
         if (res.ok) {
           sessionId = res.data.id;
-          localStorage.setItem("chat_session_id", sessionId);
+          localStorage.setItem(sessionKey, sessionId);
+          if (roomSymbol) touchSetup(roomSymbol, { chatSession: sessionId });
         } else {
           mode = "rest"; // the probe answered but create failed -> fallback
         }
+      } else if (roomSymbol) {
+        touchSetup(roomSymbol, { chatSession: sessionId });
       }
       if (mode === "ws") openSocket();
     }
     if (mode === "rest") {
-      const saved = localStorage.getItem("chat_messages");
+      const saved = localStorage.getItem(msgKey);
       if (saved) messages = JSON.parse(saved);
     }
     setTimeout(() => Prism.highlightAll(), 0);
@@ -296,9 +308,15 @@
 </script>
 
 <div class="container mx-auto p-6 max-w-6xl">
+  {#if validateSymbolInput($page.url.searchParams.get("symbol") ?? "")}
+    <div class="mb-4 flex items-center gap-3 text-sm">
+      <a href="/setups/{validateSymbolInput($page.url.searchParams.get('symbol') ?? '')}" class="text-blue-400 hover:underline">← {validateSymbolInput($page.url.searchParams.get("symbol") ?? "")} room</a>
+      <span class="text-muted-foreground">this conversation is scoped to that coin</span>
+    </div>
+  {/if}
   <div class="flex items-center justify-between mb-6">
     <div class="flex items-center gap-3">
-      <h1 class="text-3xl font-bold">Strategy Chat</h1>
+      <h1 class="text-3xl font-bold">Strategy Chat{validateSymbolInput($page.url.searchParams.get("symbol") ?? "") ? ` — ${validateSymbolInput($page.url.searchParams.get("symbol") ?? "")}` : ""}</h1>
       {#if mode === "ws"}
         {#if wsState === "open"}
           <Badge variant="outline" class="border-emerald-500 text-emerald-500">live - session {sessionId}</Badge>

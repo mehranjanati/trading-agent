@@ -8,27 +8,37 @@
   import { postGenerateStrategy, getStrategyDrafts, getStrategies } from "$lib/api";
   import type { StrategyDraft, StrategyVersion } from "$lib/types";
   import { groups, saveGroup, deleteGroup, toggleMember, type GroupJob } from "$lib/groups";
+  import { groupValidationError, groupMembers, groupStatusText } from "$lib/groups-core.mjs";
   import { catalogFromDrafts, entryKey, PINNED_REGISTRY, type LibraryEntry } from "$lib/library";
   import { getSymbols, type SymbolsData } from "$lib/symbols";
   import { setups, touchSetup } from "$lib/setups";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
-  let tab: "library" | "groups" | "drafts" | "limits" = "groups";
-  let description = "";
-  let strategy_id = "";
-  let version = "0.1.0";
-  let loading = false;
-  let error: string | null = null;
-  let result: { id: string; code: string; status: string } | null = null;
-  let drafts: StrategyDraft[] = [];
-  let versions: StrategyVersion[] = [];
-  let symbols: SymbolsData | null = null;
+  // RUNES MODE — every mutable top-level binding must be `$state(...)`.
+  // This file already used `$state`/`$derived`, which puts the WHOLE component
+  // in runes mode; a plain `let` then compiles to a dead variable (svelte-check
+  // `non_reactive_update`). That was the `save group` bug: its
+  // `disabled={!gname.trim() || pickedList.length === 0}` was evaluated once
+  // with `gname === ""` and never re-evaluated, so the button stayed disabled
+  // forever — the click never reached handleSaveGroup and the validation
+  // feedback never ran (silent button).
+  let tab = $state<"library" | "groups" | "drafts" | "limits">("groups");
+  let description = $state("");
+  let strategy_id = $state("");
+  let version = $state("0.1.0");
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+  let result = $state<{ id: string; code: string; status: string } | null>(null);
+  let drafts = $state<StrategyDraft[]>([]);
+  let versions = $state<StrategyVersion[]>([]);
+  let symbols = $state<SymbolsData | null>(null);
   let catalog: LibraryEntry[] = $derived(catalogFromDrafts(drafts));
-  let gname = "";
-  let gjob: GroupJob = "entry";
-  let picked: Record<string, boolean> = $state({});
-  let linkSymbol = "";
-  let linkSearch = "";
+  let gname = $state("");
+  let gjob = $state<GroupJob>("entry");
+  let picked = $state<Record<string, boolean>>({});
+  let groupNote = $state("");
+  let linkSymbol = $state("");
+  let linkSearch = $state("");
   let pickedList = $derived(catalog.filter((e) => picked[entryKey(e.id, e.version)]));
   let symList: string[] = $derived(((symbols as SymbolsData | null)?.symbols ?? []).filter((s: string) => !linkSearch.trim() || s.includes(linkSearch.trim().toUpperCase())).slice(0, 30));
   onMount(async () => {
@@ -51,14 +61,19 @@
     setTimeout(() => Prism.highlightAll(), 0);
   }
   function handleSaveGroup() {
-    if (!gname.trim()) {
-      return alert('لطفاً نام گروهی وارد کنید');
+    // The button is deliberately NOT `disabled` in the invalid states: a
+    // disabled button is silent, and "save group does nothing" was the bug
+    // report. Validation always runs and always answers.
+    const problem = groupValidationError(gname, pickedList);
+    if (problem) {
+      groupNote = problem;
+      return alert(problem);
     }
-    if (pickedList.length === 0) {
-      return alert('حداقل یک استراتژی را تیک بزنید');
-    }
-    saveGroup({ name: gname.trim(), members: pickedList.map((e) => ({ id: e.id, version: e.version })), job: gjob, createdAt: new Date().toISOString() });
+    const name = gname.trim();
+    const members = groupMembers(pickedList);
+    saveGroup({ name, members, job: gjob, createdAt: new Date().toISOString() });
     gname = ""; picked = {};
+    groupNote = `گروه «${name}» ذخیره شد (${members.length} استراتژی)`;
   }
   function handleLink(groupName: string) {
     const s = linkSymbol.trim().toUpperCase();
@@ -122,7 +137,8 @@
           {/each}
         </div>
         <div class="text-sm">picked ({pickedList.length}): {pickedList.map((e) => e.label).join(", ") || "—"}</div>
-        <Button onclick={handleSaveGroup} disabled={!gname.trim() || pickedList.length === 0} class="w-full">save group</Button>
+        <Button onclick={handleSaveGroup} class="w-full">save group</Button>
+        <div class="text-xs text-muted-foreground">{groupStatusText(groupNote, gname, pickedList.length)}</div>
       </CardContent>
     </Card>
     <div class="grid gap-4 md:grid-cols-2 mt-6">
@@ -135,7 +151,7 @@
               <Input bind:value={linkSearch} placeholder="search venue symbols..." />
               <div class="lib-pick small">
                 {#each symList as s}
-                  <button class="pick-row as-btn" on:click={() => { linkSymbol = s; handleLink(g.name); }}>
+                  <button class="pick-row as-btn" onclick={() => { linkSymbol = s; handleLink(g.name); }}>
                     <span class="font-mono">{s}</span>
                     {#if ($setups[s]?.groups ?? []).includes(g.name)}<Badge>linked</Badge>{/if}
                   </button>

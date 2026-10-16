@@ -37,6 +37,21 @@ that is no longer ACTIVE is answered 200 with an explicit reason and writes
 nothing — the loop must be able to retry safely. If the analysis engine is
 unreachable the watch stays `TRIGGERED` and no analysis row is written.
 
+**Leaving `ACTIVE` is never a deletion.** The row stays in D1 with its
+`watch_transitions`, event and outbox rows; `GET /api/watches?status=ACTIVE` —
+the input of the trigger loop and the fallback poller, and the `/watches` board —
+simply stops listing it. Any view that derives the rest of a trade from that
+ACTIVE-only feed therefore empties itself the moment the zone does its job (the
+observed symptom: a freshly stalked zone "disappears" seconds after arming). The
+setup room reads the symbol's FULL watch history (`GET /api/watches`, ACTIVE
+first) and joins approvals/orders/analysis runs through all of those ids, so a
+triggered or invalidated watch stays visible together with what followed it.
+Note also that the armed band is usually tight: `suggest_zones` places the
+trigger `0.25×ATR` and the invalidation `1.0×ATR` from the newest close
+(aggregate.go), so a live price within a fraction of a percent of that close is
+decided by the next tick — the Stalk card surfaces both distances before the
+click for exactly that reason.
+
 ## 5.4 Order FSM
 ```mermaid
 stateDiagram-v2

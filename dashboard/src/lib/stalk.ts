@@ -79,6 +79,57 @@ export function isVenueSourced(source?: string): boolean {
   return source === "toobit-rest";
 }
 
+/** BandStats — how far the two armed prices sit from the close the zone was
+ *  measured on, in % of that close.
+ *
+ *  WHY THIS IS SHOWN BEFORE THE CLICK: the Go trigger loop evaluates the LIVE
+ *  price against exactly these two numbers (docs/05 §5.3a). A band that is only
+ *  a fraction of a percent wide is therefore decided by the next tick: the watch
+ *  moves ACTIVE→TRIGGERED|INVALIDATED within seconds and disappears from every
+ *  ACTIVE-only view — it looks deleted although nothing was ever removed. The
+ *  distances make the difference between "stalk a zone" and "fire a zone"
+ *  visible while the human can still choose not to click. */
+export interface BandStats {
+  /** the close the zone was measured on (zone_last), as given by the engine */
+  anchor: string;
+  /** signed % from the anchor to the trigger (negative = the trigger is below) */
+  trigger_pct: number;
+  /** signed % from the anchor to the invalidation */
+  inval_pct: number;
+  /** |inval_pct - trigger_pct| — the whole band, in % of price */
+  width_pct: number;
+  /** true when the trigger is within IN_PLAY_PCT of the anchor: already live */
+  in_play: boolean;
+}
+
+/** IN_PLAY_PCT — a trigger closer than this to the zone's own close is not a
+ *  level to wait for; the next tick decides the watch. */
+export const IN_PLAY_PCT = 0.1;
+
+/** bandStats — null when the proposal carries no usable anchor (a chat proposal
+ *  without zone provenance, or a malformed price): nothing is invented. */
+export function bandStats(p: SetupProposal | null | undefined): BandStats | null {
+  const anchor = Number(p?.zone_last);
+  const trig = Number(p?.trigger_price);
+  const inval = Number(p?.invalidation_price);
+  if (!(anchor > 0) || !(trig > 0) || !(inval > 0)) return null;
+  const pct = (x: number) => ((x - anchor) / anchor) * 100;
+  const trigger_pct = pct(trig);
+  const inval_pct = pct(inval);
+  return {
+    anchor: String(p?.zone_last),
+    trigger_pct,
+    inval_pct,
+    width_pct: Math.abs(inval_pct - trigger_pct),
+    in_play: Math.abs(trigger_pct) <= IN_PLAY_PCT,
+  };
+}
+
+/** fmtPct — a signed percentage at 3 decimals (e.g. "+0.250%"), for the card. */
+export function fmtPct(x: number): string {
+  return `${x >= 0 ? "+" : ""}${x.toFixed(3)}%`;
+}
+
 /** Extract every fenced ```setup-proposal JSON block from chat text. */
 export function extractSetupProposals(text: string): { proposal: SetupProposal | null; raw: string; error?: string }[] {
   const out: { proposal: SetupProposal | null; raw: string; error?: string }[] = [];

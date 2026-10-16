@@ -2,10 +2,10 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { getWatches, getApprovals, getIntents, getPositions, postAnalyze, getRegistry } from "$lib/api";
+  import { getWatchesAll, getApprovals, getIntents, getPositions, postAnalyze, getRegistry, getAnalysis } from "$lib/api";
   import type { AnalyzeRequest, AnalyzeResponse } from "$lib/types";
   import { getSymbols } from "$lib/symbols";
-  import { setups, touchSetup, deriveStatus } from "$lib/setups";
+  import { setups, touchSetup, deriveStatus, roomWatches, roomWatchIds } from "$lib/setups";
   import { proposalFromAnalyze } from "$lib/stalk";
   import { composeCatalog, PINNED_FALLBACK } from "$lib/library";
   import StalkSetup from "$lib/components/StalkSetup.svelte";
@@ -15,6 +15,7 @@
   let approvals: any[] = [];
   let intents: any[] = [];
   let positions: any[] = [];
+  let runs: any[] = [];
   let tradeable: boolean | null = null;
   let direction: "LONG" | "SHORT" | "" = "";
   let analyzing = false;
@@ -26,19 +27,28 @@
   let pin = { id: PINNED_FALLBACK[0].id, version: PINNED_FALLBACK[0].version };
   let pinSource: "registry" | "fallback" = "fallback";
   $: stalkProposal = result ? proposalFromAnalyze(result, (direction || result.aggregate?.bias || "LONG") === "SHORT" ? "SHORT" : "LONG") : null;
-  $: symWatches = watches.filter((w: any) => w.symbol === symbol);
-  $: watchIds = symWatches.map((w: any) => w.id);
+  $: symWatches = roomWatches(watches, symbol);
+  $: watchIds = roomWatchIds(watches, symbol);
   $: symApprovals = approvals.filter((a: any) => watchIds.includes(a.watch_id));
   $: symIntents = intents.filter((i: any) => watchIds.includes(i.watch_id));
+  $: symRuns = runs.filter((r: any) => watchIds.includes(r.watch_id));
+  $: activeCount = symWatches.filter((w: any) => w.status === "ACTIVE").length;
   $: symPosition = positions.find((p: any) => p.symbol === symbol);
   $: status = deriveStatus(symbol, { positions, watches, approvals, watchIds });
+  // A triggered watch writes an analysis run; the room shows the bias the engine
+  // decided (output_json) so the watch→analysis hand-off is readable without
+  // leaving the room. Unparsable output is "-", never an invented bias.
+  function biasOf(r: any): string {
+    try { return JSON.parse(r.output_json)?.bias ?? "-"; } catch { return "-"; }
+  }
   async function refresh() {
-    const [w, a, i, p, s] = await Promise.all([getWatches(), getApprovals(), getIntents(), getPositions(), getSymbols()]);
+    const [w, a, i, p, s, r] = await Promise.all([getWatchesAll(), getApprovals(), getIntents(), getPositions(), getSymbols(), getAnalysis()]);
     if (w.ok) watches = (w.data as { watches: any[] }).watches;
     if (a.ok) approvals = (a.data as { approvals: any[] }).approvals;
     if (i.ok) intents = (i.data as { intents: any[] }).intents;
     if (p.ok) positions = (p.data as { positions: any[] }).positions;
     if (s.ok) tradeable = s.data.allowlist.includes(symbol);
+    if (r.ok) runs = (r.data as { runs: any[] }).runs;
     const reg = await getRegistry();
     const { entries, source } = composeCatalog(reg.ok ? reg.data.strategies : null, []);
     pinSource = source;
@@ -115,9 +125,19 @@
       </section>
     </div>
     <section class="card">
-      <h2>watches ({symWatches.length})</h2>
-      {#each symWatches as w}<div class="row">{w.id} - {w.direction} - {w.status} - v{w.version}</div>{/each}
+      <h2>watches ({symWatches.length}{#if symWatches.length !== activeCount} · {activeCount} active{/if})</h2>
+      {#each symWatches as w}
+        <div class="row">
+          {w.id} - {w.direction} - <span class="wstatus {w.status.toLowerCase()}">{w.status}</span> - v{w.version}
+          {#if w.status !== "ACTIVE"}<span class="row-note">left ACTIVE — kept here so the trade is not lost from view</span>{/if}
+        </div>
+      {/each}
       {#if symWatches.length === 0}<p class="empty">no watches for {symbol}</p>{/if}
+    </section>
+    <section class="card">
+      <h2>analysis runs ({symRuns.length})</h2>
+      {#each symRuns as r}<div class="row">{r.id} - <span class="wstatus {biasOf(r).toLowerCase()}">{biasOf(r)}</span> @ {r.confidence ?? "-"} - {r.model} - {r.at}</div>{/each}
+      {#if symRuns.length === 0}<p class="empty">no analysis runs for {symbol} yet — a triggered watch writes one</p>{/if}
     </section>
     <section class="card">
       <h2>approvals ({symApprovals.length})</h2>
@@ -152,6 +172,12 @@
   .card.attention { border-color: #22c55e; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .row { font-size: 0.85rem; font-family: monospace; color: #c9d1d9; padding: 4px 0; border-bottom: 1px solid #1e2330; }
+  .wstatus { font-weight: 700; }
+  .wstatus.active { color: #eab308; }
+  .wstatus.triggered, .wstatus.analyzed, .wstatus.approved, .wstatus.ordered { color: #60a5fa; }
+  .wstatus.invalidated, .wstatus.expired, .wstatus.closed { color: #8b949e; }
+  .wstatus.long { color: #22c55e; } .wstatus.short { color: #ef4444; } .wstatus.flat { color: #9ca3af; }
+  .row-note { margin-left: 8px; color: #6b7280; font-size: 0.75rem; }
   .empty { color: #6b7280; font-size: 0.85rem; }
   .empty a { color: #60a5fa; }
   .row-btns { display: flex; gap: 8px; margin-bottom: 10px; }

@@ -5,9 +5,26 @@
 // canonical trading state stays in D1 (watches/orders/positions via the API);
 // this store holds only the ADVISORY linkage (which chat/strategies belong to
 // which symbol) until the backend setup migration lands.
+//
+// The ROOM LOGIC (which watches belong to a symbol, what that makes the room's
+// status) lives in setups-core.mjs so `node --test` imports the real
+// implementation instead of a hand-copied mirror — the freshness.mjs /
+// groups-core.mjs / library-core.mjs pattern.
 import { writable } from "svelte/store";
 
 export type SetupStatus = "OPEN" | "STALKING" | "AWAITING-APPROVAL" | "IDLE";
+
+/** One watch row as the room reads it (see setups-core.mjs roomWatches). */
+export interface RoomWatch {
+  id: string;
+  symbol: string;
+  status: string;
+  direction?: string;
+  version?: number;
+  updated_at?: string;
+}
+
+export { deriveStatus, roomWatches, roomWatchIds } from "./setups-core.mjs";
 
 export interface SymbolSetup {
   symbol: string;
@@ -53,22 +70,4 @@ export function touchSetup(symbol: string, patch: Partial<SymbolSetup>): void {
     const cur = all[symbol] ?? blank(symbol);
     return { ...all, [symbol]: { ...cur, ...patch, symbol, updatedAt: new Date().toISOString() } };
   });
-}
-
-/** Derive one symbol's room status from live API snapshots (no new endpoints). */
-export function deriveStatus(symbol: string, snap: {
-  positions: { symbol: string; size: string }[];
-  watches: { symbol: string; status: string }[];
-  approvals: { watch_id: string; used_at: string | null; expires_at: string }[];
-  watchIds: string[];
-}): SetupStatus {
-  const pos = snap.positions.find((p) => p.symbol === symbol);
-  if (pos && pos.size !== "0" && pos.size !== "") return "OPEN";
-  const now = Date.now();
-  const awaiting = snap.approvals.some(
-    (a) => snap.watchIds.includes(a.watch_id) && !a.used_at && Date.parse(a.expires_at) > now,
-  );
-  if (awaiting) return "AWAITING-APPROVAL";
-  if (snap.watches.some((w) => w.symbol === symbol && w.status === "ACTIVE")) return "STALKING";
-  return "IDLE";
 }

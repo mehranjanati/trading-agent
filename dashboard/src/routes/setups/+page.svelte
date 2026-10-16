@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getSymbols, isTradeable, validateSymbolInput, type SymbolsData } from "$lib/symbols";
-  import { getWatches, getApprovals, getPositions, badgeFor } from "$lib/api";
-  import { setups, deriveStatus, type SetupStatus } from "$lib/setups";
+  import { getWatchesAll, getApprovals, getPositions, badgeFor } from "$lib/api";
+  import { setups, deriveStatus, roomWatchIds, type SetupStatus } from "$lib/setups";
   import DataPage from "$lib/components/DataPage.svelte";
   import Badge from "$lib/components/Badge.svelte";
   import { goto } from "$app/navigation";
@@ -21,7 +21,7 @@
   $: list = (symbols?.symbols ?? []).filter((s) => !filter.trim() || s.includes(filter.trim().toUpperCase()));
 
   function statusOf(symbol: string): SetupStatus {
-    const watchIds = watches.filter((w: any) => w.symbol === symbol).map((w: any) => w.id);
+    const watchIds = roomWatchIds(watches, symbol);
     return deriveStatus(symbol, { positions, watches, approvals, watchIds });
   }
 
@@ -39,7 +39,7 @@
     const r = await getSymbols();
     if (r.ok) { symbols = r.data; symErr = null; }
     else { symbols = null; symErr = r.error; }
-    const [w, a, p] = await Promise.all([getWatches(), getApprovals(), getPositions()]);
+    const [w, a, p] = await Promise.all([getWatchesAll(), getApprovals(), getPositions()]);
     if (w.ok) watches = (w.data as { watches: any[] }).watches;
     if (a.ok) approvals = (a.data as { approvals: any[] }).approvals;
     if (p.ok) positions = (p.data as { positions: any[] }).positions;

@@ -324,6 +324,13 @@ export async function downscaleImage(
 
 export const getHealth = () => getJson<Health>("/api/health");
 export const getWatches = () => getJson<{ watches: Watch[] }>("/api/watches?status=ACTIVE");
+/** EVERY watch, newest first (no status filter — the Worker's list route with no
+ *  `status` param). The setup room must read the full lifecycle: a watch that
+ *  moved ACTIVE→TRIGGERED|INVALIDATED is exactly the one whose analysis,
+ *  approvals and orders have to stay visible, and the ACTIVE-only feed makes it
+ *  look deleted (docs/05 §5.3 — the FSM never deletes a watch, it transitions
+ *  it). /watches itself stays ACTIVE-only by design (docs/09 §9.1). */
+export const getWatchesAll = () => getJson<{ watches: Watch[] }>("/api/watches");
 export const getSignals = () => getJson<{ signals: Signal[] }>("/api/signals");
 export const getAnalysis = () => getJson<{ runs: AnalysisRun[] }>("/api/analysis");
 export const getApprovals = () => getJson<{ approvals: Approval[] }>("/api/approvals");

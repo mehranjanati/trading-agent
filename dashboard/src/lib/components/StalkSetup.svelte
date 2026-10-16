@@ -1,6 +1,6 @@
 <script lang="ts">
   import { postWatch } from "$lib/api";
-  import { stalkBody, isVenueSourced, type SetupProposal } from "$lib/stalk";
+  import { stalkBody, isVenueSourced, bandStats, fmtPct, type SetupProposal } from "$lib/stalk";
 
   // Shared human-gated Stalk card: advisory proposal in, explicit click out.
   // D-08 holds — the ONLY write is POST /api/watches, never orders/approvals.
@@ -11,6 +11,11 @@
   let busy = false;
   let error: string | null = null;
   let watchId: string | null = null;
+
+  // How far the two armed prices sit from the close they were measured on. A
+  // band a fraction of a percent wide is decided by the next tick, so the watch
+  // leaves ACTIVE immediately — the distances are shown before the click.
+  $: band = proposal ? bandStats(proposal) : null;
 
   async function stalk() {
     if (!proposal || busy || watchId) return;
@@ -47,6 +52,14 @@
       </div>
       {#if !isVenueSourced(proposal.zone_source)}
         <div class="stalk-warn">⚠ zone measured on {proposal.zone_source}, not the Toobit trading venue — confirm {proposal.symbol} is listed on Toobit before stalking</div>
+      {/if}
+    {/if}
+    {#if band}
+      <div class="stalk-meta">
+        band {band.width_pct.toFixed(3)}% of price — trigger {fmtPct(band.trigger_pct)}, invalidation {fmtPct(band.inval_pct)} from the {band.anchor} close
+      </div>
+      {#if band.in_play}
+        <div class="stalk-warn">⚠ the trigger is only {fmtPct(band.trigger_pct)} from that close — the live price is already there, so the next tick fires (or invalidates) this watch instead of waiting. Stalk a level price has not reached yet if you want it to sit armed.</div>
       {/if}
     {/if}
     {#if proposal.strategies?.length}

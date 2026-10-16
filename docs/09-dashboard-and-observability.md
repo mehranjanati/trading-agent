@@ -15,6 +15,18 @@
 | `/logs` | errors, latency p50/p95, data gaps | STALE tolerant |
 | `/strategy` | config versions + diff + activator | versioned |
 
+**Setup rooms keep the whole watch lifecycle.** `/setups/{symbol}` reads
+`GET /api/watches` (every status, ACTIVE first) instead of the ACTIVE-only feed:
+the watch FSM transitions a watch (ACTIVE→TRIGGERED→ANALYZED, or
+ACTIVE→INVALIDATED|EXPIRED, docs/05 §5.3) and never deletes it, so a room built
+on `status=ACTIVE` lost the watch, its approvals, its orders and its analysis
+runs at the exact moment the zone triggered — the trade read as deleted while D1
+still held every row. `/watches` itself stays ACTIVE-only (its row in the table
+above is the live board); the room is where a trade's history stays readable.
+The Stalk card also shows the trigger/invalidation distances from the close the
+zone was measured on (`bandStats` in `lib/stalk.ts`): a band a fraction of a
+percent wide is decided by the next tick, so the card says so before the click.
+
 ## 9.2 Freshness system
 Badge component on every data widget: LIVE (<5s) green · STALE (≥threshold) amber · CACHED (fallback/last-known) grey · UNAVAILABLE red. Global mode banner always visible; order buttons disabled with reason tooltip when uncertain (SAFE-001).
 

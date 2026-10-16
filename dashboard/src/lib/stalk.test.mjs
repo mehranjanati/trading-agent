@@ -11,7 +11,7 @@
 // is the shipped code, not a mirror.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { proposalFromAnalyze, isVenueSourced, stalkBody } from "./stalk.ts";
+import { proposalFromAnalyze, isVenueSourced, stalkBody, bandStats, fmtPct, IN_PLAY_PCT } from "./stalk.ts";
 
 const ANALYZE = (zones) => ({ id: "an_20261016T121746_2", symbol: "CELRUSDT", suggest_zones: zones });
 
@@ -80,5 +80,72 @@ describe("stalkBody — the POST /api/watches shape validate.mjs:watchBody accep
       trigger: { op: ">=", price: "0.002795357142857143" },
       invalidation: { op: "<=", price: "0.0027885714285714285" },
     });
+  });
+});
+
+// The real report this pins: a CELRUSDT SHORT armed at 15:09 on a zone whose
+// trigger sat 0.06% from the anchor close (band 0.31% wide) — the next tick
+// decided the watch, it left ACTIVE, and every ACTIVE-only view went blank. The
+// distances are now shown BEFORE the click, because a band that tight is a
+// "fire now", not a "wait here".
+const ARMED = proposalFromAnalyze(ANALYZE({
+  trigger_short: "0.002725285714285714",
+  inval_short: "0.002733857142857143",
+  source: "okx-rest", bars: 120, last: "0.002727", last_ts: "2026-10-16T15:00:00Z",
+}), "SHORT");
+
+describe("bandStats — how far the armed prices sit from the zone's own close", () => {
+  it("measures the CELR SHORT zone in % of its anchor close", () => {
+    const b = bandStats(ARMED);
+    assert.equal(b.anchor, "0.002727");
+    assert.ok(Math.abs(b.trigger_pct - -0.0629) < 0.001, `trigger_pct ${b.trigger_pct}`);
+    assert.ok(Math.abs(b.inval_pct - 0.2514) < 0.001, `inval_pct ${b.inval_pct}`);
+    assert.ok(Math.abs(b.width_pct - 0.3143) < 0.001, `width_pct ${b.width_pct}`);
+    assert.equal(b.in_play, true); // the trigger is 0.06% away: already live
+  });
+
+  it("flags a zone whose trigger the live price has not reached as NOT in play", () => {
+    const far = proposalFromAnalyze(ANALYZE({
+      trigger_short: "2.5", inval_short: "3.5", source: "toobit-rest", last: "3",
+    }), "SHORT");
+    const b = bandStats(far);
+    assert.ok(Math.abs(b.trigger_pct - -16.6667) < 0.001);
+    assert.ok(Math.abs(b.width_pct - 33.3333) < 0.001);
+    assert.equal(b.in_play, false);
+  });
+
+  it("a LONG zone measures upward from the anchor", () => {
+    const p = proposalFromAnalyze(ANALYZE({
+      trigger_long: "0.002795357142857143", inval_long: "0.0027885714285714285",
+      source: "okx-rest", last: "0.002794",
+    }), "LONG");
+    const b = bandStats(p);
+    assert.ok(Math.abs(b.trigger_pct - 0.0486) < 0.001, `trigger_pct ${b.trigger_pct}`);
+    assert.ok(Math.abs(b.inval_pct - -0.1945) < 0.001, `inval_pct ${b.inval_pct}`);
+    // +0.049% is still inside IN_PLAY_PCT: this LONG is in play too.
+    assert.equal(b.in_play, true);
+  });
+
+  it("needs an anchor: a chat proposal without zone provenance yields nothing", () => {
+    assert.equal(bandStats(null), null);
+    assert.equal(bandStats(undefined), null);
+    assert.equal(bandStats({ ...ARMED, zone_last: undefined }), null);
+    assert.equal(bandStats({ ...ARMED, zone_last: "abc" }), null);
+    assert.equal(bandStats({ ...ARMED, trigger_price: "" }), null);
+    assert.equal(bandStats({ ...ARMED, invalidation_price: "0" }), null);
+  });
+
+  it("IN_PLAY_PCT is the documented boundary", () => {
+    const at = (pctFrom) => ({ ...ARMED, trigger_price: String(0.002727 * (1 - pctFrom / 100)) });
+    assert.equal(bandStats(at(IN_PLAY_PCT / 2)).in_play, true);   // 0.05% away
+    assert.equal(bandStats(at(IN_PLAY_PCT * 2)).in_play, false);  // 0.20% away
+  });
+});
+
+describe("fmtPct — the card's signed percentage", () => {
+  it("keeps the sign and 3 decimals", () => {
+    assert.equal(fmtPct(0.2514), "+0.251%");
+    assert.equal(fmtPct(-0.0629), "-0.063%");
+    assert.equal(fmtPct(0), "+0.000%");
   });
 });

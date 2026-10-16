@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -17,12 +18,56 @@ import (
 // Timeout bounds every call so a stalled Redis can never block a caller.
 const Timeout = 3 * time.Second
 
-// Addr is the Redis endpoint: REDIS_ADDR override, else the local default.
-func Addr() string {
-	if a := os.Getenv("REDIS_ADDR"); a != "" {
-		return a
+// endpoint resolves the Redis endpoint from env, per dial:
+//   - REDIS_URL: a full redis:// URL (Render's Key Value convention) —
+//     user:password are AUTHed after the handshake.
+//   - REDIS_ADDR: a bare host:port, or a redis:// URL too.
+//   - empty: the local default.
+//
+// rediss:// (TLS) is rejected: this stdlib client speaks plain RESP.
+func endpoint() (hostport, user, pass string, err error) {
+	v := os.Getenv("REDIS_URL")
+	if v == "" {
+		v = os.Getenv("REDIS_ADDR")
 	}
-	return "127.0.0.1:6379"
+	if v == "" {
+		return "127.0.0.1:6379", "", "", nil
+	}
+	if strings.Contains(v, "://") {
+		u, perr := url.Parse(v)
+		if perr != nil {
+			return "", "", "", fmt.Errorf("redis: bad URL in env: %w", perr)
+		}
+		if u.Scheme == "rediss" {
+			return "", "", "", fmt.Errorf("redis: rediss:// (TLS) is not supported by redisx")
+		}
+		if u.Host == "" {
+			return "", "", "", fmt.Errorf("redis: URL %q has no host", v)
+		}
+		hp := u.Host
+		if _, _, e := net.SplitHostPort(hp); e != nil {
+			hp += ":6379"
+		}
+		if u.User != nil {
+			user = u.User.Username()
+			pass, _ = u.User.Password()
+		}
+		return hp, user, pass, nil
+	}
+	if _, _, e := net.SplitHostPort(v); e != nil {
+		v = net.JoinHostPort(v, "6379")
+	}
+	return v, "", "", nil
+}
+
+// Addr is the Redis host:port (same env resolution as dial). Credentials in
+// the env value are used for AUTH and never appear in the returned address.
+func Addr() string {
+	hp, _, _, err := endpoint()
+	if err != nil {
+		return "127.0.0.1:6379"
+	}
+	return hp
 }
 
 // Do runs one command and returns the reply as a string: simple status (+OK),
@@ -70,12 +115,47 @@ func DoArray(args ...string) ([]string, error) {
 }
 
 func dial() (net.Conn, error) {
-	c, err := net.DialTimeout("tcp", Addr(), Timeout)
+	hp, user, pass, err := endpoint()
+	if err != nil {
+		return nil, err
+	}
+	c, err := net.DialTimeout("tcp", hp, Timeout)
 	if err != nil {
 		return nil, err
 	}
 	_ = c.SetDeadline(time.Now().Add(Timeout))
+	// Render Key Value serves an authenticated URL (user:pass in env); the
+	// plain-TCP handshake authenticates before any other command.
+	if pass != "" {
+		auth := []string{"AUTH"}
+		if user != "" {
+			auth = append(auth, user)
+		}
+		if err := shake(c, append(auth, pass)); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
 	return c, nil
+}
+
+// shake sends one handshake command (AUTH) and requires a +OK status reply.
+func shake(c net.Conn, args []string) error {
+	if _, err := c.Write([]byte(command(args))); err != nil {
+		return err
+	}
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil {
+		return err
+	}
+	switch {
+	case len(line) > 0 && line[0] == '+':
+		return nil
+	case len(line) > 0 && line[0] == '-':
+		return fmt.Errorf("redis: %s", strings.TrimSpace(line[1:]))
+	default:
+		return fmt.Errorf("redis: unexpected %q", line)
+	}
 }
 
 // command renders args as a RESP array of bulk strings.

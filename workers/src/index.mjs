@@ -45,6 +45,7 @@ export default {
       if (req.method === "POST" && p === "/api/orders:intents") return misc.submitIntent(req, env);
       if (req.method === "POST" && p === "/api/kill-switch") return misc.killSwitch(req, env);
       if (req.method === "POST" && p === "/api/analysis:runs") return misc.runAnalysis(req, env);
+      if (req.method === "POST" && p === "/api/watches:trigger") return misc.triggerWatch(req, env);
       if (req.method === "POST" && p === "/api/approvals") return misc.decideApproval(req, env);
       if (req.method === "GET" && p === "/api/strategy") return misc.listStrategy(req, env);
       if (req.method === "GET" && p === "/api/approvals") return misc.listApprovals(req, env);

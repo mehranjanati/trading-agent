@@ -31,10 +31,18 @@ Primary flow (solid): Toobit WS → Go normalize → Redis Streams → Workers c
 - T5 Workers→Toobit REST: HMAC trade-only keys (no withdrawals), IP allowlist, per-key rate budget, signed `recvWindow=5000`.
 
 ## 2.4 Happy-path data flow (numbered)
-1. Tick → Go normalize → `HSET px:{sym}` + `XADD events:market {evt_id, sym, px, ts}`.
-2. Trigger match → `XADD events:watch {type:watch.triggered_v1, ...}` with stable `evt_<ulid>`.
-3. Workers consumer (`cg-workers`) reads → D1 batch: `INSERT events + watch_transitions + outbox`.
-4. Analysis run row → approval request → human decision → single-use token.
+1. Tick → Go normalize → `HSET px:{sym}` (TTL 30s) + evaluate the ACTIVE set
+   (`triggerloop`): last-px map, `trigger.Eval`/`Invalidated`, `confirm_ticks`.
+2. Trigger match → the loop POSTs the edge to the Worker
+   (`POST /api/watches:trigger`, `x-agent-token`), carrying the tick price, the
+   previous price, the per-watch seq and the version it evaluated. (The Redis
+   `events:watch` emit stays available for the stream path; the D1 transaction
+   lives in the Worker because the Go plane must never write D1 — E03-T01.)
+3. Worker → D1 batch: `watch_transitions` (ACTIVE→TRIGGERED/INVALIDATED) +
+   `events` (`watch.triggered_v1`, dedupe_key `type:watch_id:seq`) + `outbox`;
+   a replay or a stale version is a no-op with an explicit reason.
+4. Analysis run row (live WASM engine) → the watch moves TRIGGERED→ANALYZED →
+   approval request → human decision → single-use token.
 5. Risk gates (code) → intent row (`client_order_id=intent_id`) → signed submit → reconcile-to-terminal → position snapshot.
 
 ## 2.5 Deployment diagram (primary solid, fallback dashed)

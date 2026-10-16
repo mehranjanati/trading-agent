@@ -11,6 +11,7 @@ import { engageKill, releaseKill, readKill } from "./kill.mjs";
 import { createPaperExchange } from "./exchange.mjs";
 import { readLease } from "./health-route.mjs";
 import { watcherBase } from "./proxy.mjs";
+import { transitionStatements } from "./watches.mjs";
 
 // D-06: Toobit has no testnet, so the wired venue is the paper simulator. Tests
 // and drills inject `env.EXCHANGE` to drive ack-loss / partial-fill scenarios;
@@ -40,6 +41,95 @@ async function persistSignal(env, b, { schema_version, tagged }) {
     ).bind(uid("evt"), "signal.ingested_v1", b.watch_id ?? id, JSON.stringify({ kind: b.kind, schema_version: SCHEMA_VERSION }), `signal.ingested_v1:${id}:0`, now),
   ]);
   return ok({ id, schema_version }, 201);
+}
+
+/** readWatch — the fields every analysis/trigger decision needs. */
+async function readWatch(env, id) {
+  const rows = (await env.DB.prepare(
+    "SELECT id,symbol,direction,status,version FROM watches WHERE id=?",
+  ).bind(id).all()).results ?? [];
+  return rows[0] ?? null;
+}
+
+/** degraded — an engine/plane problem that must NOT become fabricated data. */
+function degraded(message) {
+  const e = new Error(message);
+  e.code = "DEGRADED";
+  return e;
+}
+
+/** analyzeWatch — the advisory run for one watch, computed by the LIVE engine.
+ *
+ *  E14-T03: reads the pinned catalog from the Go plane (GET /strategies/registry
+ *  — the bytes the runner will execute), posts /analyze with the watch's
+ *  symbol+direction, and persists the engine's OWN aggregate + per-verdict
+ *  provider provenance + the digest of the exact request. There is deliberately
+ *  NO local fallback: an analysis row is what a human approves against, so an
+ *  invented row would be mock data in the canonical DB. Every failure path
+ *  throws DEGRADED and writes nothing.
+ *
+ *  @returns {Promise<{id: string, out: object}>} */
+async function analyzeWatch(env, w) {
+  const base = watcherBase(env);
+  let pins;
+  try {
+    const regRes = await fetch(`${base}/strategies/registry`);
+    if (!regRes.ok) throw new Error(`registry HTTP ${regRes.status}`);
+    pins = (((await regRes.json()).strategies) ?? [])
+      .slice(0, 8) // /analyze caps the set at 8
+      .map((s) => ({ id: s.id, version: s.version, config: {} }));
+    if (!pins.length) throw new Error("registry has no pinned strategy");
+  } catch (e) {
+    throw degraded(`analysis engine unavailable (${e.message})`);
+  }
+
+  const ask = { symbol: w.symbol, direction: w.direction, strategies: pins };
+  let engine;
+  try {
+    const res = await fetch(`${base}/analyze`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(ask),
+    });
+    if (!res.ok) throw new Error(`analyze HTTP ${res.status}`);
+    engine = await res.json();
+  } catch (e) {
+    throw degraded(`analysis engine unavailable (${e.message})`);
+  }
+  const agg = engine?.aggregate ?? {};
+  if (typeof agg.bias !== "string") throw degraded("analysis engine returned no aggregate");
+
+  // E07-T01-S2a: pin the version active AT RUN START — old runs keep their pin.
+  const active = await activeVersion(env);
+  const verdicts = engine.verdicts ?? [];
+  const out = {
+    bias: agg.bias,
+    confidence: agg.confidence,
+    reasons: [agg.explanation ?? ""],
+    model: "wasm-engine",
+    input_hash: await sha256Hex(JSON.stringify(ask)),
+    strategy_version: active?.version ?? null,
+    engine: {
+      analyze_id: engine.id ?? null,
+      at: engine.at ?? null,
+      symbol: engine.symbol ?? w.symbol,
+      strategies: pins.map((p) => `${p.id}@${p.version}`),
+      // Which provider answered per timeframe — the same provenance the
+      // dashboard shows on the setup card.
+      data_sources: [...new Set(verdicts.map((v) => v.data_source).filter(Boolean))],
+      aggregate: { agree: agg.agree, disagree: agg.disagree, flat: agg.flat, errors: agg.errors, n: agg.n },
+      verdicts: verdicts.map((v) => ({
+        strategy_id: v.strategy_id, strategy_version: v.strategy_version, timeframe: v.timeframe,
+        data_source: v.data_source, status: v.result?.status,
+        bias: v.result?.decision?.bias, confidence: v.result?.decision?.confidence,
+        reason: v.result?.diagnostics?.reason,
+      })),
+      suggest_zones: engine.suggest_zones ?? null,
+    },
+  };
+  const id = uid("an");
+  await env.DB.prepare(
+    "INSERT INTO analysis_runs(id,watch_id,model,input_hash,output_json,confidence,at) VALUES(?,?,?,?,?,?,?)",
+  ).bind(id, w.id, out.model, out.input_hash, JSON.stringify(out), out.confidence ?? null, new Date().toISOString()).run();
+  return { id, out };
 }
 
 export function miscRoutes() {
@@ -128,13 +218,10 @@ export function miscRoutes() {
     }),
     /** POST /api/analysis:runs — the advisory analysis run for one watch.
      *
-     *  E14-T03: a run is produced by the LIVE engine or not at all. The handler
-     *  resolves the watch from D1, reads the pinned catalog from the Go plane
-     *  (GET /strategies/registry — the bytes the runner will execute), posts the
-     *  analysis, and persists the engine's OWN aggregate + per-verdict
-     *  provenance. There is deliberately NO local fallback: an analysis row is
-     *  what a human approves against, so an invented row would be mock data in
-     *  the canonical DB. Engine unreachable → 503 DEGRADED and nothing written. */
+     *  E14-T03: a run is produced by the LIVE engine or not at all (see
+     *  analyzeWatch). This handler resolves the watch from D1 (a run is about a
+     *  real watch) and answers 503 DEGRADED — writing nothing — when the engine
+     *  cannot be reached. */
     runAnalysis: safe(async (req, env) => {
       const g = guard("POST /api/analysis:runs", req);
       if (g) return g;
@@ -142,79 +229,115 @@ export function miscRoutes() {
       if (typeof b.watch_id !== "string" || !b.watch_id) {
         const e = new Error("watch_id required"); e.code = "VALIDATION"; throw e;
       }
-      const w = (await env.DB.prepare(
-        "SELECT id,symbol,direction,status FROM watches WHERE id=?",
-      ).bind(b.watch_id).all()).results?.[0];
+      const w = await readWatch(env, b.watch_id);
       if (!w) return err("NOT_FOUND", `watch ${b.watch_id} not found`, {});
-      const base = watcherBase(env);
-
-      // The strategy set comes from the registry, never a list repeated here: a
-      // version that appears in it is one the runner can actually execute.
-      let pins;
       try {
-        const regRes = await fetch(`${base}/strategies/registry`);
-        if (!regRes.ok) throw new Error(`registry HTTP ${regRes.status}`);
-        pins = (((await regRes.json()).strategies) ?? [])
-          .slice(0, 8) // /analyze caps the set at 8
-          .map((s) => ({ id: s.id, version: s.version, config: {} }));
-        if (!pins.length) throw new Error("registry has no pinned strategy");
+        const { id, out } = await analyzeWatch(env, w);
+        return ok({ id, ...out }, 201);
       } catch (e) {
-        return err("DEGRADED", `analysis engine unavailable (${e.message}) — no run written`, { retryable: true });
+        if (e.code === "DEGRADED") return err("DEGRADED", `${e.message} — no run written`, { retryable: true });
+        throw e;
+      }
+    }),
+    /** POST /api/watches:trigger — the trigger loop's edge into D1 (E03-T01).
+     *
+     *  The Go plane evaluates ACTIVE watches against live ticks and posts the edge
+     *  it decided; this route owns the transaction (Go never writes D1):
+     *  FSM-guarded transition + event (dedupe_key = type:watch_id:seq, UNIQUE) +
+     *  outbox, then for a TRIGGERED watch the advisory analysis run and the
+     *  TRIGGERED→ANALYZED edge. If the engine is unreachable the watch stays
+     *  TRIGGERED and NOTHING is fabricated — the run can be re-asked explicitly.
+     *
+     *  Auth: the go-agent token (x-agent-token, same shared secret as the
+     *  heartbeat) — the loop is a service, not a browser. A replay or a stale
+     *  evaluation is answered 200 with an explicit `duplicate`/`ignored` reason,
+     *  never an error: the loop must be able to retry safely. */
+    triggerWatch: safe(async (req, env) => {
+      const want = env.GO_AGENT_TOKEN ?? env.GO_HEARTBEAT_TOKEN;
+      if (want && req.headers.get("x-agent-token") !== want) {
+        return err("AUTH", "bad agent token", {});
+      }
+      const b = await readBody(req);
+      const kind = b.kind === "TRIGGERED" ? "TRIGGERED" : b.kind === "INVALIDATED" ? "INVALIDATED" : null;
+      if (!kind) { const e = new Error("kind must be TRIGGERED|INVALIDATED"); e.code = "VALIDATION"; throw e; }
+      if (typeof b.watch_id !== "string" || !b.watch_id) {
+        const e = new Error("watch_id required"); e.code = "VALIDATION"; throw e;
+      }
+      if (typeof b.px !== "string" || !/^\d+(\.\d+)?$/.test(b.px)) {
+        const e = new Error("px must be a decimal string (money is never a float)"); e.code = "VALIDATION"; throw e;
+      }
+      if (!Number.isInteger(b.seq) || b.seq < 1) {
+        const e = new Error("seq must be an integer >= 1 (it is the dedupe identity)"); e.code = "VALIDATION"; throw e;
+      }
+      const at = typeof b.ts === "string" && b.ts ? b.ts : new Date().toISOString();
+      const w = await readWatch(env, b.watch_id);
+      if (!w) return err("NOT_FOUND", `watch ${b.watch_id} not found`, {});
+
+      const evtType = kind === "TRIGGERED" ? "watch.triggered_v1" : "watch.invalidated_v1";
+      const dedupe = `${evtType}:${w.id}:${b.seq}`;
+      const seen = (await env.DB.prepare(
+        "SELECT id FROM events WHERE dedupe_key=?",
+      ).bind(dedupe).all().catch(() => ({ results: [] }))).results ?? [];
+      if (seen.length) return ok({ watch_id: w.id, status: w.status, duplicate: true, dedupe_key: dedupe }, 200);
+      if (w.status !== "ACTIVE") {
+        return ok({ watch_id: w.id, status: w.status, ignored: `not ACTIVE (${w.status})` }, 200);
+      }
+      if (Number.isInteger(b.watch_version) && b.watch_version !== w.version) {
+        return ok({ watch_id: w.id, status: w.status, ignored: `stale evaluation (v${b.watch_version} != v${w.version})` }, 200);
       }
 
-      const ask = { symbol: w.symbol, direction: w.direction, strategies: pins };
-      let engine;
-      try {
-        const res = await fetch(`${base}/analyze`, {
-          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(ask),
-        });
-        if (!res.ok) throw new Error(`analyze HTTP ${res.status}`);
-        engine = await res.json();
-      } catch (e) {
-        return err("DEGRADED", `analysis engine unavailable (${e.message}) — no run written`, { retryable: true });
-      }
-      const agg = engine?.aggregate ?? {};
-      if (typeof agg.bias !== "string") {
-        return err("DEGRADED", "analysis engine returned no aggregate — no run written", { retryable: true });
-      }
-
-      // E07-T01-S2a: pin the version that is active AT RUN START — old runs
-      // keep their pin forever (pin-immutability is what E09 will audit).
-      const active = await activeVersion(env);
-      const verdicts = engine.verdicts ?? [];
-      const out = {
-        bias: agg.bias,
-        confidence: agg.confidence,
-        reasons: [agg.explanation ?? ""],
-        model: "wasm-engine",
-        // The digest of the exact request the engine answered, so the row can be
-        // re-run and compared instead of taken on faith.
-        input_hash: await sha256Hex(JSON.stringify(ask)),
-        strategy_version: active?.version ?? null,
-        engine: {
-          analyze_id: engine.id ?? null,
-          at: engine.at ?? null,
-          symbol: engine.symbol ?? w.symbol,
-          strategies: pins.map((p) => `${p.id}@${p.version}`),
-          // Which provider answered per timeframe — the same provenance the
-          // dashboard shows on the setup card.
-          data_sources: [...new Set(verdicts.map((v) => v.data_source).filter(Boolean))],
-          aggregate: { agree: agg.agree, disagree: agg.disagree, flat: agg.flat, errors: agg.errors, n: agg.n },
-          verdicts: verdicts.map((v) => ({
-            strategy_id: v.strategy_id, strategy_version: v.strategy_version, timeframe: v.timeframe,
-            data_source: v.data_source, status: v.result?.status,
-            bias: v.result?.decision?.bias, confidence: v.result?.decision?.confidence,
-            reason: v.result?.diagnostics?.reason,
-          })),
-          suggest_zones: engine.suggest_zones ?? null,
-        },
-      };
       const now = new Date().toISOString();
-      const id = uid("an");
-      await env.DB.prepare(
-        "INSERT INTO analysis_runs(id,watch_id,model,input_hash,output_json,confidence,at) VALUES(?,?,?,?,?,?,?)",
-      ).bind(id, b.watch_id, out.model, out.input_hash, JSON.stringify(out), out.confidence ?? null, now).run();
-      return ok({ id, ...out }, 201);
+      const batch = [
+        ...transitionStatements(env, {
+          id: w.id, from: "ACTIVE", to: kind, expectedVersion: w.version,
+          tid: uid("tr"), reason: `${kind === "TRIGGERED" ? "trigger" : "invalidation"} hit @ ${b.px}`,
+          actor: "go-watcher", at: now,
+        }),
+        env.DB.prepare(
+          "INSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES(?,?,?,?,?,?)",
+        ).bind(uid("evt"), evtType, w.id, JSON.stringify({ symbol: w.symbol, px: b.px, prev_px: b.prev_px ?? null, seq: b.seq }), dedupe, at),
+        env.DB.prepare(
+          "INSERT INTO outbox(id,aggregate,payload_json,attempts,done) VALUES(?,?,?,0,0)",
+        ).bind(uid("obx"), "watches", JSON.stringify({ watch_id: w.id, edge: kind })),
+      ];
+      try {
+        await env.DB.batch(batch);
+      } catch (e) {
+        // The UNIQUE dedupe_key is the backstop for a race with the SELECT above.
+        if (/UNIQUE/i.test(String(e.message))) {
+          return ok({ watch_id: w.id, status: w.status, duplicate: true, dedupe_key: dedupe }, 200);
+        }
+        throw e;
+      }
+
+      if (kind === "INVALIDATED") {
+        return ok({ watch_id: w.id, status: "INVALIDATED", seq: b.seq }, 200);
+      }
+
+      // TRIGGERED → ANALYZED: the advisory run. The re-read is deliberate — if
+      // anything moved the watch while the engine worked, we do NOT record an
+      // edge that did not happen.
+      let run;
+      try {
+        run = await analyzeWatch(env, w);
+      } catch (e) {
+        return ok({ watch_id: w.id, status: "TRIGGERED", seq: b.seq, analysis_degraded: e.message }, 202);
+      }
+      const cur = await readWatch(env, w.id);
+      if (cur?.status === "TRIGGERED" && cur.version === w.version + 1) {
+        await env.DB.batch(transitionStatements(env, {
+          id: w.id, from: "TRIGGERED", to: "ANALYZED", expectedVersion: cur.version,
+          tid: uid("tr"), reason: `analysis ${run.id} stored`, actor: "go-watcher", at: new Date().toISOString(),
+        }));
+        return ok({
+          watch_id: w.id, status: "ANALYZED", seq: b.seq, analysis_id: run.id,
+          bias: run.out.bias, confidence: run.out.confidence, model: run.out.model, engine: run.out.engine,
+        }, 201);
+      }
+      return ok({
+        watch_id: w.id, status: cur?.status ?? "TRIGGERED", seq: b.seq, analysis_id: run.id,
+        note: "watch moved while the analysis ran — no ANALYZED edge recorded",
+      }, 200);
     }),
     decideApproval: safe(async (req, env) => {
       const g = guard("POST /api/approvals", req);

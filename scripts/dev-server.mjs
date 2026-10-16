@@ -118,6 +118,10 @@ async function main() {
     // Toobit base override (drills / a local venue stand-in); default is the
     // live venue, which is what a real paper run must hit.
     ...(process.env.TOOBIT_BASE ? { TOOBIT_BASE: process.env.TOOBIT_BASE } : {}),
+    // The go-agent token the Go plane sends on service routes (heartbeat +
+    // watch trigger): without the pass-through a local drill cannot exercise the
+    // token path, and in production both sides must carry the same secret.
+    ...(process.env.GO_AGENT_TOKEN ? { GO_AGENT_TOKEN: process.env.GO_AGENT_TOKEN } : {}),
     // E07 webhook secrets come from the operator's environment (never the repo):
     // without one, the HMAC signal route correctly rejects everything.
     ...(process.env.SIGNAL_HMAC_SECRET ? { SIGNAL_HMAC_SECRET: process.env.SIGNAL_HMAC_SECRET } : {}),

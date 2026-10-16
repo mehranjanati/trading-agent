@@ -24,6 +24,19 @@ Guards: only ACTIVE evaluates; TRIGGERED needs fresh px; APPROVED needs unused+u
 
 The `DRAFT→ACTIVE` ("publish") edge is performed by the human Stalk click: `POST /api/watches` inserts the row `DRAFT` v1 and publishes it to `ACTIVE` v2 in the same D1 batch (reason `publish (stalk)`), because the trigger loop and the ADR-004 poller evaluate `status='ACTIVE'` only — an unpublished draft is a zone nothing ever watches. Arming is advisory, never an order: a trigger still leads to analysis, and the order path needs its own single-use human approval (SAFE-002).
 
+### 5.3a Who evaluates, and how an edge reaches D1
+
+`ACTIVE → TRIGGERED|INVALIDATED` is decided by the Go trigger loop
+(`go-watcher/triggerloop` + `tickfeed`): a 10s snapshot reload of the ACTIVE set,
+a live tick source (`TRIGGER_FEED=rest` — the ADR-004 price poll; `ws` — the
+production socket feed), a pure deterministic evaluator, and one POST per edge to
+`POST /api/watches:trigger`. The Worker owns the transaction (the Go plane never
+writes D1): FSM-guarded transition + event + outbox, then the advisory analysis
+run and `TRIGGERED → ANALYZED`. A replay, a stale evaluation version or a watch
+that is no longer ACTIVE is answered 200 with an explicit reason and writes
+nothing — the loop must be able to retry safely. If the analysis engine is
+unreachable the watch stays `TRIGGERED` and no analysis row is written.
+
 ## 5.4 Order FSM
 ```mermaid
 stateDiagram-v2

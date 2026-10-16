@@ -32,15 +32,22 @@ export function transitionSql(watchId, from, to, expectedVersion, meta) {
 // inside a D1 batch: `actor` comes from a request header and must never be
 // interpolated into SQL. The FSM guard still runs first, so an illegal edge is a
 // 409 before anything is written.
+//
+// The audit row is inserted FIRST and both statements carry the SAME guard
+// (id + expectedVersion + from-status), so inside one D1 transaction either both
+// apply or neither does: a stale or duplicate call can never leave a transition
+// row for an edge that did not happen. The order matters — the UPDATE would
+// invalidate the guard for the INSERT if it ran first.
 export function transitionStatements(env, { id, from, to, expectedVersion, tid, reason, actor, at }) {
   guardTransition(from, to);
   return [
     env.DB.prepare(
+      "INSERT INTO watch_transitions(id,watch_id,from_s,to_s,reason,actor,at) " +
+        "SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM watches WHERE id=? AND version=? AND status=?)",
+    ).bind(tid, id, from, to, reason, actor, at, id, expectedVersion, from),
+    env.DB.prepare(
       "UPDATE watches SET status=?, version=version+1, updated_at=? WHERE id=? AND version=? AND status=?",
     ).bind(to, at, id, expectedVersion, from),
-    env.DB.prepare(
-      "INSERT INTO watch_transitions(id,watch_id,from_s,to_s,reason,actor,at) VALUES(?,?,?,?,?,?,?)",
-    ).bind(tid, id, from, to, reason, actor, at),
   ];
 }
 // SQL: active snapshot for Go cold-start (R-01) — ordered, version-pinned.

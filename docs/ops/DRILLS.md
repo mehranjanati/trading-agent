@@ -38,6 +38,37 @@ The seeded watches are **drill fixtures** (`created_by=e06-drill`, ids
 watches table carries a `by` column, and `--no-seed` (or a fresh `--db`) gives a
 clean desk. Nothing else in the local DB is synthetic.
 
+### The trigger loop (stalk → trigger → analysis)
+
+The Go watcher evaluates the ACTIVE set against live ticks and posts each edge to
+the Worker. Start it against the local plane (the Stalk click already publishes
+the watch as `ACTIVE`):
+
+```bash
+# 1. Workers plane, with the go-agent token both sides share
+GO_AGENT_TOKEN=dev-token GO_WATCHER_URL=http://127.0.0.1:8090 \
+  node scripts/dev-server.mjs --port 8787 --db /tmp/loop.sqlite --no-seed --cron-ms 300000
+
+# 2. Watcher: cold start loads the ACTIVE set, the loop evaluates it
+cd go-watcher && WORKERS_URL=http://127.0.0.1:8787 GO_AGENT_TOKEN=dev-token \
+  TRIGGER_FEED=rest GO_PORT=8090 go run .
+
+# 3. Stalk a zone whose trigger is already satisfied → the loop fires on the next tick
+curl -s -X POST http://127.0.0.1:8787/api/watches -H 'content-type: application/json' -H 'x-role: trader' \
+  -d '{"symbol":"BTCUSDT","direction":"LONG","trigger":{"op":">=","price":"1"},"invalidation":{"op":"<=","price":"0.5"}}'
+
+# 4. Watch it move, and read the real run the engine produced
+sqlite3 /tmp/loop.sqlite "SELECT id,status,version FROM watches;"
+sqlite3 /tmp/loop.sqlite "SELECT from_s||' -> '||to_s||' ['||reason||']' FROM watch_transitions;"
+sqlite3 /tmp/loop.sqlite "SELECT model,confidence,output_json FROM analysis_runs;"
+curl -s http://127.0.0.1:8090/metrics | tail -1   # evals / fires / fire_errors
+```
+
+`TRIGGER_FEED=ws` swaps the REST poll for the production socket feed (conn
+builders + reconnect + Redis `px:{sym}` publish). Without Redis the cold start
+logs a connection error and readiness stays 503 — the trigger loop itself is
+independent of Redis and does not gate readiness.
+
 ### Paper cycle needs the live engine
 
 `node scripts/paper-cycle.mjs` drives a full cycle, and its step 5

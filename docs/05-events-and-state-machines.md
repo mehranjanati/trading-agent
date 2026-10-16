@@ -22,6 +22,8 @@ stateDiagram-v2
 ```
 Guards: only ACTIVE evaluates; TRIGGERED needs fresh px; APPROVED needs unused+unexpired approval; every edge writes `watch_transitions` + event.
 
+The `DRAFT→ACTIVE` ("publish") edge is performed by the human Stalk click: `POST /api/watches` inserts the row `DRAFT` v1 and publishes it to `ACTIVE` v2 in the same D1 batch (reason `publish (stalk)`), because the trigger loop and the ADR-004 poller evaluate `status='ACTIVE'` only — an unpublished draft is a zone nothing ever watches. Arming is advisory, never an order: a trigger still leads to analysis, and the order path needs its own single-use human approval (SAFE-002).
+
 ## 5.4 Order FSM
 ```mermaid
 stateDiagram-v2

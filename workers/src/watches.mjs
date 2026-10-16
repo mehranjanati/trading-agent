@@ -28,6 +28,21 @@ export function transitionSql(watchId, from, to, expectedVersion, meta) {
     `INSERT INTO watch_transitions(id,watch_id,from_s,to_s,reason,actor,at) VALUES('${tid}','${watchId}','${from}','${to}','${reason}','${actor}','${at}');`,
   ].join("\n");
 }
+// The same edge as PREPARED statements (bound params), for callers that write it
+// inside a D1 batch: `actor` comes from a request header and must never be
+// interpolated into SQL. The FSM guard still runs first, so an illegal edge is a
+// 409 before anything is written.
+export function transitionStatements(env, { id, from, to, expectedVersion, tid, reason, actor, at }) {
+  guardTransition(from, to);
+  return [
+    env.DB.prepare(
+      "UPDATE watches SET status=?, version=version+1, updated_at=? WHERE id=? AND version=? AND status=?",
+    ).bind(to, at, id, expectedVersion, from),
+    env.DB.prepare(
+      "INSERT INTO watch_transitions(id,watch_id,from_s,to_s,reason,actor,at) VALUES(?,?,?,?,?,?,?)",
+    ).bind(tid, id, from, to, reason, actor, at),
+  ];
+}
 // SQL: active snapshot for Go cold-start (R-01) — ordered, version-pinned.
 export function activeSnapshotSql() {
   return `SELECT id,symbol,direction,trigger_json,invalidation_json,status,version,expires_at FROM watches WHERE status='ACTIVE' ORDER BY symbol,id;`;

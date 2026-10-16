@@ -56,7 +56,10 @@
       <div class="stalk-meta">timeframes: {proposal.timeframes.join(", ")}</div>
     {/if}
     {#if watchId}
-      <div class="stalk-ok">watch stalked: <a href="/watches">{watchId}</a> — entry watches ACTIVE, parent stays advisory until price touch</div>
+      <div class="stalk-ok">
+        watch armed: <a href="/watches">{watchId}</a> — status <strong>ACTIVE</strong> (published DRAFT→ACTIVE), so the trigger loop evaluates it now.
+        A price touch fires a trigger → analysis; <strong>no order is placed without a separate single-use human approval</strong> (D-08: the dashboard deliberately cannot issue one).
+      </div>
     {:else}
       <button on:click={stalk} disabled={busy} class="primary">
         {busy ? "stalking..." : "Stalk this zone — تایید و ساخت"}

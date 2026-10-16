@@ -2,6 +2,7 @@
 import { err, ok } from "./errors.mjs";
 import { watchBody } from "./validate.mjs";
 import { uid, roleOf, guard, readBody, writeErr } from "./_shared.mjs";
+import { transitionStatements } from "./watches.mjs";
 
 export function watchRoutes(store) {
   const safe = (fn) => async (req, env) => {
@@ -33,19 +34,35 @@ export function watchRoutes(store) {
       const prior = await store.lookup("POST /api/watches", idem);
       if (prior) return ok(prior.body, prior.status);
       const id = uid("w");
+      const actor = roleOf(req);
+      // The watch is born DRAFT and PUBLISHED in the same batch (docs/05 §5.3:
+      // DRAFT→ACTIVE "publish"). Why in one request: the only write the dashboard
+      // performs is this one — the Stalk click IS the human publish — and a watch
+      // left DRAFT is evaluated by nothing (the Go trigger loop and the fallback
+      // poller read status='ACTIVE' only), so the zone would silently never arm.
+      // Arming is advisory: a trigger still leads to analysis, and every order
+      // needs its own single-use human approval (SAFE-002, D-08).
       const batch = [
         env.DB.prepare(
           "INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,'DRAFT',1,?,?,?,?)",
-        ).bind(id, b.symbol, b.direction, JSON.stringify(b.trigger), JSON.stringify(b.invalidation ?? {}), roleOf(req), b.expires_at ?? null, now, now),
+        ).bind(id, b.symbol, b.direction, JSON.stringify(b.trigger), JSON.stringify(b.invalidation ?? {}), actor, b.expires_at ?? null, now, now),
+        ...transitionStatements(env, {
+          id, from: "DRAFT", to: "ACTIVE", expectedVersion: 1,
+          tid: uid("tr"), reason: "publish (stalk)", actor, at: now,
+        }),
         env.DB.prepare(
           "INSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES(?,?,?,?,?,?)",
         ).bind(uid("evt"), "watch.created_v1", id, JSON.stringify({ symbol: b.symbol }), `watch.created_v1:${id}:0`, now),
+        env.DB.prepare(
+          "INSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES(?,?,?,?,?,?)",
+        ).bind(uid("evt"), "watch.activated_v1", id, JSON.stringify({ symbol: b.symbol, direction: b.direction, trigger: b.trigger }), `watch.activated_v1:${id}:1`, now),
         env.DB.prepare(
           "INSERT INTO outbox(id,aggregate,payload_json,attempts,done) VALUES(?,?,?,0,0)",
         ).bind(uid("obx"), "watches", JSON.stringify({ watch_id: id })),
       ];
       await env.DB.batch(batch);
-      const res = { id, version: 1 };
+      // version 2: the row was created at 1 and the publish edge bumped it.
+      const res = { id, version: 2, status: "ACTIVE" };
       await store.save("POST /api/watches", idem, 201, res);
       return ok(res, 201);
     }),

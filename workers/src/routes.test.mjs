@@ -100,7 +100,24 @@ describe("E05-T01 control API contracts", () => {
     const j2 = await r2.json();
     assert.equal(j2.id, j1.id); // same key → same resource
     const snap = await (await app.fetch(req("GET", "/api/watches/active-snapshot"), env())).json();
-    assert.ok(Array.isArray(snap.watches)); // snapshot serves (empty until ACTIVE)
+    assert.ok(Array.isArray(snap.watches));
+  });
+  it("S1: a stalk PUBLISHES the watch — DRAFT→ACTIVE, or nothing ever arms it", async () => {
+    const b = { symbol: "ETHUSDT", direction: "SHORT", trigger: { op: "<=", price: "3000" }, invalidation: { op: ">=", price: "3100" } };
+    const j = await (await app.fetch(req("POST", "/api/watches", b), env())).json();
+    // The row is ACTIVE (the trigger loop and the poller read ACTIVE only), the
+    // version reflects the publish edge, and the audit trail records it.
+    const row = sql(`SELECT status || '|' || version || '|' || created_by FROM watches WHERE id='${j.id}';`).trim();
+    assert.equal(row, "ACTIVE|2|trader");
+    assert.equal(j.status, "ACTIVE");
+    assert.equal(j.version, 2);
+    const trans = sql(`SELECT from_s || '->' || to_s || '|' || reason FROM watch_transitions WHERE watch_id='${j.id}';`).trim();
+    assert.equal(trans, "DRAFT->ACTIVE|publish (stalk)");
+    const evts = sql(`SELECT type FROM events WHERE entity_id='${j.id}' ORDER BY type;`).trim().split("\n");
+    assert.deepEqual(evts, ["watch.activated_v1", "watch.created_v1"]);
+    // and it is visible to the Go cold start + the poller set
+    const snap = await (await app.fetch(req("GET", "/api/watches/active-snapshot"), env())).json();
+    assert.ok(snap.watches.some((w) => w.id === j.id && w.status === "ACTIVE"));
   });
   it("S2: signal ingest validates kind; bad kind 400", async () => {
     const e = env({ SIGNAL_HMAC_SECRET: "route-test-secret" });

@@ -14,7 +14,11 @@ import { err, corsFor } from "./errors.mjs";
 // three in sync when the watcher host moves.
 export const DEFAULT_WATCHER_URL = "https://trading-agent-knpg.onrender.com";
 
-function watcherBase(env) {
+// watcherBase resolves the go-watcher origin for every advisory call to the Go
+// plane — the proxy routes below AND the live-engine analysis run
+// (routes2.mjs:runAnalysis). Exported so the two callers can never drift onto
+// different bases.
+export function watcherBase(env) {
   const base = String(env.GO_WATCHER_URL ?? DEFAULT_WATCHER_URL).replace(/\/+$/, "");
   if (!base) {
     const e = new Error("go-watcher not wired (set GO_WATCHER_URL)");

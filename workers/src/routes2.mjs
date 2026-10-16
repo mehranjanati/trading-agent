@@ -2,7 +2,7 @@
 import { ok, err } from "./errors.mjs";
 import { signalBody, approvalBody, intentBody } from "./validate.mjs";
 import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
-import { uid, roleOf, guard, readBody, writeErr, recordIncident } from "./_shared.mjs";
+import { uid, roleOf, guard, readBody, writeErr, recordIncident, sha256Hex } from "./_shared.mjs";
 import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed, listVersions } from "./strategies.mjs";
 import { decideApproval as decideApprovalRecord, listApprovals, ttlMsFrom } from "./approvals.mjs";
 import { limitsFrom } from "./risk.mjs";
@@ -10,6 +10,7 @@ import { submitIntent as runSubmit } from "./execution.mjs";
 import { engageKill, releaseKill, readKill } from "./kill.mjs";
 import { createPaperExchange } from "./exchange.mjs";
 import { readLease } from "./health-route.mjs";
+import { watcherBase } from "./proxy.mjs";
 
 // D-06: Toobit has no testnet, so the wired venue is the paper simulator. Tests
 // and drills inject `env.EXCHANGE` to drive ack-loss / partial-fill scenarios;
@@ -125,19 +126,94 @@ export function miscRoutes() {
       if (actor !== "admin") return err("FORBIDDEN", "kill release requires admin", {});
       return ok(await releaseKill(env, { actor, reason: b.reason ?? "unspecified", confirm: b.confirm === true }), 200);
     }),
+    /** POST /api/analysis:runs — the advisory analysis run for one watch.
+     *
+     *  E14-T03: a run is produced by the LIVE engine or not at all. The handler
+     *  resolves the watch from D1, reads the pinned catalog from the Go plane
+     *  (GET /strategies/registry — the bytes the runner will execute), posts the
+     *  analysis, and persists the engine's OWN aggregate + per-verdict
+     *  provenance. There is deliberately NO local fallback: an analysis row is
+     *  what a human approves against, so an invented row would be mock data in
+     *  the canonical DB. Engine unreachable → 503 DEGRADED and nothing written. */
     runAnalysis: safe(async (req, env) => {
+      const g = guard("POST /api/analysis:runs", req);
+      if (g) return g;
       const b = await readBody(req);
-      if (!b.watch_id) { const e = new Error("watch_id required"); e.code = "VALIDATION"; throw e; }
-      const now = new Date().toISOString();
-      const id = uid("an");
+      if (typeof b.watch_id !== "string" || !b.watch_id) {
+        const e = new Error("watch_id required"); e.code = "VALIDATION"; throw e;
+      }
+      const w = (await env.DB.prepare(
+        "SELECT id,symbol,direction,status FROM watches WHERE id=?",
+      ).bind(b.watch_id).all()).results?.[0];
+      if (!w) return err("NOT_FOUND", `watch ${b.watch_id} not found`, {});
+      const base = watcherBase(env);
+
+      // The strategy set comes from the registry, never a list repeated here: a
+      // version that appears in it is one the runner can actually execute.
+      let pins;
+      try {
+        const regRes = await fetch(`${base}/strategies/registry`);
+        if (!regRes.ok) throw new Error(`registry HTTP ${regRes.status}`);
+        pins = (((await regRes.json()).strategies) ?? [])
+          .slice(0, 8) // /analyze caps the set at 8
+          .map((s) => ({ id: s.id, version: s.version, config: {} }));
+        if (!pins.length) throw new Error("registry has no pinned strategy");
+      } catch (e) {
+        return err("DEGRADED", `analysis engine unavailable (${e.message}) — no run written`, { retryable: true });
+      }
+
+      const ask = { symbol: w.symbol, direction: w.direction, strategies: pins };
+      let engine;
+      try {
+        const res = await fetch(`${base}/analyze`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(ask),
+        });
+        if (!res.ok) throw new Error(`analyze HTTP ${res.status}`);
+        engine = await res.json();
+      } catch (e) {
+        return err("DEGRADED", `analysis engine unavailable (${e.message}) — no run written`, { retryable: true });
+      }
+      const agg = engine?.aggregate ?? {};
+      if (typeof agg.bias !== "string") {
+        return err("DEGRADED", "analysis engine returned no aggregate — no run written", { retryable: true });
+      }
+
       // E07-T01-S2a: pin the version that is active AT RUN START — old runs
       // keep their pin forever (pin-immutability is what E09 will audit).
       const active = await activeVersion(env);
-      const pinned = active?.version ?? null;
-      const out = { bias: "FLAT", confidence: 0.4, reasons: ["E05 stub: model wiring in E07"], model: "stub", input_hash: "na", strategy_version: pinned };
+      const verdicts = engine.verdicts ?? [];
+      const out = {
+        bias: agg.bias,
+        confidence: agg.confidence,
+        reasons: [agg.explanation ?? ""],
+        model: "wasm-engine",
+        // The digest of the exact request the engine answered, so the row can be
+        // re-run and compared instead of taken on faith.
+        input_hash: await sha256Hex(JSON.stringify(ask)),
+        strategy_version: active?.version ?? null,
+        engine: {
+          analyze_id: engine.id ?? null,
+          at: engine.at ?? null,
+          symbol: engine.symbol ?? w.symbol,
+          strategies: pins.map((p) => `${p.id}@${p.version}`),
+          // Which provider answered per timeframe — the same provenance the
+          // dashboard shows on the setup card.
+          data_sources: [...new Set(verdicts.map((v) => v.data_source).filter(Boolean))],
+          aggregate: { agree: agg.agree, disagree: agg.disagree, flat: agg.flat, errors: agg.errors, n: agg.n },
+          verdicts: verdicts.map((v) => ({
+            strategy_id: v.strategy_id, strategy_version: v.strategy_version, timeframe: v.timeframe,
+            data_source: v.data_source, status: v.result?.status,
+            bias: v.result?.decision?.bias, confidence: v.result?.decision?.confidence,
+            reason: v.result?.diagnostics?.reason,
+          })),
+          suggest_zones: engine.suggest_zones ?? null,
+        },
+      };
+      const now = new Date().toISOString();
+      const id = uid("an");
       await env.DB.prepare(
         "INSERT INTO analysis_runs(id,watch_id,model,input_hash,output_json,confidence,at) VALUES(?,?,?,?,?,?,?)",
-      ).bind(id, b.watch_id, out.model, out.input_hash, JSON.stringify(out), out.confidence, now).run();
+      ).bind(id, b.watch_id, out.model, out.input_hash, JSON.stringify(out), out.confidence ?? null, now).run();
       return ok({ id, ...out }, 201);
     }),
     decideApproval: safe(async (req, env) => {

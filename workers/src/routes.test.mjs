@@ -132,12 +132,29 @@ describe("E05-T01 control API contracts", () => {
     assert.equal((await good.json()).schema_version, "1");
   });
   it("S2: approval grant issues expiring token; analysis run stored", async () => {
-    const an = await (await app.fetch(req("POST", "/api/analysis:runs", { watch_id: "w1" }), env())).json();
-    assert.equal(an.bias, "FLAT");
-    const ap = await app.fetch(req("POST", "/api/approvals",
-      { watch_id: "w1", analysis_id: an.id, decision: "approve", reason: "t" }), env());
-    assert.equal(ap.status, 201);
-    const j = await ap.json();
-    assert.ok(j.expires_at);
+    // The run route asks the LIVE engine and stores what it answered (E14-T03):
+    // stub the Go plane, and give it a real watch to analyze.
+    sql("INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,created_at,updated_at) " +
+      "VALUES('w1','BTCUSDT','LONG','{}','{}','ACTIVE',1,'test','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');");
+    const stub = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      const json = (v) => new Response(JSON.stringify(v), { headers: { "content-type": "application/json" } });
+      if (u.endsWith("/strategies/registry")) return json({ count: 1, strategies: [{ id: "sma-cross", version: "0.1.0" }] });
+      return json({
+        id: "an_engine_1", symbol: "BTCUSDT", at: "2026-10-16T00:00:00Z",
+        aggregate: { bias: "FLAT", confidence: 0, agree: 0, disagree: 0, flat: 1, errors: 0, n: 1, explanation: "1 verdicts (0 errors): longW=0.00 shortW=0.00 flat=1" },
+        verdicts: [{ strategy_id: "sma-cross", strategy_version: "0.1.0", timeframe: "15m", data_source: "toobit-rest", result: { status: "NO_SIGNAL", decision: { bias: "FLAT", confidence: 0 }, diagnostics: { reason: "windows equal" } } }],
+      });
+    };
+    try {
+      const an = await (await app.fetch(req("POST", "/api/analysis:runs", { watch_id: "w1" }), env({ GO_WATCHER_URL: "https://go.test" }))).json();
+      assert.equal(an.bias, "FLAT");
+      const ap = await app.fetch(req("POST", "/api/approvals",
+        { watch_id: "w1", analysis_id: an.id, decision: "approve", reason: "t" }), env());
+      assert.equal(ap.status, 201);
+      const j = await ap.json();
+      assert.ok(j.expires_at);
+    } finally { globalThis.fetch = stub; }
   });
 });

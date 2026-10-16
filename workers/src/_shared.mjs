@@ -42,6 +42,14 @@ export async function readBody(req) {
 export function writeErr(e) {
   return err(e.code ?? "VALIDATION", e.message, {});
 }
+/** sha256Hex — hex digest of a string. An analysis run stores the digest of the
+ *  EXACT request the engine was asked to analyze (input_hash), so the row is
+ *  reproducible and auditable instead of opaque. WebCrypto: both workerd and
+ *  node ≥18 expose globalThis.crypto.subtle. */
+export async function sha256Hex(s) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(s)));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 /** Append one `recovery_log` incident. Lives here (not in health-route) because the
  *  health cron, the reconcile sweep (E06-T02-S3a) and the fallback poller (S3c) all
  *  write incidents — one implementation, and no module has to import another. */

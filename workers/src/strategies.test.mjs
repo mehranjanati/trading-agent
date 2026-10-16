@@ -83,31 +83,128 @@ const post = (app, env, path, rawBody, headers, role = "trader") =>
 let app;
 before(async () => { app = (await import("./index.mjs")).default; });
 
+// The run route talks to the LIVE Go engine (registry + /analyze) and persists
+// what it answered. Tests stub that engine at the fetch boundary — the pinning
+// assertions below are about OUR pinning, not about the engine's verdict.
+const ENGINE_AGG = { bias: "LONG", confidence: 0.31, agree: 1, disagree: 0, flat: 0, errors: 0, n: 1, explanation: "1 verdicts (0 errors): longW=0.62 shortW=0.00 flat=0" };
+function stubEngine({ registryStatus = 200, analyzeStatus = 200, aggregate = ENGINE_AGG, seen = [] } = {}) {
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    seen.push({ url: u, method: init?.method, body: init?.body });
+    const json = (v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+    if (u.endsWith("/strategies/registry")) {
+      return registryStatus === 200
+        ? json({ count: 1, strategies: [{ id: "sma-cross", version: "0.1.0", file: "sma-cross-0.1.0.wasm" }], at: "2026-10-16T00:00:00Z" })
+        : json({ code: "DEGRADED" }, registryStatus);
+    }
+    if (u.endsWith("/analyze")) {
+      return analyzeStatus === 200
+        ? json({
+            id: "an_engine_1", symbol: "BTCUSDT", at: "2026-10-16T00:00:00Z", aggregate,
+            verdicts: [{ strategy_id: "sma-cross", strategy_version: "0.1.0", timeframe: "15m", data_source: "toobit-rest", result: { status: "SIGNAL", decision: { bias: "LONG", confidence: 0.62 }, diagnostics: { reason: "cross" } } }],
+            suggest_zones: { timeframe: "15m", source: "toobit-rest", bars: 120, atr: "1", trigger_long: "2", inval_long: "0.5", trigger_short: "1.5", inval_short: "2.5" },
+          })
+        : json({ code: "DATA_UNAVAILABLE", message: "klines" }, analyzeStatus);
+    }
+    return new Response("unexpected url", { status: 404 });
+  };
+}
+const clearStub = () => { delete globalThis.fetch; };
+
 const V2 = { max_leverage: 5, signal_sources: { go_watcher: ["MTF", "REGIME"], quant_desk: ["DIVERGENCE_TRIPLE", "OB_OS"] } };
 
 
 describe("E07-T01-S2a version activation + run pinning", () => {
+  // The run route resolves the watch from D1 (a run is about a real watch) and
+  // reads the engine's answer; both need to exist before the run can be stored.
+  const WATCH_ROW = "INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,created_at,updated_at) " +
+    "VALUES('w1','BTCUSDT','LONG','{}','{}','ACTIVE',1,'test','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');";
+  const runReq = () => new Request("http://x/api/analysis:runs",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ watch_id: "w1" }) });
+
   it("seed v1-paper is active by default; runs pin it", async () => {
-    const env = freshEnv();
-    const run = await app.fetch(new Request("http://x/api/analysis:runs",
-      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ watch_id: "w1" }) }), env);
-    assert.equal((await run.json()).strategy_version, "v1-paper");
+    const env = { ...freshEnv(), GO_WATCHER_URL: "https://go.test" };
+    sql(WATCH_ROW);
+    try {
+      stubEngine();
+      const run = await app.fetch(runReq(), env);
+      assert.equal(run.status, 201);
+      assert.equal((await run.json()).strategy_version, "v1-paper");
+    } finally { clearStub(); }
   });
+
   it("operator activates v2 → new runs pin v2, old runs keep v1", async () => {
-    const env = freshEnv();
-    const r1 = await (await app.fetch(new Request("http://x/api/analysis:runs",
-      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ watch_id: "w1" }) }), env)).json();
-    assert.equal(r1.strategy_version, "v1-paper");
-    const act = await app.fetch(new Request("http://x/api/strategy:activate",
-      { method: "POST", headers: { "content-type": "application/json", "x-role": "admin" }, body: JSON.stringify({ version: "v2", config: V2 }) }), env);
-    assert.equal(act.status, 201);
-    const r2 = await (await app.fetch(new Request("http://x/api/analysis:runs",
-      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ watch_id: "w1" }) }), env)).json();
-    assert.equal(r2.strategy_version, "v2");
-    const rows = JSON.parse(sql(".mode json\nSELECT output_json FROM analysis_runs ORDER BY at;"));
-    assert.equal(JSON.parse(rows[0].output_json).strategy_version, "v1-paper");
-    assert.equal(JSON.parse(rows[1].output_json).strategy_version, "v2");
+    const env = { ...freshEnv(), GO_WATCHER_URL: "https://go.test" };
+    sql(WATCH_ROW);
+    try {
+      stubEngine();
+      const r1 = await (await app.fetch(runReq(), env)).json();
+      assert.equal(r1.strategy_version, "v1-paper");
+      const act = await app.fetch(new Request("http://x/api/strategy:activate",
+        { method: "POST", headers: { "content-type": "application/json", "x-role": "admin" }, body: JSON.stringify({ version: "v2", config: V2 }) }), env);
+      assert.equal(act.status, 201);
+      const r2 = await (await app.fetch(runReq(), env)).json();
+      assert.equal(r2.strategy_version, "v2");
+      const rows = JSON.parse(sql(".mode json\nSELECT output_json FROM analysis_runs ORDER BY at;"));
+      assert.equal(JSON.parse(rows[0].output_json).strategy_version, "v1-paper");
+      assert.equal(JSON.parse(rows[1].output_json).strategy_version, "v2");
+    } finally { clearStub(); }
   });
+
+  it("a stored run is the ENGINE's answer, with provenance — never a local placeholder", async () => {
+    const env = { ...freshEnv(), GO_WATCHER_URL: "https://go.test" };
+    sql(WATCH_ROW);
+    const seen = [];
+    try {
+      stubEngine({ seen });
+      const body = await (await app.fetch(runReq(), env)).json();
+      assert.equal(body.bias, "LONG");                       // the engine said LONG, not "FLAT stub"
+      assert.equal(body.confidence, 0.31);
+      assert.notEqual(body.model, "stub");
+      // The engine was asked about the WATCH's symbol/direction and the
+      // registry's pins (the bytes the runner executes) — not a local list.
+      const ask = JSON.parse(Buffer.from(seen.find((s) => s.url.endsWith("/analyze")).body).toString());
+      assert.equal(ask.symbol, "BTCUSDT");
+      assert.equal(ask.direction, "LONG");
+      assert.deepEqual(ask.strategies, [{ id: "sma-cross", version: "0.1.0", config: {} }]);
+      const rows = JSON.parse(sql(".mode json\nSELECT model, confidence, input_hash, output_json FROM analysis_runs;"));
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].model, "wasm-engine");
+      assert.equal(rows[0].confidence, 0.31);
+      assert.match(rows[0].input_hash, /^[0-9a-f]{64}$/);    // digest of the exact request
+      const out = JSON.parse(rows[0].output_json);
+      assert.deepEqual(out.engine.data_sources, ["toobit-rest"]);
+      assert.equal(out.engine.analyze_id, "an_engine_1");
+      assert.equal(out.engine.verdicts[0].timeframe, "15m");
+    } finally { clearStub(); }
+  });
+
+  it("engine unreachable → 503 DEGRADED and NO computed row is invented", async () => {
+    for (const opts of [{ registryStatus: 502 }, { analyzeStatus: 500 }, { analyzeStatus: 200, aggregate: {} }]) {
+      const env = { ...freshEnv(), GO_WATCHER_URL: "https://go.test" };
+      sql(WATCH_ROW);
+      try {
+        stubEngine(opts);
+        const res = await app.fetch(runReq(), env);
+        assert.equal(res.status, 503, JSON.stringify(opts));
+        assert.equal((await res.json()).code, "DEGRADED", JSON.stringify(opts));
+        // The whole point of this test: nothing was written that a human could
+        // later mistake for a real analysis.
+        assert.equal(sql("SELECT COUNT(*) FROM analysis_runs;").trim(), "0", JSON.stringify(opts));
+      } finally { clearStub(); }
+    }
+  });
+
+  it("an unknown watch is 404 (a run is about a real watch), not a synthetic row", async () => {
+    const env = { ...freshEnv(), GO_WATCHER_URL: "https://go.test" };
+    try {
+      stubEngine();
+      const res = await app.fetch(runReq(), env); // freshEnv seeds no watches
+      assert.equal(res.status, 404);
+      assert.equal(sql("SELECT COUNT(*) FROM analysis_runs;").trim(), "0");
+    } finally { clearStub(); }
+  });
+
   it("activation is admin-only; non-JSON config rejected", async () => {
     const env = freshEnv();
     // RBAC matrix: strategy activation is admin-only (strictest role); operator

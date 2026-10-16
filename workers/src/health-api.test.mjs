@@ -61,6 +61,12 @@ describe("E06-T01-S2 persistence + badge API", () => {
     const j = await (await app.fetch(new Request("http://x/api/health"), env())).json();
     assert.ok(["PRIMARY", "DEGRADED", "FALLBACK", "HALTED", "D1_DOWN"].includes(j.mode));
     assert.ok(j.badge);
+    // D-06 honesty: the badge API always says which adapter fills an order, so a
+    // simulated fill can never be read as a live one. Derived from the runtime —
+    // an injected test/drill adapter changes it.
+    assert.equal(j.execution_venue, "paper-sim");
+    const injected = await (await app.fetch(new Request("http://x/api/health"), { ...env(), EXCHANGE: { submit: async () => ({}) } })).json();
+    assert.equal(injected.execution_venue, "injected-adapter");
   });
   it("recovery log records and lists incidents", async () => {
     const { recordIncident } = await import("./health-route.mjs");

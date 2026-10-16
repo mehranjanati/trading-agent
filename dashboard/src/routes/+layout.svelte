@@ -39,6 +39,17 @@
 
   <ModeBanner banner={banner} />
 
+  {#if health?.execution_venue}
+    <div class="venue {health.execution_venue === 'paper-sim' ? 'paper' : 'injected'}" role="status">
+      execution venue: <strong>{health.execution_venue}</strong>
+      {#if health.execution_venue === "paper-sim"}
+        — order intents are filled by the PAPER simulator, so every FILLED row and position is a simulated fill (D-06: Toobit has no testnet; no live-order path exists)
+      {:else}
+        — a non-default exchange adapter is injected (drill/test)
+      {/if}
+    </div>
+  {/if}
+
   <main>
     <slot />
   </main>
@@ -90,5 +101,26 @@
     max-width: 1200px;
     width: 100%;
     margin: 0 auto;
+  }
+
+  .venue {
+    max-width: 1160px;
+    margin: 10px auto 0;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
+  .venue.paper {
+    border: 1px solid #6b7280;
+    background: #161b22;
+    color: #c9d1d9;
+  }
+
+  .venue.injected {
+    border: 1px solid #eab308;
+    background: #2a220d;
+    color: #eab308;
   }
 </style>

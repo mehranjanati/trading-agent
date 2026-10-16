@@ -9,6 +9,11 @@ export interface Health {
   reasons: string[];
   components: { component: string; status: string; detail: Record<string, unknown> }[];
   at: string | null;
+  /** Which adapter fills an order intent (D-06): "paper-sim" (the wired venue —
+   *  Toobit has no testnet, so fills are simulated) or "injected-adapter" when a
+   *  drill/test replaced it. Rendered in the layout so a paper fill is never
+   *  mistaken for a live one. */
+  execution_venue?: string;
 }
 export interface Watch {
   id: string; symbol: string; direction: "LONG" | "SHORT";

@@ -15,6 +15,18 @@ import { pollStatus } from "./fallback-poll.mjs";
 
 export { recordIncident };
 
+/** executionVenue — which adapter actually fills an order intent.
+ *
+ *  D-06: Toobit has no testnet, so the wired adapter is the PAPER simulator
+ *  (routes2.mjs:createPaperExchange) and a filled intent is a simulated fill.
+ *  Tests/drills inject `env.EXCHANGE` to drive ack-loss / partial-fill scenarios,
+ *  so the value is derived from the runtime instead of hardcoded in the UI: a
+ *  future signed-REST adapter changes this string and the dashboard notice with
+ *  it, and a paper fill can never be read as a live one. */
+export function executionVenue(env) {
+  return env?.EXCHANGE ? "injected-adapter" : "paper-sim";
+}
+
 // Fixed row id: the heartbeat upserts, it must never grow health_snapshots.
 const HB_ID = "hb_go";
 // Fixed row id: the authority lease (E06-T02-S3b) — upserted, never appended.
@@ -48,10 +60,10 @@ export function healthRoutes() {
       ).all().catch(() => ({ results: [] }));
       const last = row.results?.[0];
       if (!last) {
-        return ok({ mode: "PRIMARY", badge: "green", reasons: [], components: [], at: null, note: "no snapshot yet — evaluator pending" });
+        return ok({ mode: "PRIMARY", badge: "green", reasons: [], components: [], at: null, execution_venue: executionVenue(env), note: "no snapshot yet — evaluator pending" });
       }
       const detail = JSON.parse(last.detail_json ?? "{}");
-      return ok({ mode: last.status, badge: badge(last.status), reasons: detail.reasons ?? [], components: detail.components ?? [], at: last.at });
+      return ok({ mode: last.status, badge: badge(last.status), reasons: detail.reasons ?? [], components: detail.components ?? [], at: last.at, execution_venue: executionVenue(env) });
     }),
     recoveryLog: safe(async (req, env) => {
       const u = new URL(req.url);

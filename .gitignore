@@ -21,6 +21,11 @@ workers/.wrangler/
 /go-watcher/restart-drill
 # Docker prebuilt watcher (cross-compiled; rebuilt by docker compose build)
 /go-watcher/docker/
+# Local toolchains (Go + sqlite3 CLI) and their module/build caches: sandbox or
+# laptop tooling, never repo content.
+/.toolchain/
+/.gopath/
+/.gocache/
 # NOTE: go-watcher/strategies/samples/*.wasm ARE tracked on purpose — the
 # registry pins them by filename and the Dockerfile copies them into the
 # image, so a checkout must ship the exact artifacts the registry names.

@@ -93,7 +93,7 @@ export function seed(dbFile, log = () => {}) {
   const values = rows.map(([id, symbol]) =>
     `('${id}','${symbol}','LONG','{"kind":"DIVERGENCE_TRIPLE"}','{}','ACTIVE',1,'e06-drill','${now}','${now}')`).join(",");
   sqlite(dbFile, "INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,created_at,updated_at) VALUES " + values + ";");
-  log(`seeded ${rows.length} ACTIVE watches`);
+  log(`DRILL DATA: seeded ${rows.length} ACTIVE watches (${rows.map(([id]) => id).join(", ")}, created_by=e06-drill) — these are fixtures, not trader watches; use --no-seed or a fresh --db for a clean desk`);
   return rows.length;
 }
 
@@ -109,6 +109,15 @@ async function main() {
     DB: createD1(flags.db, flags.verbose ? log : () => {}),
     ENV: "dev",
     HUMAN_APPROVAL_REQUIRED: "true",
+    // The LOCAL Go plane: advisory /analyze + /strategies/registry (proxy.mjs)
+    // and the analysis-run route (routes2.mjs:runAnalysis) all resolve their
+    // origin from env.GO_WATCHER_URL. Without the pass-through a local drill
+    // silently talks to the baked-in production Render origin instead of the
+    // watcher on this machine — slow, and not what the operator asked for.
+    ...(process.env.GO_WATCHER_URL ? { GO_WATCHER_URL: process.env.GO_WATCHER_URL } : {}),
+    // Toobit base override (drills / a local venue stand-in); default is the
+    // live venue, which is what a real paper run must hit.
+    ...(process.env.TOOBIT_BASE ? { TOOBIT_BASE: process.env.TOOBIT_BASE } : {}),
     // E07 webhook secrets come from the operator's environment (never the repo):
     // without one, the HMAC signal route correctly rejects everything.
     ...(process.env.SIGNAL_HMAC_SECRET ? { SIGNAL_HMAC_SECRET: process.env.SIGNAL_HMAC_SECRET } : {}),

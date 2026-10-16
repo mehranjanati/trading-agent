@@ -47,3 +47,34 @@
 ## 17.5 MVP slice (solo-dev)
 
 One sample strategy sma-cross-v0.1.0 on BTCUSDT => compile => validate => activate => trigger invoke => proposal in /signals => paper only. No auto-trade, no Web3, no pooling.
+
+## 17.6 Audit notes (2026-10-16) — what the analysis numbers actually mean
+
+Verified live against the running watcher (`go run ./cmd/analyze-live -symbol CELRUSDT
+-strategies sma-cross@0.1.0` reproduces `POST /analyze` exactly):
+
+- **`aggregate.confidence` is a vote share, not a probability.** It is
+  `Σ(confidence of the winning side) ÷ non-error verdicts` (`aggregate.go`). The
+  per-verdict confidence is **author-declared by the strategy artifact** — the
+  sample SMA strategies return constants (0.62 LONG / 0.58 SHORT; `sma-x-live`
+  0.60), so e.g. `LONG @ 0.41` = (0.62 + 0.62) / 3. The raw weights are always in
+  `aggregate.explanation` (`longW=1.24 shortW=0.58 flat=0`) — read them, and read
+  the per-verdict `data_source` before trusting a number.
+- **A zone's provider is not necessarily the trading venue.** `suggest_zones`
+  carries `source`/`bars`/`last`/`last_ts` because klines fall through
+  Toobit → OKX → Binance (`klines.go`). Verified: Toobit answers `-100010 Invalid
+  Symbols` for `CELRUSDT`, so a CELR analysis is measured on `okx-rest` — real
+  live prices on a market the trading venue does not list. The dashboard shows
+  the provider on the analyze page and on the Stalk card, with an explicit
+  warning when it is not `toobit-rest`.
+- **The pinned sample artifacts have no source in this repo.** `registry.json`
+  pins four `.wasm` files under `strategies/samples/`; the binaries carry a
+  `cross SHORT but below min_confidence gate` branch that the checked-in
+  `strategies/template/main.go` does not, so their exact behaviour cannot be
+  reviewed from source here — only executed and observed. Treat the `sha256`
+  served by `GET /strategies/registry` as the identity, and rebuild anything that
+  matters from an in-repo source dir: `make strategy-build SRC=… ID=… VERSION=…`.
+- **`POST /api/analysis:runs` has no local fallback.** The run is computed by the
+  live engine and stores the engine's own aggregate plus provider provenance; an
+  unreachable engine is `503 DEGRADED` and writes **no row** (there is no stub
+  analysis in D1, and `model` is never `stub`).

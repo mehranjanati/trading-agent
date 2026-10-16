@@ -109,10 +109,15 @@ async function main() {
   }, body: rawBody });
   step("signal_ingested", sig.status === 201, { id: sig.body?.id, schema_version: sig.body?.schema_version });
 
-  // 5) the advisory analysis run (stub until the AI analyst lands).
+  // 5) the advisory analysis run — computed by the LIVE engine (Go /analyze via
+  //    GO_WATCHER_URL). No engine → 503 and NOTHING is written: a fabricated run
+  //    would be mock data in the canonical DB, so the cycle fails here instead.
   const an = await http("/api/analysis:runs", { method: "POST", role: "trader", body: { watch_id } });
   const analysis_id = an.body?.id;
-  step("analysis_run", an.status === 201, { id: analysis_id, strategy_version: an.body?.strategy_version });
+  step("analysis_run", an.status === 201, {
+    id: analysis_id, strategy_version: an.body?.strategy_version,
+    ...(an.status === 503 ? { degraded: an.body?.message, hint: "start go-watcher and set GO_WATCHER_URL on the dev server" } : {}),
+  });
 
   // 6) THE HUMAN DECISION (SAFE-002). Recorded with its maker; never automated.
   const ap = await http("/api/approvals", { method: "POST", role: "trader", body: {

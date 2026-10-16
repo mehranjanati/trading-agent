@@ -33,6 +33,27 @@ episode and only re-certifies after a sweep sees a non-empty inventory, so on a
 reused DB a second drill cannot emit its own certify and `rejoin_order` would
 pair against a stale incident.
 
+The seeded watches are **drill fixtures** (`created_by=e06-drill`, ids
+`w-drill-1..3`); the harness logs them as `DRILL DATA` on boot, the dashboard
+watches table carries a `by` column, and `--no-seed` (or a fresh `--db`) gives a
+clean desk. Nothing else in the local DB is synthetic.
+
+### Paper cycle needs the live engine
+
+`node scripts/paper-cycle.mjs` drives a full cycle, and its step 5
+(`POST /api/analysis:runs`) is computed by the real Go engine — the run row is
+never fabricated. Start the watcher and point the dev server at it:
+
+```bash
+cd go-watcher && WORKERS_URL=http://127.0.0.1:8787 GO_PORT=8090 go run .
+# dev server (other shell), same process env:
+GO_WATCHER_URL=http://127.0.0.1:8090 node scripts/dev-server.mjs --port 8787 --db /tmp/paper.sqlite
+```
+
+Without `GO_WATCHER_URL` the route answers `503 DEGRADED` and writes nothing, so
+the cycle stops at step 5 with an explicit hint instead of proceeding on an
+invented analysis.
+
 ## Runs
 
 ### E06-T02 — S2 kill drills (local, 2026-10-12)

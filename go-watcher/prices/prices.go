@@ -24,11 +24,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"trading-agent/go-watcher/normalize"
 	"trading-agent/go-watcher/redisx"
 )
 
@@ -172,24 +174,41 @@ func fromREST(ctx context.Context, symbol string, now time.Time) (Price, bool) {
 	return binanceTicker(ctx, symbol, now)
 }
 
-// toobitTicker: GET https://api.toobit.com/api/v1/contract/ticker/price?symbol=
-// Price is a decimal string (or number) — parsed into the canonical string form.
+// toobitTicker: GET {TOOBIT_BASE|https://api.toobit.com}/quote/v1/contract/ticker/price?symbol=
+//
+// Verified live 2026-10-16 (docs/ops/TOOBIT-API-FACTS.md S2a): the filtered form
+// answers [{"s":"BTCUSDT","p":"82440"}] in the CANONICAL symbol form, while
+// `?symbols=` is IGNORED and answers the whole venue in the dash form. The path
+// used to be /api/v1/... — a 404 — so every Toobit quote silently fell through to
+// Binance and the chat reported "market data unavailable" instead of a price.
 func toobitTicker(ctx context.Context, symbol string, now time.Time) (Price, bool) {
-	u := "https://api.toobit.com/api/v1/contract/ticker/price?symbol=" + symbol
-	var body struct {
-		Symbol string          `json:"symbol"`
+	base := os.Getenv("TOOBIT_BASE")
+	if base == "" {
+		base = "https://api.toobit.com"
+	}
+	base = strings.TrimRight(base, "/")
+	u := base + "/quote/v1/contract/ticker/price?symbol=" + symbol
+	var rows []struct {
+		S      string          `json:"s"` // canonical filtered form
+		P      json.RawMessage `json:"p"`
+		Symbol string          `json:"symbol"` // tolerate the object form too
 		Price  json.RawMessage `json:"price"`
-		Code   int             `json:"code"`
-		Msg    string          `json:"msg"`
 	}
-	if err := getJSON(ctx, u, &body); err != nil {
+	if err := getJSON(ctx, u, &rows); err != nil || len(rows) == 0 {
 		return Price{}, false
 	}
-	if body.Code != 0 && body.Code != 200 {
+	row := rows[0]
+	raw := row.P
+	if len(raw) == 0 {
+		raw = row.Price
+	}
+	px, ok := rawDecimal(raw)
+	if !ok || px == "" {
 		return Price{}, false
 	}
-	px, ok := rawDecimal(body.Price)
-	if !ok {
+	// The filtered endpoint answers the canonical symbol; if the venue ever
+	// answers a different market, it must NOT be quoted as this one.
+	if row.S != "" && normalize.ToCanonical(row.S) != normalize.ToCanonical(symbol) {
 		return Price{}, false
 	}
 	return Price{Symbol: symbol, Px: px, Ts: now.UnixMilli(), Src: "toobit-rest"}, true

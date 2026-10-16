@@ -2,10 +2,66 @@ package prices
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+// ── toobitTicker (the venue price the tick feed and the chat both read) ──────
+
+// Regression this file exists for: toobitTicker pointed at /api/v1/... which the
+// venue answers 404, so every Toobit quote silently fell through to Binance (and
+// in a geo-blocked environment to nothing at all) — the chat reported "market
+// data unavailable" while the venue was perfectly reachable on /quote/v1/....
+func TestToobitTickerReadsTheVerifiedFilteredShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/quote/v1/contract/ticker/price" {
+			t.Errorf("wrong path requested: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("symbol") != "BTCUSDT" {
+			t.Errorf("symbol must be sent singular (symbols= is ignored by the venue): %s", r.URL.RawQuery)
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`[{"s":"BTCUSDT","p":"82440"}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("TOOBIT_BASE", srv.URL)
+
+	p, ok := toobitTicker(context.Background(), "BTCUSDT", time.UnixMilli(1_760_000_000_000))
+	if !ok {
+		t.Fatal("the verified shape must parse")
+	}
+	if p.Px != "82440" || p.Symbol != "BTCUSDT" || p.Src != "toobit-rest" {
+		t.Fatalf("unexpected price: %+v", p)
+	}
+}
+
+func TestToobitTickerRefusesAnotherMarket(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// e.g. a proxy or a venue change answering the whole venue in dash form.
+		_, _ = w.Write([]byte(`[{"s":"ETH-SWAP-USDT","p":"3000"}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("TOOBIT_BASE", srv.URL)
+	if _, ok := toobitTicker(context.Background(), "BTCUSDT", time.Now()); ok {
+		t.Fatal("a different market must never be quoted as this symbol")
+	}
+}
+
+func TestToobitTickerRejectsEmptyOrErrorBodies(t *testing.T) {
+	for _, body := range []string{`[]`, `[{"s":"BTCUSDT","p":""}]`, `{"code":-100011,"msg":"Not supported symbols"}`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Setenv("TOOBIT_BASE", srv.URL)
+		if _, ok := toobitTicker(context.Background(), "BTCUSDT", time.Now()); ok {
+			t.Fatalf("body %s must not produce a price", body)
+		}
+		srv.Close()
+	}
+}
 
 // ── ExtractSymbols ───────────────────────────────────────────────────────────
 

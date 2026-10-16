@@ -10,19 +10,23 @@
 # Workers → Connect to Git). Settings (VALIDATED 2026-10-16 — the two wrong
 # combos are listed below so nobody re-tries them):
 #   - Repo/branch: mehranjanati/trading-agent → main
-#   - Root directory: LEAVE EMPTY (repo root). The wrangler.toml lives in
-#     workers/, so the deploy command must point at it explicitly — see below.
+#   - Root directory: LEAVE EMPTY (repo root). The ROOT wrangler.toml is the
+#     git-build entry (main = workers/src/index.mjs, migrations_dir =
+#     migrations); it mirrors workers/wrangler.toml's name/vars/bindings.
 #   - Build command: (leave empty — nothing to compile; wrangler deploys raw JS)
-#   - Deploy command (exact):
-#       npx wrangler deploy --config workers/wrangler.toml
+#   - Deploy command (exact): `npx wrangler deploy` — it picks up the ROOT
+#     wrangler.toml at cwd. KEEP workers/wrangler.toml as the local-dev
+#     entry (scripts/cf-deploy.sh cds into workers/); sync name/vars/bindings
+#     between the two files when either changes.
 #   WHY NOT other combos:
-#     * Root=workers + `npx wrangler deploy` (no --config): untested in this
-#       repo; `migrations_dir = "../migrations"` would resolve OUTSIDE the
-#       build root and may fail depending on the build image.
-#     * Root=repo-root + `npx wrangler deploy` (no --config): FAILS with
-#       "Could not detect a directory containing static files" — wrangler
-#       finds no wrangler.toml at cwd and assumes a static-assets project.
-#       THIS WAS THE 2026-10-16 10:51 BUILD FAILURE.
+#     * Root=repo-root + `npx wrangler deploy` with NO root wrangler.toml:
+#       FAILS with "Could not detect a directory containing static files" —
+#       wrangler finds no wrangler.toml at cwd and assumes a static-assets
+#       project. THIS WAS THE 2026-10-16 10:51 BUILD FAILURE; the root
+#       wrangler.toml (added 2026-10-16) closes it.
+#     * Root=workers + `npx wrangler deploy` (no --config): untested; only use
+#       with Deploy command `npx wrangler deploy --config workers/wrangler.toml`
+#       if you insist on Root=workers.
 #   - `compatibility_flags = ["nodejs_compat"]` is committed in
 #     workers/wrangler.toml (node:crypto without it warns/fails).
 #   - Bindings/secrets to re-attach in the Worker settings (NOT in git):
@@ -32,10 +36,13 @@
 #       AI:  binding AI (Workers AI)
 #       KV:  SYMBOLS_KV (only if the symbols-allowlist rollout landed)
 #       Vars (plain): ENV, HUMAN_APPROVAL_REQUIRED, AI_MODEL,
-#            AI_MODEL_FALLBACK, AI_VISION_MODEL, EXCHANGE, TOOBIT_BASE,
-#            GO_WATCHER_URL=https://trading-agent-knpg.onrender.com
-#              (E14-T02 proxy base for /analyze + /strategies/registry — the
-#              dashboard falls back to the Worker itself when VITE_* unset)
+#            AI_MODEL_FALLBACK, AI_VISION_MODEL, EXCHANGE, TOOBIT_BASE.
+#            GO_WATCHER_URL is BAKED IN (root wrangler.toml [vars] +
+#            proxy.mjs DEFAULT_WATCHER_URL = https://trading-agent-knpg.onrender.com)
+#            so unconfigured git builds still proxy; a dashboard-level var
+#            overrides it per env when you need to point at a new watcher host.
+#            (E14-T02 proxy base for /analyze + /strategies/registry — the
+#            dashboard falls back to the Worker itself when VITE_* unset)
 #       Secrets (wrangler secret put — never commit):
 #            SIGNAL_HMAC_SECRET (or SIGNAL_HMAC_SECRETS), GO_HEARTBEAT_TOKEN
 # After connect: any push touching workers/** rebuilds and redeploys.

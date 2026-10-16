@@ -6,8 +6,7 @@
   "scripts": {
     "build:dashboard": "npm --prefix dashboard ci --no-audit --no-fund && npm --prefix dashboard run build"
   },
-  "workspaces": [
-    "dashboard",
-    "workers"
-  ]
+  "devDependencies": {
+    "wrangler": "^4.151.1"
+  }
 }

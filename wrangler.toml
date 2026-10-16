@@ -1,16 +1,16 @@
-// wrangler.toml — repo-root entry so a plain `wrangler deploy` from the repo
-// root (Cloudflare git-connected deploys, CI, scripts) targets the SAME worker
-// as `workers/wrangler.toml`. Main/config paths are rewritten for root cwd:
-// workers.src maps 1:1 onto workers/src, and D1 migrations stay in ./migrations,
-// so a git build with Root directory = repo root and NO --config flag deploys
-// exactly like Root = workers with --config workers/wrangler.toml from root.
-// Canonical worker config still lives at workers/wrangler.toml (local dev,
-// cf-deploy.sh); keep the two files' name/vars/bindings/triggers in sync.
+# wrangler.toml — repo-root entry so a plain `wrangler deploy` from the repo
+# root (Cloudflare git-connected deploys, CI, scripts) targets the SAME worker
+# as `workers/wrangler.toml`. Main/config paths are rewritten for root cwd:
+# workers.src maps 1:1 onto workers/src, and D1 migrations stay in ./migrations,
+# so a git build with Root directory = repo root and NO --config flag deploys
+# exactly like Root = workers with --config workers/wrangler.toml from root.
+# Canonical worker config still lives at workers/wrangler.toml (local dev,
+# cf-deploy.sh); keep the two files' name/vars/bindings/triggers in sync.
 name = "trading-agent-control"
 main = "workers/src/index.mjs"
 compatibility_date = "2026-10-01"
-// node:crypto is imported (workers/src/errors.mjs) — without this flag every
-// deploy warns and risks runtime errors. Safe for git-triggered deploys too.
+# node:crypto is imported (workers/src/errors.mjs) — without this flag every
+# deploy warns and risks runtime errors. Safe for git-triggered deploys too.
 compatibility_flags = ["nodejs_compat"]
 
 [triggers]

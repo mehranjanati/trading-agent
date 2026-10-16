@@ -14,6 +14,7 @@ import { sweepApprovals, readCursor as readApprovalCursor, shouldSweep as should
 import { HOLDERS, holdsAuthority } from "./lease.mjs";
 import { tick as pollOnce, pollStatus } from "./fallback-poll.mjs";
 import { generateRoutes } from "./strategies-ai.mjs";
+import { proxyRoutes } from "./proxy.mjs";
 import { listSymbols } from "./symbols.mjs";
 
 const store = createStore();
@@ -21,6 +22,7 @@ const watches = watchRoutes(store);
 const misc = miscRoutes();
 const health = healthRoutes();
 const ai = generateRoutes();
+const proxy = proxyRoutes();
 
 export default {
   async fetch(req, env) {
@@ -62,6 +64,10 @@ export default {
       if (req.method === "POST" && p === "/api/strategy:chat:stream") return ai.chatStream(req, env);
       if (req.method === "POST" && p === "/api/strategy:draft") return ai.saveDraft(req, env);
       if (req.method === "GET" && p === "/api/strategy:drafts") return ai.drafts(req, env);
+      // E14-T02: advisory Go-plane routes proxied to go-watcher (Render) when
+      // the dashboard was built without VITE_ANALYZE_BASE. Advisory, no orders.
+      if (req.method === "GET" && p === "/strategies/registry") return proxy.registry(req, env);
+      if (req.method === "POST" && p === "/analyze") return proxy.analyze(req, env);
       return err("NOT_IMPLEMENTED", `${req.method} ${p} lands in a later task`, {});
     } catch (e) {
       return writeErr(e);

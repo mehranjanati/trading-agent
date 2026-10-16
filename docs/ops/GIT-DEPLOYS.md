@@ -7,18 +7,24 @@
 #
 # ## 1. trading-agent-control (Worker + cron)
 # Dashboard → Workers & Pages → ... → "Add to git" (or: Create application →
-# Workers → Connect to Git). Settings:
+# Workers → Connect to Git). Settings (VALIDATED 2026-10-16 — the two wrong
+# combos are listed below so nobody re-tries them):
 #   - Repo/branch: mehranjanati/trading-agent → main
-#   - Root directory: workers          (wrangler.toml lives there)
-#   - Build command: (leave default — wrangler deploy runs it)
-#   - Deploy command: npx wrangler deploy
+#   - Root directory: LEAVE EMPTY (repo root). The wrangler.toml lives in
+#     workers/, so the deploy command must point at it explicitly — see below.
+#   - Build command: (leave empty — nothing to compile; wrangler deploys raw JS)
+#   - Deploy command (exact):
+#       npx wrangler deploy --config workers/wrangler.toml
+#   WHY NOT other combos:
+#     * Root=workers + `npx wrangler deploy` (no --config): untested in this
+#       repo; `migrations_dir = "../migrations"` would resolve OUTSIDE the
+#       build root and may fail depending on the build image.
+#     * Root=repo-root + `npx wrangler deploy` (no --config): FAILS with
+#       "Could not detect a directory containing static files" — wrangler
+#       finds no wrangler.toml at cwd and assumes a static-assets project.
+#       THIS WAS THE 2026-10-16 10:51 BUILD FAILURE.
 #   - `compatibility_flags = ["nodejs_compat"]` is committed in
 #     workers/wrangler.toml (node:crypto without it warns/fails).
-#   - D1 migrations: wrangler.toml points at ../migrations. If a build fails
-#     with "migrations directory not found", set the Root directory to the
-#     REPO ROOT and Deploy command to:
-#       npx wrangler deploy --config workers/wrangler.toml
-#     (this keeps ../migrations inside the build context).
 #   - Bindings/secrets to re-attach in the Worker settings (NOT in git):
 #       D1:  trading_dev (2f21170c-1a7f-4512-a11f-68ddd473f4a6) — or create a
 #            fresh `trading_prod` database for the production Worker
@@ -26,7 +32,10 @@
 #       AI:  binding AI (Workers AI)
 #       KV:  SYMBOLS_KV (only if the symbols-allowlist rollout landed)
 #       Vars (plain): ENV, HUMAN_APPROVAL_REQUIRED, AI_MODEL,
-#            AI_MODEL_FALLBACK, AI_VISION_MODEL, EXCHANGE, TOOBIT_BASE
+#            AI_MODEL_FALLBACK, AI_VISION_MODEL, EXCHANGE, TOOBIT_BASE,
+#            GO_WATCHER_URL=https://trading-agent-knpg.onrender.com
+#              (E14-T02 proxy base for /analyze + /strategies/registry — the
+#              dashboard falls back to the Worker itself when VITE_* unset)
 #       Secrets (wrangler secret put — never commit):
 #            SIGNAL_HMAC_SECRET (or SIGNAL_HMAC_SECRETS), GO_HEARTBEAT_TOKEN
 # After connect: any push touching workers/** rebuilds and redeploys.

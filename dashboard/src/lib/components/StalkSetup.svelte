@@ -1,6 +1,6 @@
 <script lang="ts">
   import { postWatch } from "$lib/api";
-  import { stalkBody, type SetupProposal } from "$lib/stalk";
+  import { stalkBody, isVenueSourced, type SetupProposal } from "$lib/stalk";
 
   // Shared human-gated Stalk card: advisory proposal in, explicit click out.
   // D-08 holds — the ONLY write is POST /api/watches, never orders/approvals.
@@ -41,6 +41,14 @@
       <div>trigger <strong>{proposal.trigger_op} {proposal.trigger_price}</strong></div>
       <div>invalidation <strong>{proposal.inval_op} {proposal.invalidation_price}</strong></div>
     </div>
+    {#if proposal.zone_source}
+      <div class="stalk-meta">
+        zone data: {proposal.zone_source}{#if proposal.zone_bars} · {proposal.zone_bars} bars{/if}{#if proposal.zone_last} · last {proposal.zone_last}{/if}{#if proposal.zone_last_ts} ({proposal.zone_last_ts}){/if}
+      </div>
+      {#if !isVenueSourced(proposal.zone_source)}
+        <div class="stalk-warn">⚠ zone measured on {proposal.zone_source}, not the Toobit trading venue — confirm {proposal.symbol} is listed on Toobit before stalking</div>
+      {/if}
+    {/if}
     {#if proposal.strategies?.length}
       <div class="stalk-meta">strategies: {proposal.strategies.map((s) => `${s.id}@${s.version ?? "latest"}`).join(", ")}</div>
     {/if}
@@ -78,6 +86,7 @@
   }
   .stalk button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .stalk-error { margin-top: 8px; color: #ef4444; font-size: 0.85rem; }
+  .stalk-warn { margin-top: 6px; color: #eab308; font-size: 0.8rem; }
   .stalk-ok { margin-top: 8px; color: #22c55e; font-size: 0.9rem; }
   .stalk-ok a { color: #22c55e; }
 </style>

@@ -2,11 +2,12 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { getWatches, getApprovals, getIntents, getPositions, postAnalyze } from "$lib/api";
+  import { getWatches, getApprovals, getIntents, getPositions, postAnalyze, getRegistry } from "$lib/api";
   import type { AnalyzeRequest, AnalyzeResponse } from "$lib/types";
   import { getSymbols } from "$lib/symbols";
   import { setups, touchSetup, deriveStatus } from "$lib/setups";
   import { proposalFromAnalyze } from "$lib/stalk";
+  import { composeCatalog, PINNED_FALLBACK } from "$lib/library";
   import StalkSetup from "$lib/components/StalkSetup.svelte";
   $: symbol = String($page.params.symbol ?? "").toUpperCase();
   const SYM_RE = /^[A-Z]{2,12}USDT$/;
@@ -19,6 +20,11 @@
   let analyzing = false;
   let analyzeErr: string | null = null;
   let result: AnalyzeResponse | null = null;
+  // The pin this room analyzes with comes from the Go registry (the bytes the
+  // runner executes), never a version frozen in this file; the checked-in
+  // mirror is only the offline case and is labelled as such below.
+  let pin = { id: PINNED_FALLBACK[0].id, version: PINNED_FALLBACK[0].version };
+  let pinSource: "registry" | "fallback" = "fallback";
   $: stalkProposal = result ? proposalFromAnalyze(result, (direction || result.aggregate?.bias || "LONG") === "SHORT" ? "SHORT" : "LONG") : null;
   $: symWatches = watches.filter((w: any) => w.symbol === symbol);
   $: watchIds = symWatches.map((w: any) => w.id);
@@ -33,10 +39,14 @@
     if (i.ok) intents = (i.data as { intents: any[] }).intents;
     if (p.ok) positions = (p.data as { positions: any[] }).positions;
     if (s.ok) tradeable = s.data.allowlist.includes(symbol);
+    const reg = await getRegistry();
+    const { entries, source } = composeCatalog(reg.ok ? reg.data.strategies : null, []);
+    pinSource = source;
+    if (source === "registry" && entries[0]) pin = { id: entries[0].id, version: entries[0].version };
   }
   async function runAnalyze() {
     analyzing = true; analyzeErr = null; result = null;
-    const body: AnalyzeRequest = { symbol, direction: direction || undefined, strategies: [{ id: "sma-cross", version: "0.1.0", config: {} }] };
+    const body: AnalyzeRequest = { symbol, direction: direction || undefined, strategies: [{ id: pin.id, version: pin.version, config: {} }] };
     const res = await postAnalyze(body);
     analyzing = false;
     if (!res.ok) { analyzeErr = res.error; return; }
@@ -87,10 +97,19 @@
           </select>
           <button on:click={runAnalyze} disabled={analyzing} class="primary">{analyzing ? "analyzing..." : "analyze"}</button>
         </div>
+        <div class="meta">
+          strategy: {pin.id}@{pin.version} ·
+          {pinSource === "registry" ? "live registry (Go plane)" : "OFFLINE MIRROR (go-watcher unreachable)"}
+        </div>
         {#if analyzeErr}<div class="error">{analyzeErr}</div>{/if}
         {#if result}
           <div class="agg">aggregate <strong class={result.aggregate.bias.toLowerCase()}>{result.aggregate.bias}</strong> @ {result.aggregate.confidence}</div>
-          <div class="meta">{result.aggregate.explanation}</div>
+          <div class="meta" title="Σ confidence of the winning side ÷ verdicts (strategy-declared constants, not a fitted probability)">{result.aggregate.explanation}</div>
+          {#if result.suggest_zones.source}
+            <div class="meta">
+              zones from {result.suggest_zones.source}{#if result.suggest_zones.bars} · {result.suggest_zones.bars} bars{/if}{#if result.suggest_zones.last} · last {result.suggest_zones.last}{/if}
+            </div>
+          {/if}
           <StalkSetup proposal={stalkProposal} contextLabel="from {result.id}" />
         {/if}
       </section>

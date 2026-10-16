@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"time"
 )
 
 // aggregate rolls verdicts into one advisory verdict. Weight is confidence;
@@ -60,18 +61,27 @@ func round2(f float64) float64 {
 }
 
 // suggestZones derives ATR-based trigger/invalidation candidates from the
-// first timeframe's closes. Decimal-exact strings; failures yield empties.
+// first timeframe's closes. Decimal-exact strings; failures yield empties. The
+// provider that answered, the bar count and the newest close/bar time are
+// stamped onto the result: the zones are only as live as the bars they were
+// measured on, and for a symbol the primary venue does not list the fallback
+// provider is the whole story.
 func suggestZones(symbol, tf string) SuggestedZones {
 	z := SuggestedZones{Timeframe: tf}
-	bars, _, err := FetchKlines(symbol, tf)
+	bars, src, err := FetchKlines(symbol, tf)
 	if err != nil || len(bars) < 15 {
 		return z
 	}
 	atr := atrOf(bars, 14)
-	last, err := parseF(bars[len(bars)-1].Close)
+	newest := bars[len(bars)-1]
+	last, err := parseF(newest.Close)
 	if err != nil || atr <= 0 || last <= 0 {
 		return z
 	}
+	z.Source = src
+	z.Bars = len(bars)
+	z.Last = newest.Close
+	z.LastTS = time.UnixMilli(newest.Ts).UTC().Format(time.RFC3339)
 	z.ATR = fmtNum(atr)
 	z.TriggerLong = fmtNum(last + 0.25*atr)
 	z.InvalLong = fmtNum(last - 1.0*atr)

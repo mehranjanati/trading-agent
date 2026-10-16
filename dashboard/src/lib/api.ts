@@ -165,6 +165,33 @@ export async function postDraft(body: {
   }
 }
 
+// ── Strategy catalog (the pinned WASM registry) ──────────────────────────────
+// One row of GET /strategies/registry (Go plane; the Worker proxies it).
+export type RegistryRow = {
+  id: string;
+  version: string;
+  name?: string;
+  description?: string;
+  sha256?: string;
+  configuration?: Record<string, unknown>;
+};
+
+/** The pinned strategy catalog, straight from the Go plane — the bytes the
+ *  runner will execute. Returns ok:false when unreachable: the CALLER must then
+ *  label the offline mirror instead of rendering a stale list as live
+ *  (library-core.composeCatalog reports which path it took). */
+export async function getRegistry(): Promise<Result<{ strategies: RegistryRow[]; count?: number; at?: string }>> {
+  try {
+    const res = await fetch(`${ANALYZE_BASE}/strategies/registry`, { headers: { accept: "application/json" } });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const body = await res.json();
+    const at: string = body?.at ?? new Date().toISOString();
+    return { ok: true, data: body, at, ageMs: Date.now() - Date.parse(at) };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 // ── Chat service (inside go-watcher :8080) ─ Redis sessions, WS streaming ────
 // Advisory plane only: create/read/delete sessions and save principles.
 // The real-time turn loop runs over chatSocket(). If the Go chat routes are

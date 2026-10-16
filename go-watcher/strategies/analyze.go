@@ -75,9 +75,18 @@ type AggregateVerdict struct {
 }
 
 // SuggestedZones are ATR-derived trigger/invalidation candidates the
-// dashboard can one-click into the watch form.
+// dashboard can one-click into the watch form. The provenance fields ride
+// along (provider, bar count, the newest close and its bar time) so a trigger
+// price is never shown without the venue it was measured on: Toobit is the
+// trading venue, but a symbol Toobit does not list (e.g. CELR) falls through
+// to OKX/Binance, and a zone measured on another venue must be readable as
+// such before a human stalks it.
 type SuggestedZones struct {
 	Timeframe    string `json:"timeframe"`
+	Source       string `json:"source,omitempty"`
+	Bars         int    `json:"bars"`
+	Last         string `json:"last,omitempty"`
+	LastTS       string `json:"last_ts,omitempty"`
 	ATR          string `json:"atr"`
 	TriggerLong  string `json:"trigger_long"`
 	InvalLong    string `json:"inval_long"`

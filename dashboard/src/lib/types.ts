@@ -100,6 +100,12 @@ export interface AnalyzeResponse {
   }[];
   suggest_zones: {
     timeframe: string;
+    /** Provider that answered for this timeframe: toobit-rest | okx-rest | binance-rest.
+     *  Only toobit-rest is the trading venue; the others are failover providers. */
+    source?: string;
+    bars?: number;
+    last?: string;
+    last_ts?: string;
     atr: string;
     trigger_long: string;
     inval_long: string;

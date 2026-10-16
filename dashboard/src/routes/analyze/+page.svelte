@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { postAnalyze, badgeFor } from "$lib/api";
+  import { postAnalyze, badgeFor, getRegistry } from "$lib/api";
   import type { AnalyzeRequest, AnalyzeResponse } from "$lib/types";
-  import { proposalFromAnalyze } from "$lib/stalk";
+  import { proposalFromAnalyze, isVenueSourced } from "$lib/stalk";
+  import { composeCatalog, PINNED_FALLBACK, type CatalogSource } from "$lib/library";
   import StalkSetup from "$lib/components/StalkSetup.svelte";
   import Badge from "$lib/components/Badge.svelte";
 
@@ -19,10 +20,23 @@
 
   $: stalkProposal = result ? proposalFromAnalyze(result, (direction || result.aggregate?.bias || "LONG") === "SHORT" ? "SHORT" : "LONG") : null;
 
-  const availableStrategies = [
-    { id: "sma-cross", version: "0.1.0", name: "SMA Cross (fast)", config: { fast_window: 2, slow_window: 3, min_confidence: 0.55 } },
-    { id: "sma-cross", version: "0.2.0", name: "SMA Cross (slow)", config: { fast_window: 5, slow_window: 20, min_confidence: 0.6 } },
-  ];
+  // The picker list is the PINNED registry (GET /strategies/registry) — a
+  // version is selectable only if the runner can actually execute it. The
+  // checked-in mirror is the labelled offline case: `catalogSource` says which
+  // one the picker is rendering, so a stale pin can never look live.
+  let catalogSource: CatalogSource | "loading" = "loading";
+  let availableStrategies = PINNED_FALLBACK.map((p) => ({ id: p.id, version: p.version, name: p.name ?? p.id }));
+  onMount(async () => {
+    const r = await getRegistry();
+    const { entries, source } = composeCatalog(r.ok ? r.data.strategies : null, []);
+    catalogSource = source;
+    if (source !== "registry") return; // keep the mirror until the plane answers; never claim it is live
+    availableStrategies = entries.map((e) => ({ id: e.id, version: e.version, name: e.blurb || e.label }));
+    // A pin the mirror carried but the registry does not must not stay selected.
+    if (!entries.some((e) => e.id === strategies[0]?.id && e.version === strategies[0]?.version) && entries[0]) {
+      strategies = [{ id: entries[0].id, version: entries[0].version, config: {} }];
+    }
+  });
 
   function addStrategy() {
     strategies = [...strategies, { id: "sma-cross", version: "0.1.0", config: {} }];
@@ -136,6 +150,15 @@
         </div>
       {/each}
       <button on:click={addStrategy} class="secondary">+ add strategy</button>
+      <div class="catalog-note">
+        {#if catalogSource === "registry"}
+          pinned catalog: live registry (Go plane)
+        {:else if catalogSource === "fallback"}
+          pinned catalog: OFFLINE MIRROR — the Go registry is unreachable, versions may lag
+        {:else}
+          pinned catalog: loading…
+        {/if}
+      </div>
     </div>
 
     <button on:click={runAnalysis} disabled={loading} class="primary">
@@ -152,7 +175,9 @@
       <h2>aggregate</h2>
       <div class="aggregate-card">
         <div class="bias {result.aggregate.bias.toLowerCase()}">{result.aggregate.bias}</div>
-        <div class="confidence">confidence: {result.aggregate.confidence}</div>
+        <div class="confidence" title="Σ confidence of the winning side ÷ verdicts. A strategy's confidence is author-declared (a pinned constant), so this is a vote share, not a fitted probability.">
+          confidence: {result.aggregate.confidence}
+        </div>
         <div class="stats">
           agree: {result.aggregate.agree} · disagree: {result.aggregate.disagree} · flat: {result.aggregate.flat} · errors: {result.aggregate.errors}
         </div>
@@ -161,6 +186,12 @@
 
       <h2>suggested zones ({result.suggest_zones.timeframe})</h2>
       <div class="zones-card">
+        <div class="zones-src">
+          data: {result.suggest_zones.source ?? "unknown source"}{#if result.suggest_zones.bars} · {result.suggest_zones.bars} bars{/if}{#if result.suggest_zones.last} · last {result.suggest_zones.last}{/if}{#if result.suggest_zones.last_ts} ({result.suggest_zones.last_ts}){/if}
+        </div>
+        {#if result.suggest_zones.source && !isVenueSourced(result.suggest_zones.source)}
+          <div class="zones-warn">⚠ not the Toobit trading venue — these prices come from a failover provider</div>
+        {/if}
         <div>ATR: {result.suggest_zones.atr}</div>
         <div>trigger LONG: {result.suggest_zones.trigger_long}</div>
         <div>inval LONG: {result.suggest_zones.inval_long}</div>
@@ -338,6 +369,20 @@
   .zones-card div {
     margin-bottom: 6px;
     font-size: 0.9rem;
+  }
+  .zones-src {
+    color: #8b949e;
+    font-size: 0.8rem !important;
+    font-family: "SF Mono", "Fira Code", monospace;
+  }
+  .zones-warn {
+    color: #eab308;
+    font-size: 0.8rem !important;
+  }
+  .catalog-note {
+    margin-top: 6px;
+    font-size: 0.75rem;
+    color: #8b949e;
   }
   .verdict-header {
     display: flex;

@@ -12,6 +12,15 @@ export interface SetupProposal {
   strategies?: { id: string; version?: string }[];
   timeframes?: string[];
   entry_policy?: { confirm?: Record<string, unknown>; ttl_s?: number };
+  // Zone provenance (analyze-derived proposals only): the provider that
+  // answered, the bar count and the newest close the ATR zones were measured
+  // from. A trigger price without these is a number with no origin — and for a
+  // symbol the primary venue does not list, `zone_source` is how the trader
+  // sees that the price came from somewhere else.
+  zone_source?: string;
+  zone_bars?: number;
+  zone_last?: string;
+  zone_last_ts?: string;
   chat_session?: string;
   message_id?: string;
   analyze_id?: string;
@@ -30,6 +39,10 @@ export function proposalFromAnalyze(
       inval_long?: string;
       trigger_short?: string;
       inval_short?: string;
+      source?: string;
+      bars?: number;
+      last?: string;
+      last_ts?: string;
     };
   },
   direction: "LONG" | "SHORT",
@@ -49,8 +62,21 @@ export function proposalFromAnalyze(
     invalidation_price,
     trigger_op: long ? ">=" : "<=",
     inval_op: long ? "<=" : ">=",
+    // Provenance travels with the prices: the card must be able to say which
+    // provider the zone was measured on and how fresh its newest bar was.
+    zone_source: typeof z.source === "string" ? z.source : undefined,
+    zone_bars: typeof z.bars === "number" ? z.bars : undefined,
+    zone_last: typeof z.last === "string" ? z.last : undefined,
+    zone_last_ts: typeof z.last_ts === "string" ? z.last_ts : undefined,
     analyze_id: result.id,
   };
+}
+
+/** isVenueSourced — true when the zone's provider is the trading venue itself
+ *  (Toobit). Anything else (okx-rest/binance-rest) is a fallback provider: the
+ *  price is real, but it is not the venue the order would be filled on. */
+export function isVenueSourced(source?: string): boolean {
+  return source === "toobit-rest";
 }
 
 /** Extract every fenced ```setup-proposal JSON block from chat text. */

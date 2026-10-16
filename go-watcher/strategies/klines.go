@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -41,16 +42,25 @@ func (c CandleWire) ToContract() Candle {
 }
 
 // FetchKlines returns oldest-first closes for symbol/timeframe, trying
-// Toobit then Binance. interval is "15m"|"1h"|"4h" (validated by caller).
+// Toobit, then OKX, then Binance. interval is "15m"|"1h"|"4h" (validated by
+// caller). The chain is provider outage + symbol coverage: Toobit can 404
+// rarely-listed symbols (CELR), Binance can 418/451 datacenter IPs, and each
+// next provider only runs when the previous one fails — never in parallel,
+// never as an unbounded retry loop.
 func FetchKlines(symbol, interval string) ([]CandleWire, string, error) {
 	if out, err := toobitKlines(symbol, interval); err == nil {
 		return out, "toobit-rest", nil
 	} else {
 		first := err
-		if out, err := binanceKlines(symbol, interval); err == nil {
-			return out, "binance-rest", nil
+		if out, err := okxKlines(symbol, interval); err == nil {
+			return out, "okx-rest", nil
 		} else {
-			return nil, "", fmt.Errorf("klines %s %s: toobit: %v; binance: %v", symbol, interval, first, err)
+			second := err
+			if out, err := binanceKlines(symbol, interval); err == nil {
+				return out, "binance-rest", nil
+			} else {
+				return nil, "", fmt.Errorf("klines %s %s: toobit: %v; okx: %v; binance: %v", symbol, interval, first, second, err)
+			}
 		}
 	}
 }
@@ -87,23 +97,52 @@ func numToStr(v any) (string, bool) {
 	}
 }
 
-// toobitKlines: GET https://api.toobit.com/api/v1/market/kline
-// (symbol=BTCUSDT, interval=15m, limit). Payload rows are
-// [open_time, open, high, low, close, volume, close_time, ...].
+// toobitKlines: GET https://api.toobit.com/quote/v1/klines
+// (symbol=BTCUSDT, interval=15m|1h|4h, limit). Rows are arrays
+// [open_time_ms, open, high, low, close, volume, ...], oldest first.
 func toobitKlines(symbol, interval string) ([]CandleWire, error) {
-	var body struct {
-		Code int         `json:"code"`
-		Data [][]any     `json:"data"`
-		Msg  string      `json:"msg"`
+	var rows [][]any
+	u := fmt.Sprintf("https://api.toobit.com/quote/v1/klines?symbol=%s&interval=%s&limit=%d", symbol, interval, klinesLimit)
+	if err := getJSON(u, &rows); err != nil {
+		return nil, err
 	}
-	u := fmt.Sprintf("https://api.toobit.com/api/v1/market/kline?symbol=%s&interval=%s&limit=%d", symbol, interval, klinesLimit)
+	return rowsToWire(rows)
+}
+
+// okxKlines: GET https://www.okx.com/api/v5/market/candles
+// (instId=CELR-USDT, bar=1H, limit). Rows are [ts_ms, o, h, l, c, vol, ...]
+// but NEWEST FIRST — they are reversed to the oldest-first wire order.
+// code "0" is success, anything else is an error (e.g. unknown instrument).
+func okxKlines(symbol, interval string) ([]CandleWire, error) {
+	bar, ok := map[string]string{"15m": "15m", "1h": "1H", "4h": "4H"}[interval]
+	if !ok {
+		return nil, fmt.Errorf("interval %s not 15m|1h|4h", interval)
+	}
+	inst := okxInst(symbol)
+	var body struct {
+		Code string  `json:"code"`
+		Msg  string  `json:"msg"`
+		Data [][]any `json:"data"`
+	}
+	u := fmt.Sprintf("https://www.okx.com/api/v5/market/candles?instId=%s&bar=%s&limit=%d", inst, bar, klinesLimit)
 	if err := getJSON(u, &body); err != nil {
 		return nil, err
 	}
-	if body.Code != 0 && body.Code != 200 {
-		return nil, fmt.Errorf("code=%d msg=%s", body.Code, body.Msg)
+	if body.Code != "0" {
+		return nil, fmt.Errorf("code=%s msg=%s", body.Code, body.Msg)
+	}
+	for i, j := 0, len(body.Data)-1; i < j; i, j = i+1, j-1 {
+		body.Data[i], body.Data[j] = body.Data[j], body.Data[i]
 	}
 	return rowsToWire(body.Data)
+}
+
+// okxInst maps venue symbols (CELRUSDT) to OKX instruments (CELR-USDT).
+func okxInst(symbol string) string {
+	if strings.HasSuffix(symbol, "USDT") && len(symbol) > 4 {
+		return symbol[:len(symbol)-4] + "-USDT"
+	}
+	return symbol
 }
 
 // binanceKlines: GET https://api.binance.com/api/v3/klines

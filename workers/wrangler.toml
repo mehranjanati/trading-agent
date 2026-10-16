@@ -1,6 +1,9 @@
 name = "trading-agent-control"
 main = "src/index.mjs"
 compatibility_date = "2026-10-01"
+# node:crypto is imported (src/errors.mjs) — without this flag every deploy
+# warns and risks runtime errors. Safe for git-triggered deploys too.
+compatibility_flags = ["nodejs_compat"]
 
 [triggers]
 # E12-T01: Cloudflare cron triggers are 5-field (1-minute minimum); the 10s

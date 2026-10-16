@@ -8,8 +8,14 @@
 // the routes were public on the watcher and stay public here.
 import { err, corsFor } from "./errors.mjs";
 
+// DEFAULT_WATCHER_URL is the baked-in go-watcher origin (Render) used when
+// GO_WATCHER_URL is unset. It mirrors the same base committed in the root
+// wrangler.toml [vars] and workers/wrangler.toml-adjacent deploys: keep all
+// three in sync when the watcher host moves.
+export const DEFAULT_WATCHER_URL = "https://trading-agent-knpg.onrender.com";
+
 function watcherBase(env) {
-  const base = String(env.GO_WATCHER_URL ?? "").replace(/\/+$/, "");
+  const base = String(env.GO_WATCHER_URL ?? DEFAULT_WATCHER_URL).replace(/\/+$/, "");
   if (!base) {
     const e = new Error("go-watcher not wired (set GO_WATCHER_URL)");
     e.code = "NOT_IMPLEMENTED";

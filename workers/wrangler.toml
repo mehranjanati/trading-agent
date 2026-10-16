@@ -22,6 +22,11 @@ migrations_dir = "../migrations"
 [vars]
 ENV = "paper"
 HUMAN_APPROVAL_REQUIRED = "true"
+# E14-T02 proxy base: the go-watcher origin (Render) behind /analyze and
+# /strategies/registry. Any per-env GO_WATCHER_URL set in the Cloudflare
+# dashboard overrides this default; the proxy.mjs DEFAULT_WATCHER_URL mirrors
+# it for environments without any vars at all.
+GO_WATCHER_URL = "https://trading-agent-knpg.onrender.com"
 # AI strategy codegen model (override without redeploying code).
 # qwen3-30b-a3b-fp8: MoE 30B with ~3B active params → fast, $0.0509/M in +
 # $0.335/M out (13x cheaper input than qwen2.5-coder-32b, ~3.5x more free-tier

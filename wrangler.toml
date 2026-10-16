@@ -1,0 +1,61 @@
+// wrangler.toml — repo-root entry so a plain `wrangler deploy` from the repo
+// root (Cloudflare git-connected deploys, CI, scripts) targets the SAME worker
+// as `workers/wrangler.toml`. Main/config paths are rewritten for root cwd:
+// workers.src maps 1:1 onto workers/src, and D1 migrations stay in ./migrations,
+// so a git build with Root directory = repo root and NO --config flag deploys
+// exactly like Root = workers with --config workers/wrangler.toml from root.
+// Canonical worker config still lives at workers/wrangler.toml (local dev,
+// cf-deploy.sh); keep the two files' name/vars/bindings/triggers in sync.
+name = "trading-agent-control"
+main = "workers/src/index.mjs"
+compatibility_date = "2026-10-01"
+// node:crypto is imported (workers/src/errors.mjs) — without this flag every
+// deploy warns and risks runtime errors. Safe for git-triggered deploys too.
+compatibility_flags = ["nodejs_compat"]
+
+[triggers]
+# E12-T01: Cloudflare cron triggers are 5-field (1-minute minimum); the 10s
+# 6-field dev tick cannot deploy. The §6.1 15s rule degrades to ≤60s detection
+# here — the heartbeat row age is what evaluate() reads, so the fidelity loss
+# is bounded by this cron, not by the 5s publisher.
+crons = ["* * * * *"]
+
+# E05-T01: D1 binding (per-env database_id set at deploy; local uses --local).
+[[d1_databases]]
+binding = "DB"
+database_name = "trading_dev"
+database_id = "2f21170c-1a7f-4512-a11f-68ddd473f4a6"
+migrations_dir = "migrations"
+
+[vars]
+ENV = "paper"
+HUMAN_APPROVAL_REQUIRED = "true"
+# AI strategy codegen model (override without redeploying code).
+# qwen3-30b-a3b-fp8: MoE 30B with ~3B active params → fast, $0.0509/M in +
+# $0.335/M out (13x cheaper input than qwen2.5-coder-32b, ~3.5x more free-tier
+# generations/day). The coder-32b stays as the fallback for hard retries.
+AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
+# Fallback model used when the primary output fails contract validation.
+AI_MODEL_FALLBACK = "@cf/qwen/qwen2.5-coder-32b-instruct"
+# Chart-vision model (multimodal chat). Selected automatically when a chat turn
+# carries an image content part. Probed live: qwen3.8-27b accepts OpenAI image
+# parts on the `user` role and answers a 1600x900 chart in ~1.2s / ~1432 prompt
+# tokens at detail:"low". Keep the vision model separate from AI_MODEL so the
+# cheap text model keeps serving text-only turns.
+AI_VISION_MODEL = "@cf/qwen/qwen3.8-27b"
+# E14-T02 proxy base: the go-watcher origin (Render) behind /analyze and
+# /strategies/registry. Any per-env GO_WATCHER_URL set in the Cloudflare
+# dashboard overrides this default; the dashboard fallback keeps working when
+# neither side's VITE_* values are baked in.
+GO_WATCHER_URL = "https://trading-agent-knpg.onrender.com"
+
+# AI strategy generation (chat → Go code). Workers AI binding, no API keys.
+[ai]
+binding = "AI"
+
+# ADR-010: chart screenshots attached to chat turns. D1 caps a row/string at
+# 2 MB, so the BYTES live here (key recorded in chat_attachments.r2_key) and D1
+# keeps only metadata. Bind per-env at deploy; local uses --local.
+[[r2_buckets]]
+binding = "CHAT_MEDIA"
+bucket_name = "trading-chat-media"

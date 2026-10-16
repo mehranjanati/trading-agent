@@ -1,0 +1,13 @@
+{
+  "name": "trading-agent-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:dashboard": "npm --prefix dashboard ci --no-audit --no-fund && npm --prefix dashboard run build"
+  },
+  "workspaces": [
+    "dashboard",
+    "workers"
+  ]
+}

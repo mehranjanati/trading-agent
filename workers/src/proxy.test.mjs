@@ -51,9 +51,22 @@ describe("go-plane proxy", () => {
     }
   });
 
-  it("unwired base stays 501 (never a silent hang)", async () => {
+  it("unset base falls back to the baked-in watcher origin", async () => {
+    const seen = [];
+    stubFetch(seen, 200, { count: 1, strategies: [] });
+    try {
+      const proxy = proxyRoutes();
+      const res = await proxy.registry(req("GET", "/strategies/registry"), {});
+      assert.equal(res.status, 200);
+      assert.ok(seen[0].url.startsWith("https://trading-agent-knpg.onrender.com/strategies/registry"));
+    } finally {
+      delete globalThis.fetch;
+    }
+  });
+
+  it("explicit empty base stays 501 (never a silent hang)", async () => {
     const proxy = proxyRoutes();
-    const res = await proxy.registry(req("GET", "/strategies/registry"), {});
+    const res = await proxy.registry(req("GET", "/strategies/registry"), { GO_WATCHER_URL: "" });
     assert.equal(res.status, 501);
     const body = await res.json();
     assert.equal(body.code, "NOT_IMPLEMENTED");

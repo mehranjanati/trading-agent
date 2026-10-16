@@ -6,6 +6,9 @@
   "scripts": {
     "check": "node --test src/*.test.mjs",
     "dev": "wrangler dev --local"
+  },
+  "devDependencies": {
+    "wrangler": "^4.151.0"
   }
 }
 

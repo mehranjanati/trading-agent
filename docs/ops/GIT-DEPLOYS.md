@@ -13,7 +13,13 @@
 #   - Root directory: LEAVE EMPTY (repo root). The ROOT wrangler.toml is the
 #     git-build entry (main = workers/src/index.mjs, migrations_dir =
 #     migrations); it mirrors workers/wrangler.toml's name/vars/bindings.
-#   - Build command: (leave empty — nothing to compile; wrangler deploys raw JS)
+#   - Build command: (leave empty — nothing to compile; wrangler deploys raw JS.)
+#     Cloudflare still auto-runs `npm ci` at the build root whenever a
+#     package.json is present — the ROOT package.json/package-lock.json exist
+#     ONLY for that (pinned wrangler, no workspaces). If you touch root
+#     package.json, re-run `npm install --package-lock-only` at the root or the
+#     next build fails with "npm ci can only install packages when your
+#     package.json and package-lock.json are in sync" (hit 2026-10-16 12:05).
 #   - Deploy command (exact): `npx wrangler deploy` — it picks up the ROOT
 #     wrangler.toml at cwd. KEEP workers/wrangler.toml as the local-dev
 #     entry (scripts/cf-deploy.sh cds into workers/); sync name/vars/bindings

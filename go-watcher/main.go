@@ -67,6 +67,11 @@ func main() {
 	// readiness: the heartbeat plane is safety-critical, analysis is not.
 	initStrategies()
 
+	// E03-T01: the trigger loop (ACTIVE set → live ticks → watch edge → Worker).
+	// Also advisory-adjacent: a dead feed degrades evaluation, it never gates
+	// readiness (the heartbeat stays the safety-critical plane).
+	initTriggerLoop(base)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("/analyze", serveAnalyze)

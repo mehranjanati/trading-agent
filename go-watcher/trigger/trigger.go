@@ -17,6 +17,10 @@ type Definition struct {
 	TriggerJSON string
 	InvalJSON   string
 	TriggerSeq  int // increments per fire; part of dedupe_key
+	// Version is the D1 optimistic-concurrency version the definition was read
+	// at (snapshot). The Worker refuses a fire whose version no longer matches,
+	// so a stale evaluation can never move a watch that already left ACTIVE.
+	Version int
 }
 
 type cond struct {
@@ -69,6 +73,14 @@ func Eval(triggerJSON, px, prevPx string) (bool, error) {
 		return prev > lvl && cur <= lvl, nil
 	}
 	return false, nil
+}
+
+// Validate reports whether a trigger/invalidation JSON is evaluable at all
+// (known op, decimal price). The loop drops a definition that fails this instead
+// of discovering the fault on every tick — one place decides what is evaluable.
+func Validate(condJSON string) error {
+	_, err := parseCond(condJSON)
+	return err
 }
 
 // Invalidated reports whether the invalidation condition hit (watch → INVALIDATED).

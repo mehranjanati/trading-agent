@@ -173,6 +173,33 @@ export function groupRooms(rooms, name) {
     .sort();
 }
 
+/** strategyUsage — WHO references one strategy id@version: the groups whose
+ *  member list carries it and the rooms that have it "in play".
+ *
+ *  WHY THIS EXISTS: a published artifact is immutable (ADR-009 — the runner
+ *  executes exact bytes, and an analysis run pins the version active at run
+ *  start), so "editing" it means publishing a NEW version. The thing a trader
+ *  actually needs before retiring or re-pinning something is the answer to
+ *  "where is this used?": a reference that would break must be visible BEFORE the
+ *  action, not discovered afterwards. Same rule as the rest of this file — a
+ *  reference is never dropped silently.
+ *  @param {Record<string, { name: string, members?: StrategyRef[] }>|null|undefined} groups
+ *  @param {Record<string, Room>|null|undefined} rooms
+ *  @param {StrategyRef} entry
+ *  @returns {{ groups: string[], rooms: string[], total: number }} */
+export function strategyUsage(groups, rooms, entry) {
+  const key = strategyRefKey(entry);
+  const inGroups = Object.values(groups ?? {})
+    .filter((g) => (g.members ?? []).some((m) => strategyRefKey(m) === key))
+    .map((g) => g.name)
+    .sort();
+  const inRooms = Object.values(rooms ?? {})
+    .filter((r) => (r.strategies ?? []).some((s) => strategyRefKey(s) === key))
+    .map((r) => r.symbol)
+    .sort();
+  return { groups: inGroups, rooms: inRooms, total: inGroups.length + inRooms.length };
+}
+
 
 
 /** deriveStatus — one symbol's room status from live API snapshots (no new

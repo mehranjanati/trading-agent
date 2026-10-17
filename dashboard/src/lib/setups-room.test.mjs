@@ -13,7 +13,7 @@
 // Imports the real module (setups-core.mjs), not a hand-copied mirror.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { roomWatches, roomWatchIds, deriveStatus, linkStrategy, unlinkStrategy, linkGroup, unlinkGroup, renameGroupLinks, dropGroupLinks, groupRooms, strategyRefKey } from "./setups-core.mjs";
+import { roomWatches, roomWatchIds, deriveStatus, linkStrategy, unlinkStrategy, linkGroup, unlinkGroup, renameGroupLinks, dropGroupLinks, groupRooms, strategyRefKey, strategyUsage } from "./setups-core.mjs";
 
 const NOW = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
@@ -171,5 +171,42 @@ describe("room links — strategies and groups can be added AND removed", () => 
     assert.deepEqual(next.BTCUSDT.groups, ["keep"]);
     assert.deepEqual(groupRooms(rooms, "rsi-block"), ["BTCUSDT", "CELRUSDT"]);
     assert.deepEqual(groupRooms(next, "rsi-block"), []);
+  });
+});
+
+// "It might be used inside a group" — the answer has to be visible BEFORE any
+// retire/re-pin action, because a published artifact is immutable (ADR-009) and
+// an analysis run pins the version active at run start.
+const GROUPS = {
+  "rsi-block": { name: "rsi-block", members: [{ id: "sma-cross", version: "0.1.0" }, { id: "sma-x-v2", version: "0.1.0" }] },
+  other: { name: "other", members: [{ id: "sma-cross", version: "0.2.0" }] },
+};
+const LINKED = {
+  ...ROOM({ strategies: [{ id: "sma-cross", version: "0.1.0" }] }),
+  BTCUSDT: { symbol: "BTCUSDT", chatSession: null, strategies: [], groups: [], analyzes: [], watches: [], updatedAt: iso(NOW) },
+};
+
+describe("strategyUsage — where one id@version is referenced", () => {
+  it("names the groups and rooms that carry it", () => {
+    const u = strategyUsage(GROUPS, LINKED, { id: "sma-cross", version: "0.1.0" });
+    assert.deepEqual(u.groups, ["rsi-block"]);
+    assert.deepEqual(u.rooms, ["CELRUSDT"]);
+    assert.equal(u.total, 2);
+  });
+
+  it("a different version is a different artifact (never a false match)", () => {
+    const u = strategyUsage(GROUPS, LINKED, { id: "sma-cross", version: "0.2.0" });
+    assert.deepEqual(u.groups, ["other"]);
+    assert.deepEqual(u.rooms, []);
+  });
+
+  it("reports nothing for an unreferenced artifact", () => {
+    const u = strategyUsage(GROUPS, LINKED, { id: "sma-x-live", version: "0.1.0" });
+    assert.deepEqual(u, { groups: [], rooms: [], total: 0 });
+  });
+
+  it("handles a missing group/room store", () => {
+    assert.deepEqual(strategyUsage(null, undefined, { id: "a" }), { groups: [], rooms: [], total: 0 });
+    assert.deepEqual(strategyUsage({ g: { name: "g", members: [{ id: "a" }] } }, {}, { id: "a" }).groups, ["g"]);
   });
 });

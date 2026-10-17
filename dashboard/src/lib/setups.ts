@@ -26,7 +26,7 @@ export interface RoomWatch {
 }
 
 export { deriveStatus, roomWatches, roomWatchIds } from "./setups-core.mjs";
-export { linkStrategy, unlinkStrategy, linkGroup, unlinkGroup, groupRooms, strategyRefKey } from "./setups-core.mjs";
+export { linkStrategy, unlinkStrategy, linkGroup, unlinkGroup, groupRooms, strategyRefKey, strategyUsage } from "./setups-core.mjs";
 
 export interface SymbolSetup {
   symbol: string;

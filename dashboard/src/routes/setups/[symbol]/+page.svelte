@@ -114,6 +114,10 @@
           </select>
           <button class="primary" on:click={addStrategy} disabled={!pickStrategy}>link</button>
         </div>
+        <div class="meta">
+          pinned versions are immutable (ADR-009 — the runner executes exact bytes): changing behaviour means
+          publishing a new id@version, which then shows up in this picker.
+        </div>
         {#each symStrategies as s}
           <div class="row">
             {s.id}@{s.version ?? "latest"}

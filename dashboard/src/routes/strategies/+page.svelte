@@ -12,7 +12,7 @@
   import { composeCatalog, entryKey, type LibraryEntry } from "$lib/library";
   import { getStrategyRegistry, type RegistryEntry } from "$lib/registry";
   import { getSymbols, type SymbolsData } from "$lib/symbols";
-  import { setups, toggleGroupLink } from "$lib/setups";
+  import { setups, toggleGroupLink, strategyUsage } from "$lib/setups";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
   // RUNES MODE — every mutable top-level binding must be `$state(...)`.
@@ -189,14 +189,25 @@
     </p>
     <div class="grid gap-4 md:grid-cols-2">
       {#each pinnedList as p}
+        {@const use = strategyUsage($groups, $setups, p)}
         <Card>
           <CardHeader>
             <CardTitle class="font-mono">{p.label}</CardTitle>
             <CardDescription>{p.blurb}</CardDescription>
           </CardHeader>
           <CardContent class="space-y-1">
-            <Badge variant="outline">pinned wasm</Badge>
+            <div class="flex items-center gap-2">
+              <Badge variant="outline">pinned wasm</Badge>
+              <span class="text-xs text-muted-foreground">immutable bytes — to change it, publish a new version</span>
+            </div>
             {#if p.sha256}<div class="text-xs text-muted-foreground font-mono break-all">sha256 {p.sha256.slice(0, 16)}…</div>{/if}
+            <div class="text-xs text-muted-foreground">
+              {#if use.total}
+                referenced by {use.groups.length} group(s){use.groups.length ? ` (${use.groups.join(", ")})` : ""} · {use.rooms.length} room(s){use.rooms.length ? ` (${use.rooms.join(", ")})` : ""}
+              {:else}
+                not referenced by any group or room
+              {/if}
+            </div>
           </CardContent>
         </Card>
       {/each}
@@ -275,7 +286,13 @@
                 {#if groupNote}<div class="text-xs text-muted-foreground">{groupNote}</div>{/if}
               </div>
             {:else}
-              {#each g.members as m}<div class="text-sm font-mono">{m.id}@{m.version ?? "latest"}</div>{/each}
+              {#each g.members as m}
+                {@const inLibrary = catalog.some((e) => entryKey(e.id, e.version) === entryKey(m.id, m.version))}
+                <div class="text-sm font-mono">
+                  {m.id}@{m.version ?? "latest"}
+                  {#if !inLibrary}<Badge variant="destructive">not in library</Badge>{/if}
+                </div>
+              {/each}
               {@const rooms = Object.values($setups).filter((r) => r.groups?.includes(g.name)).map((r) => r.symbol).sort()}
               <div class="text-xs text-muted-foreground mt-1">linked rooms: {rooms.join(", ") || "—"}</div>
               <div class="flex gap-2 mt-2">
@@ -311,6 +328,7 @@
       <CardHeader><CardTitle>recent drafts</CardTitle><CardDescription>review-only — nothing executes until built + pinned. Discarding keeps the row for audit and takes it out of this list.</CardDescription></CardHeader>
       <CardContent class="space-y-3">
         {#each drafts as draft}
+          {@const use = strategyUsage($groups, $setups, { id: draft.strategy_id, version: draft.version })}
           <div class="border rounded p-3">
             <div class="flex items-center gap-2 mb-1">
               <span class="font-mono font-semibold">{draft.strategy_id}</span>
@@ -319,12 +337,20 @@
               <span class="text-xs text-muted-foreground">{draft.model} · {draft.created_by} · {draft.created_at}</span>
             </div>
             <p class="text-sm text-muted-foreground line-clamp-2">{draft.prompt}</p>
+            {#if use.total}
+              <div class="text-xs text-muted-foreground mt-1">
+                ⚠ referenced by {use.groups.length} group(s){use.groups.length ? ` (${use.groups.join(", ")})` : ""} · {use.rooms.length} room(s){use.rooms.length ? ` (${use.rooms.join(", ")})` : ""} —
+                discarding keeps those references visible (the editor shows them as “missing” and keeps them ticked)
+              </div>
+            {/if}
             <div class="flex gap-2 mt-2">
               {#if confirmDraft === draft.id}
-                <Button size="sm" variant="destructive" onclick={() => handleDeleteDraft(draft)}>confirm delete</Button>
+                <Button size="sm" variant="destructive" onclick={() => handleDeleteDraft(draft)}>
+                  {use.total ? "confirm discard (referenced)" : "confirm delete"}
+                </Button>
                 <Button size="sm" variant="outline" onclick={() => (confirmDraft = null)}>cancel</Button>
               {:else}
-                <Button size="sm" variant="destructive" onclick={() => (confirmDraft = draft.id)}>delete draft</Button>
+                <Button size="sm" variant="destructive" onclick={() => (confirmDraft = draft.id)}>discard draft</Button>
               {/if}
             </div>
           </div>

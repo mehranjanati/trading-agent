@@ -36,7 +36,15 @@ discarded. Now:
 
 - **Pinned artifacts stay immutable — on purpose, and the tab says so** (ADR-009:
   a published `id@version` is never overwritten; the runner executes exact bytes).
-  Changing behaviour means generating a NEW version and pinning it.
+  Changing behaviour means generating a NEW version and pinning it. Each card now
+  also reports **where that exact version is used** (`strategyUsage` — the groups
+  and rooms referencing it), so "is it in use inside a group?" is answered before
+  any re-pin/retire decision; a referenced draft's discard confirm repeats it, and
+  a group card flags a member the library no longer carries (`not in library`).
+  Editing the code itself belongs to the DRAFT stage (review-only) or to the repo
+  (`make strategy-build` → `registry.json` → sha256), never to a published
+  artifact: the dashboard cannot build or sign bytes, and an analysis run pins the
+  version active at run start.
 - **Groups are fully editable**: rename (the rename follows into every room link),
   change job, add/remove members — the edit tick-list keeps members the current
   library no longer carries, labelled, instead of dropping them silently — and

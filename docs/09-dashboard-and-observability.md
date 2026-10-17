@@ -64,6 +64,12 @@ Badge component on every data widget: LIVE (<5s) green · STALE (≥threshold) a
 - Logs: JSON `{ts, level, component, trace_id(evt_id), msg, fields}`; trace = evt/intent ID end-to-end.
 - Alerts (page operator): heartbeat loss, stale >30s, SUBMIT_UNKNOWN >5min, D1 errors >1%/5min, kill engaged/released, lease fencing flapping.
 
+## 9.3a Telegram push alerts (AI-operator loop)
+- **Design:** routes only ENQUEUE into `notification_outbox` (`migrations/0006`); the cron drains via `workers/src/notify.mjs`. Telegram is fail-open — a missing token, outage, or send failure degrades to "no push", never blocks a trade (SAFE-001: alerting is advisory).
+- **Topics (user-selectable, 5m/15m scalping):** `TRIGGERED · INVALIDATED · ANALYSIS_READY · APPROVAL_REQUESTED · ORDER_UPDATE · SAFETY · POSITION_DIGEST` — prefs in `notify_prefs`, toggled via `GET|POST /api/notify:prefs` (trader+), absent = enabled.
+- **Messages:** Persian-first, numbers Latin, HTML parse-mode; idempotent per `dedupe_key` (one alert per event edge, retries never double-send).
+- **Setup (operator, secrets never in git):** `wrangler secret put TELEGRAM_BOT_TOKEN` (from @BotFather) + `TELEGRAM_CHAT_ID` var/secret (numeric id from @userinfobot).
+
 ## 9.4 Degraded-mode UX (mandatory)
 Persistent banner with mode + cause + limitations; timelines show explicit gaps (never interpolate); approve buttons show "blocked: STALE price (12s)" style reasons; one-click drill history.
 

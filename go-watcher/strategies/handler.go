@@ -38,15 +38,16 @@ func (e *Engine) ServeAnalyze(w http.ResponseWriter, r *http.Request) {
 	}
 	tfs := req.Timeframes
 	if len(tfs) == 0 {
-		tfs = []string{"15m", "1h", "4h"}
+		// Default order: scalping TF first (zones derive from tfs[0]).
+		tfs = []string{"5m", "15m", "1h"}
 	}
 	for _, tf := range tfs {
 		if !validTFs[tf] {
-			writeAnalyzeErr(w, http.StatusBadRequest, "VALIDATION", "timeframe "+tf+" not 15m|1h|4h")
+			writeAnalyzeErr(w, http.StatusBadRequest, "VALIDATION", "timeframe "+tf+" not 5m|15m|1h|4h")
 			return
 		}
 	}
-	if len(tfs) > 3 {
+	if len(tfs) > 4 {
 		writeAnalyzeErr(w, http.StatusBadRequest, "VALIDATION", "at most 3 timeframes")
 		return
 	}

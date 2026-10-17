@@ -7,7 +7,7 @@ export const TH = {
   HEARTBEAT_MS: 5_000,
   MISSES: 3,
   STREAM_LAG_MS: 30_000,
-  LEASE_TTL_MS: 30_000,
+  LEASE_TTL_MS: 120_000, // mirrors lease.mjs TTL_MS (1/min cron cadence)
   PRICE_STALE_MS: 5_000,
   RECOVER_CONTIG_MS: 60_000, // return-to-primary: Go healthy 60s continuous
 };

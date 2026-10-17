@@ -32,7 +32,7 @@ import (
 func main() {
 	symbol := flag.String("symbol", "BTCUSDT", "venue symbol (canonical form, e.g. CELRUSDT)")
 	direction := flag.String("direction", "", "optional LONG|SHORT (filters the aggregate's agree/disagree view)")
-	timeframes := flag.String("timeframes", "15m,1h,4h", "comma-separated 15m,1h,4h")
+	timeframes := flag.String("timeframes", "5m,15m,1h", "comma-separated 5m,15m,1h,4h")
 	strategyList := flag.String("strategies", "", "comma-separated id@version pins (default: every pinned version)")
 	dir := flag.String("dir", "strategies/samples", "STRATEGIES_DIR (registry.json + pinned .wasm)")
 	flag.Parse()

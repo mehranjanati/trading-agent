@@ -42,7 +42,7 @@ func (c CandleWire) ToContract() Candle {
 }
 
 // FetchKlines returns oldest-first closes for symbol/timeframe, trying
-// Toobit, then OKX, then Binance. interval is "15m"|"1h"|"4h" (validated by
+// Toobit, then OKX, then Binance. interval is "5m"|"15m"|"1h"|"4h" (validated by
 // caller). The chain is provider outage + symbol coverage: Toobit can 404
 // rarely-listed symbols (CELR), Binance can 418/451 datacenter IPs, and each
 // next provider only runs when the previous one fails — never in parallel,
@@ -98,7 +98,7 @@ func numToStr(v any) (string, bool) {
 }
 
 // toobitKlines: GET https://api.toobit.com/quote/v1/klines
-// (symbol=BTCUSDT, interval=15m|1h|4h, limit). Rows are arrays
+// (symbol=BTCUSDT, interval=5m|15m|1h|4h, limit). Rows are arrays
 // [open_time_ms, open, high, low, close, volume, ...], oldest first.
 func toobitKlines(symbol, interval string) ([]CandleWire, error) {
 	var rows [][]any
@@ -114,9 +114,9 @@ func toobitKlines(symbol, interval string) ([]CandleWire, error) {
 // but NEWEST FIRST — they are reversed to the oldest-first wire order.
 // code "0" is success, anything else is an error (e.g. unknown instrument).
 func okxKlines(symbol, interval string) ([]CandleWire, error) {
-	bar, ok := map[string]string{"15m": "15m", "1h": "1H", "4h": "4H"}[interval]
+	bar, ok := map[string]string{"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H"}[interval]
 	if !ok {
-		return nil, fmt.Errorf("interval %s not 15m|1h|4h", interval)
+		return nil, fmt.Errorf("interval %s not 5m|15m|1h|4h", interval)
 	}
 	inst := okxInst(symbol)
 	var body struct {

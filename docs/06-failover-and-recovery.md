@@ -16,7 +16,8 @@ Fail closed for orders; reads bannered CACHED; mutations queued in outbox-retry;
 Threshold breach → `HELD_STALE`, trigger deferred, auto-retry on fresh tick, visible in timeline.
 
 ## 6.3 Leases, fencing, safe return
-- Lease: `ExecutionAuthority`, TTL 30s, renew 10s, monotonic `epoch`. Every submit includes epoch; mismatch → `lease.fenced` + reject. Only one holder globally.
+- Lease: `ExecutionAuthority`, TTL 120s, renew each cron tick, monotonic `epoch`. Every submit includes epoch; mismatch → `lease.fenced` + reject. Only one holder globally.
+  (Was 30s/10s: the deployed cron is 1/minute on Cloudflare, so a 30s lease expired between ticks and the §6.3 gate could never pass — `workers/src/lease.mjs`.)
 - Return-to-primary: (1) Go healthy 60s continuous, (2) reconcile ALL non-terminal intents, (3) fallback drains (no in-flight evals), (4) lease handoff with epoch bump, (5) mode PRIMARY + `health.recovered` event. Any step fails → stay degraded.
 
 ## 6.4 Exchange-accepted-but-ack-lost (critical)

@@ -28,6 +28,8 @@ export const ALLOW = {
   // Discard one draft (soft: status='deleted', kept for audit). Advisory-only
   // data — nothing builds or executes from a draft — so trader+ may do it.
   "POST /api/strategy:draft:delete": ["trader", "operator", "admin"],
+  // Telegram alert topic prefs: advisory-only toggles, trader+ may change.
+  "POST /api/notify:prefs": ["trader", "operator", "admin"],
   "POST /api/lease:handoff": ["operator", "admin"],
   "POST /api/kill-switch": ["operator", "admin"],
 };

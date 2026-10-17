@@ -1,7 +1,7 @@
 // do.test.mjs — E05-T02: split-brain + fencing + shard ownership (node:test).
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createAuthority } from "./lease.mjs";
+import { createAuthority, TTL_MS } from "./lease.mjs";
 import { createCoordinator, createFanout, shardOf, SHARD_COUNT } from "./shards.mjs";
 
 const mem = () => {
@@ -24,13 +24,13 @@ describe("E05-T02-S1 ExecutionAuthority lease", () => {
   });
   it("renew keeps lease alive; expired lease can be taken by anyone", () => {
     const a = createAuthority(mem());
-    const r = a.acquire("go", 0); // expires at 30000
-    assert.equal(a.renew("go", r.epoch, 10_000).ok, true); // → expires 40000
-    assert.equal(a.renew("go", r.epoch, 20_000).ok, true); // → expires 50000
-    assert.equal(a.renew("go", r.epoch, 20_001).ok, true); // → expires 50001
+    const r = a.acquire("go", 0); // expires at TTL_MS
+    assert.equal(a.renew("go", r.epoch, TTL_MS / 3).ok, true);
+    assert.equal(a.renew("go", r.epoch, (2 * TTL_MS) / 3).ok, true);
+    assert.equal(a.renew("go", r.epoch, (2 * TTL_MS) / 3 + 1).ok, true);
     // stop renewing → TTL lapses → anyone may acquire
-    assert.equal(a.renew("go", r.epoch, 51_000).ok, false); // past last expiry
-    const r2 = a.acquire("fallback", 51_001); // expired → anyone
+    assert.equal(a.renew("go", r.epoch, 2 * TTL_MS + 1_000).ok, false); // past last expiry
+    const r2 = a.acquire("fallback", 2 * TTL_MS + 1_001); // expired → anyone
     assert.equal(r2.ok, true);
     assert.ok(r2.epoch > r.epoch); // epoch monotonic
   });

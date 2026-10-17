@@ -1,7 +1,12 @@
 // lease.mjs — E05-T02-S1: ExecutionAuthority DO state machine (fencing by epoch).
 // Pure logic + storage interface; the DO runtime (index) wraps it with storage API.
-// Rules (ADR-003): TTL 30s, renew 10s, monotonic epoch, single holder globally.
-export const TTL_MS = 30_000;
+// Rules (ADR-003): TTL 120s, renew each cron tick, monotonic epoch, single holder globally.
+// WHY 120s (was 30s): the deployed cron cadence is 1/minute (Cloudflare 5-field
+// minimum — wrangler.toml [triggers]), so a 30s lease EXPIRES between ticks and
+// the §6.3 rejoin gate can never see lease_ours=true (permanent lease_expired).
+// 120s = 2 missed ticks of grace; fencing semantics (epoch) are unchanged —
+// a zombie holder with a superseded epoch is still rejected as stale-epoch.
+export const TTL_MS = 120_000;
 export const RENEW_MS = 10_000;
 
 /** Authority holders (ADR-003): the primary plane and the Workers fallback plane. */

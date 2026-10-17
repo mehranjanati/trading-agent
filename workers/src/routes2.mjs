@@ -3,8 +3,9 @@ import { ok, err } from "./errors.mjs";
 import { signalBody, approvalBody, intentBody } from "./validate.mjs";
 import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
 import { uid, roleOf, guard, readBody, writeErr, recordIncident, sha256Hex } from "./_shared.mjs";
+import { enqueueAlert } from "./notify.mjs";
 import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed, listVersions } from "./strategies.mjs";
-import { decideApproval as decideApprovalRecord, listApprovals, ttlMsFrom } from "./approvals.mjs";
+import { decideApproval as decideApprovalRecord, readApproval, listApprovals, ttlMsFrom } from "./approvals.mjs";
 import { limitsFrom } from "./risk.mjs";
 import { submitIntent as runSubmit } from "./execution.mjs";
 import { engageKill, releaseKill, readKill } from "./kill.mjs";
@@ -201,6 +202,16 @@ export function miscRoutes() {
           extra: out.risk_code ? { risk_code: out.risk_code, detail: out.detail ?? null } : {},
         });
       }
+      // Alert (best-effort): order submitted — outcome reconciles to terminal.
+      try {
+        const ap = await readApproval(env, b.approval_id).catch(() => null);
+        const wr = ap ? await readWatch(env, ap.watch_id).catch(() => null) : null;
+        await enqueueAlert(env, {
+          topic: "ORDER_UPDATE", symbol: wr?.symbol ?? null,
+          payload: { direction: wr?.direction ?? null, extra: { status: out.order_status ?? out.status ?? "SUBMITTED", qty: b.qty, note: `intent ${out.intent_id}` } },
+          dedupeKey: `ORDER_UPDATE:${out.intent_id}`,
+        });
+      } catch { /* advisory only */ }
       return ok(out, out.status);
     }),
     /** E09-T01: kill switch (SAFE-006). Engage is operator+; release needs admin
@@ -212,7 +223,17 @@ export function miscRoutes() {
       const b = await readBody(req);
       if (typeof b.engaged !== "boolean") { const e = new Error("engaged boolean required"); e.code = "VALIDATION"; throw e; }
       const actor = roleOf(req);
-      if (b.engaged) return ok(await engageKill(env, { actor, reason: b.reason ?? "unspecified" }), 201);
+      if (b.engaged) {
+        const out = await engageKill(env, { actor, reason: b.reason ?? "unspecified" });
+        try {
+          await enqueueAlert(env, {
+            topic: "SAFETY", symbol: null,
+            payload: { extra: { title: "کیل‌سوییچ فعال شد", detail: `توسط ${actor} — دلیل: ${b.reason ?? "unspecified"}` } },
+            dedupeKey: `SAFETY:kill:${Date.now()}`,
+          });
+        } catch { /* advisory only */ }
+        return ok(out, 201);
+      }
       if (actor !== "admin") return err("FORBIDDEN", "kill release requires admin", {});
       return ok(await releaseKill(env, { actor, reason: b.reason ?? "unspecified", confirm: b.confirm === true }), 200);
     }),
@@ -311,6 +332,14 @@ export function miscRoutes() {
       }
 
       if (kind === "INVALIDATED") {
+        // Alert (best-effort, never fatal): the trade path already committed.
+        try {
+          await enqueueAlert(env, {
+            topic: "INVALIDATED", symbol: w.symbol,
+            payload: { direction: w.direction, px: b.px },
+            dedupeKey: `INVALIDATED:${dedupe}`,
+          });
+        } catch { /* alerting is advisory — trade flow unaffected */ }
         return ok({ watch_id: w.id, status: "INVALIDATED", seq: b.seq }, 200);
       }
 
@@ -323,6 +352,22 @@ export function miscRoutes() {
       } catch (e) {
         return ok({ watch_id: w.id, status: "TRIGGERED", seq: b.seq, analysis_degraded: e.message }, 202);
       }
+      // Alert: trigger fired (best-effort — trade flow already committed).
+      try {
+        await enqueueAlert(env, {
+          topic: "TRIGGERED", symbol: w.symbol,
+          payload: { direction: w.direction, px: b.px },
+          dedupeKey: `TRIGGERED:${dedupe}`,
+        });
+      } catch { /* advisory only */ }
+      // Alert: analysis ready with the WASM verdict.
+      try {
+        await enqueueAlert(env, {
+          topic: "ANALYSIS_READY", symbol: w.symbol,
+          payload: { direction: w.direction, extra: { bias: run.out.bias, confidence: run.out.confidence } },
+          dedupeKey: `ANALYSIS_READY:${run.id}`,
+        });
+      } catch { /* advisory only */ }
       const cur = await readWatch(env, w.id);
       if (cur?.status === "TRIGGERED" && cur.version === w.version + 1) {
         await env.DB.batch(transitionStatements(env, {
@@ -351,6 +396,17 @@ export function miscRoutes() {
         id: uid("ap"), watch_id: b.watch_id, analysis_id: b.analysis_id,
         decision: b.decision, reason: b.reason, approver: roleOf(req), ttlMs,
       });
+      // Alert (best-effort): grant/reject decided by the human.
+      try {
+        const wr = await readWatch(env, b.watch_id).catch(() => null);
+        if (b.decision === "approve") {
+          await enqueueAlert(env, {
+            topic: "APPROVAL_REQUESTED", symbol: wr?.symbol ?? null,
+            payload: { direction: wr?.direction ?? null, extra: { summary: `تأیید شد توسط ${roleOf(req)} — آماده ثبت سفارش`, expires_in: "10 دقیقه" } },
+            dedupeKey: `APPROVAL_GRANTED:${out.id ?? b.watch_id}`,
+          });
+        }
+      } catch { /* advisory only */ }
       return ok(out, 201);
     }),
     /** GET /api/strategy — list all strategy versions (dashboard strategy page). */
@@ -388,6 +444,43 @@ export function miscRoutes() {
         "SELECT symbol, size, entry_px, leverage, updated_at FROM positions ORDER BY symbol",
       ).all().catch(() => ({ results: [] }));
       return ok({ positions: rows.results ?? [] });
+    }),
+    /** GET /api/notify:prefs — which alert topics push to Telegram (absent = on). */
+    listNotifyPrefs: safe(async (_req, env) => {
+      const { TOPICS } = await import("./notify.mjs");
+      const rows = await env.DB.prepare(
+        "SELECT topic, enabled FROM notify_prefs",
+      ).all().catch(() => ({ results: [] }));
+      const saved = Object.fromEntries((rows.results ?? []).map((r) => [r.topic, Number(r.enabled) !== 0]));
+      return ok({ prefs: TOPICS.map((t) => ({ topic: t, enabled: saved[t] ?? true })) });
+    }),
+    /** POST /api/notify:prefs — toggle alert topics (trader+; advisory only). */
+    setNotifyPrefs: safe(async (req, env) => {
+      const g = guard("POST /api/notify:prefs", req);
+      if (g) return g;
+      const { TOPICS, isTopic } = await import("./notify.mjs");
+      const b = await readBody(req);
+      const prefs = b.prefs;
+      if (!prefs || typeof prefs !== "object" || Array.isArray(prefs)) {
+        const e = new Error("prefs object required {TOPIC: boolean}");
+        e.code = "VALIDATION";
+        throw e;
+      }
+      const now = new Date().toISOString();
+      const updated = [];
+      for (const [topic, enabled] of Object.entries(prefs)) {
+        if (!isTopic(topic)) {
+          const e = new Error(`unknown topic ${topic} (one of ${TOPICS.join(",")})`);
+          e.code = "VALIDATION";
+          throw e;
+        }
+        await env.DB.prepare(
+          "INSERT INTO notify_prefs(topic,enabled,updated_at) VALUES(?,?,?) " +
+            "ON CONFLICT(topic) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at",
+        ).bind(topic, enabled ? 1 : 0, now).run();
+        updated.push({ topic, enabled: !!enabled });
+      }
+      return ok({ updated });
     }),
   };
 }

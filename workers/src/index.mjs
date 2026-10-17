@@ -16,6 +16,7 @@ import { tick as pollOnce, pollStatus } from "./fallback-poll.mjs";
 import { generateRoutes } from "./strategies-ai.mjs";
 import { proxyRoutes } from "./proxy.mjs";
 import { listSymbols } from "./symbols.mjs";
+import { drainNotifications } from "./notify.mjs";
 
 const store = createStore();
 const watches = watchRoutes(store);
@@ -53,6 +54,8 @@ export default {
       if (req.method === "GET" && p === "/api/analysis") return misc.listAnalysis(req, env);
       if (req.method === "GET" && p === "/api/orders:intents") return misc.listIntents(req, env);
       if (req.method === "GET" && p === "/api/positions") return misc.listPositions(req, env);
+      if (req.method === "GET" && p === "/api/notify:prefs") return misc.listNotifyPrefs(req, env);
+      if (req.method === "POST" && p === "/api/notify:prefs") return misc.setNotifyPrefs(req, env);
       if (req.method === "GET" && p === "/api/symbols") {
         try {
           return ok({ ...(await listSymbols(env)), at: new Date().toISOString() });
@@ -153,7 +156,16 @@ export async function runCron(env, opts = {}) {
   } catch (e) {
     approvalsSweep = { error: e.message };
   }
-  return { tick: tickResult, rejoin, sweep: swept, sweep_error: sweepError, poll, approvals_sweep: approvalsSweep };
+
+  // Telegram alert drain (fail-open): sends queued notification_outbox rows.
+  // Never throws — a Telegram outage degrades to "no push", trade flow unaffected.
+  let notifyDrain = null;
+  try {
+    notifyDrain = await drainNotifications(env, { nowMs });
+  } catch (e) {
+    notifyDrain = { error: e.message };
+  }
+  return { tick: tickResult, rejoin, sweep: swept, sweep_error: sweepError, poll, approvals_sweep: approvalsSweep, notify_drain: notifyDrain };
 }
 
 

@@ -62,7 +62,7 @@ flowchart TB
 
 ## 2.6 Failure boundaries & consistency limits
 - **D1 unavailable:** fail closed for orders; serve last-known reads bannered CACHED/STALE; queue mutations via outbox retry; pause reconcile submits, keep polling read-only.
-- **DO partitioning:** one global `ExecutionAuthority` (single lease, 30s TTL, 10s renew, monotonic `epoch` fencing) + N `WatchCoordinator-{shard}` by `hash(symbol) % N` + `DashboardFanout`. A single global coordinator would bottleneck — sharding is mandatory.
+- **DO partitioning:** one global `ExecutionAuthority` (single lease, 120s TTL, renew each cron tick, monotonic `epoch` fencing) + N `WatchCoordinator-{shard}` by `hash(symbol) % N` + `DashboardFanout`. A single global coordinator would bottleneck — sharding is mandatory.
 - **Unhealthy definition (all recorded):** 3 missed Go heartbeats (15s) OR Redis stream lag >30s OR price staleness > per-symbol threshold. Workers cron (10s) evaluates and writes `health_snapshots` + `recovery_log`.
 - **Trigger during failover:** refresh symbol via REST first; if refresh fails or is stale → record `HELD_UNCERTAIN`, notify, no order (SAFE-001).
 - **Ack lost after submit:** mark `SUBMIT_UNKNOWN`, reconcile by `client_order_id` with backoff; never Blind-resubmit; alert if unresolved >5min.

@@ -12,8 +12,9 @@ import (
 	"sync/atomic"
 )
 
-// validTFs is the deep-analysis timeframe set.
-var validTFs = map[string]bool{"15m": true, "1h": true, "4h": true}
+// validTFs is the deep-analysis timeframe set. 5m is the scalping TF (user
+// trades 5m primary / 15m secondary); 15m|1h|4h are the higher-TF context.
+var validTFs = map[string]bool{"5m": true, "15m": true, "1h": true, "4h": true}
 
 // AnalyzeRequest is the POST /analyze body.
 type AnalyzeRequest struct {

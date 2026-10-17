@@ -10,7 +10,7 @@
   // Form state
   let symbol = "BTCUSDT";
   let direction: "LONG" | "SHORT" | "" = "";
-  let timeframes = ["15m", "1h", "4h"];
+  let timeframes = ["5m", "15m", "1h"];
   let usePosition = false;
   let position = { entry: "", size: "", leverage: 1 };
   let strategies = [{ id: "sma-cross", version: "0.1.0", config: {} }];
@@ -103,7 +103,7 @@
     <div class="field">
       <label>timeframes</label>
       <div class="checkboxes">
-        {#each ["15m", "1h", "4h"] as tf}
+        {#each ["5m", "15m", "1h", "4h"] as tf}
           <label class="checkbox">
             <input type="checkbox" checked={timeframes.includes(tf)} on:change={() => toggleTf(tf)} />
             {tf}

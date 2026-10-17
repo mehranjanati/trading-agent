@@ -10,7 +10,7 @@
 
   const routes = [
     ["/", "overview"], ["/setups", "setups"], ["/strategies", "strategies"],
-    ["/approvals", "approvals"], ["/logs", "logs"],
+    ["/approvals", "approvals"], ["/alerts", "🔔 alerts"], ["/logs", "logs"],
   ];
 
   let health: Health | null = data?.result?.ok ? (data.result.data as Health) : null;

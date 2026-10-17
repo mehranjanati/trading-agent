@@ -35,6 +35,9 @@ export const BROWSER_POST_PATHS = new Set([
   // draft), so the dashboard may POST it — same class as the save route above.
   "/api/strategy:draft:delete",
   "/api/watches",
+  // Telegram alert topic prefs are advisory-only toggles (docs/09 §9.3a): they
+  // select which pushes arrive, never an order or approval (D-08 preserved).
+  "/api/notify:prefs",
 ]);
 export const CORS = {
   "access-control-allow-origin": "*",

@@ -358,6 +358,26 @@ export const getPositions = () => getJson<{ positions: Position[] }>("/api/posit
 export const getRecoveryLog = (limit = 50) => getJson<{ incidents: RecoveryIncident[] }>(`/api/recovery/log?limit=${limit}`);
 export const getStrategies = () => getJson<{ versions: StrategyVersion[] }>("/api/strategy");
 
+/** Telegram alert topics (docs/09 §9.3a): absent = enabled. Advisory only. */
+export type NotifyPrefs = { prefs: { topic: string; enabled: boolean }[] };
+export const getNotifyPrefs = () => getJson<NotifyPrefs>("/api/notify:prefs");
+/** Toggle topics via POST (trader+, in the browser POST allow-list — advisory,
+ *  no order/approval path is reachable from it, D-08 preserved). */
+export async function setNotifyPrefs(prefs: Record<string, boolean>): Promise<Result<{ updated: { topic: string; enabled: boolean }[] }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/notify:prefs`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader", accept: "application/json" },
+      body: JSON.stringify({ prefs }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: (data as { message?: string })?.message ?? `HTTP ${res.status}` };
+    return { ok: true, data: data as { updated: { topic: string; enabled: boolean }[] }, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 /** Convenience wrappers over the pure freshness module, pre-filled from a Result.
  *  A null/undefined result (before the first load, or a crashed load) is
  *  UNAVAILABLE — never "fresh", and never a crash. */

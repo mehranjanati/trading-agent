@@ -109,7 +109,11 @@ func main() {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, "active_watches=%d snapshot_at=%v\n", activeN.Load(), snapshotAt.Load())
 		_, _ = w.Write([]byte(counters.Render()))
+		_, _ = w.Write([]byte(tgMetrics()))
 	})
+	// Telegram signals: advisory read API + optional embedded userbot.
+	initTg()
+	mountTg(mux)
 	_ = http.ListenAndServe(":"+port, mux)
 }
 

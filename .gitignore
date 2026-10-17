@@ -19,6 +19,10 @@ workers/.wrangler/
 
 # Go command binaries built in-place (e.g. `go build ./cmd/restart-drill`)
 /go-watcher/restart-drill
+# Telegram userbot session (MTProto auth keys — secrets, never commit)
+go-watcher/tg-session.json
+*.session.json
+go-watcher/session/
 # Docker prebuilt watcher (cross-compiled; rebuilt by docker compose build)
 /go-watcher/docker/
 # Local toolchains (Go + sqlite3 CLI) and their module/build caches: sandbox or

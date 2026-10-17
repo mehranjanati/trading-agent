@@ -13,6 +13,8 @@ Roles: `trader` (watches, signals, approve own queue) · `operator` (deploys, ki
 | `POST /api/kill-switch` | ❌ | ✅ engage | ✅ engage+release | release needs 2nd human confirm |
 | `GET /api/health`, `/recovery/log` | ✅ | ✅ | ✅ | |
 | Strategy activation (`POST /api/strategy:activate`) | ❌ | ❌ | ✅ | admin-only; versioned, audited (E07-T01) |
+| AI strategy codegen (`POST /api/strategy:generate`, `POST /api/strategy:chat*`, `POST /api/strategy:draft`) | ✅ | ✅ | ✅ | advisory only — review-only drafts, nothing executes (docs/15) |
+| Discard a draft (`POST /api/strategy:draft:delete`) | ✅ | ✅ | ✅ | soft delete: `status='deleted'`, row kept for audit, hidden from `GET /api/strategy:drafts` |
 | Secret rotation approval | ❌ | request | ✅ approve | two-person rule |
 
 Auth: OIDC/JWT Bearer; approval calls need step-up confirm (fresh token ≤5min). Envelopes: 401 unauthenticated, 403 unauthorized + `trace_id`. Every decision logs actor + IP + time.

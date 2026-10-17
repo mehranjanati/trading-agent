@@ -5,14 +5,14 @@
   import { Input } from "$lib/components/ui/input";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Badge } from "$lib/components/ui/badge";
-  import { postGenerateStrategy, getStrategyDrafts, getStrategies } from "$lib/api";
+  import { postGenerateStrategy, getStrategyDrafts, getStrategies, deleteStrategyDraft } from "$lib/api";
   import type { StrategyDraft, StrategyVersion } from "$lib/types";
-  import { groups, saveGroup, deleteGroup, toggleMember, type GroupJob } from "$lib/groups";
-  import { groupValidationError, groupMembers, groupStatusText } from "$lib/groups-core.mjs";
+  import { groups, saveGroup, deleteGroup, renameGroup, type GroupJob, type StrategyGroup } from "$lib/groups";
+  import { groupValidationError, groupMembers, groupStatusText, groupEditRows, groupEditError, groupEditNote, groupDeleteNote } from "$lib/groups-core.mjs";
   import { composeCatalog, entryKey, type LibraryEntry } from "$lib/library";
   import { getStrategyRegistry, type RegistryEntry } from "$lib/registry";
   import { getSymbols, type SymbolsData } from "$lib/symbols";
-  import { setups, touchSetup } from "$lib/setups";
+  import { setups, toggleGroupLink } from "$lib/setups";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
   // RUNES MODE — every mutable top-level binding must be `$state(...)`.
@@ -23,6 +23,9 @@
   // with `gname === ""` and never re-evaluated, so the button stayed disabled
   // forever — the click never reached handleSaveGroup and the validation
   // feedback never ran (silent button).
+  // One row of the edit tick-list (groupEditRows): a library entry, or a stored
+  // member the library no longer carries (`kind: "missing"`).
+  type EditRow = { id: string; version?: string; kind: string; label: string; blurb: string };
   let tab = $state<"library" | "groups" | "drafts" | "limits">("groups");
   let description = $state("");
   let strategy_id = $state("");
@@ -48,8 +51,27 @@
   let gjob = $state<GroupJob>("entry");
   let picked = $state<Record<string, boolean>>({});
   let groupNote = $state("");
-  let linkSymbol = $state("");
   let linkSearch = $state("");
+  // Editing a SAVED group. A group used to be frozen once saved: no rename, no
+  // job change, no member change, and `delete group` fired without confirmation
+  // or cleanup. `editingName` is the group under edit, `editPicked` its
+  // tick-list, `confirmDelete` the two-step delete.
+  let editingName = $state<string | null>(null);
+  let editName = $state("");
+  let editJob = $state<GroupJob>("entry");
+  let editPicked = $state<Record<string, boolean>>({});
+  let confirmDelete = $state<string | null>(null);
+  // Drafts: a generated strategy you no longer want must be discardable. The
+  // Worker soft-deletes it (status='deleted') — the row stays for audit and
+  // leaves the list — so the answer says exactly that instead of "gone".
+  let draftNote = $state("");
+  let confirmDraft = $state<string | null>(null);
+  // The edit tick-list = the current library PLUS any stored member the library
+  // no longer carries (a deleted draft, an unpinned version) — groupEditRows
+  // keeps those visible, because rebuilding from the library alone would drop
+  // them silently.
+  let editRows = $derived(groupEditRows(catalog, ($groups[editingName ?? ""]?.members ?? [])));
+  let editPickedCount = $derived(editRows.filter((e: EditRow) => editPicked[entryKey(e.id, e.version)]).length);
   let pickedList = $derived(catalog.filter((e) => picked[entryKey(e.id, e.version)]));
   let symList: string[] = $derived(((symbols as SymbolsData | null)?.symbols ?? []).filter((s: string) => !linkSearch.trim() || s.includes(linkSearch.trim().toUpperCase())).slice(0, 30));
   onMount(async () => {
@@ -91,11 +113,50 @@
     gname = ""; picked = {};
     groupNote = `گروه «${name}» ذخیره شد (${members.length} استراتژی)`;
   }
-  function handleLink(groupName: string) {
-    const s = linkSymbol.trim().toUpperCase();
-    if (!s) return;
-    touchSetup(s, { groups: [...new Set([...($setups[s]?.groups ?? []), groupName])] });
-    linkSymbol = "";
+  // ── Editing / deleting a SAVED group ────────────────────────────────────────
+  function startEdit(g: StrategyGroup) {
+    editingName = g.name;
+    editName = g.name;
+    editJob = g.job;
+    editPicked = Object.fromEntries(g.members.map((m) => [entryKey(m.id, m.version), true]));
+    confirmDelete = null;
+    groupNote = "";
+  }
+
+  function saveGroupEdit(from: string) {
+    const name = editName.trim();
+    const members = groupMembers(editRows.filter((e: EditRow) => editPicked[entryKey(e.id, e.version)]));
+    const problem = groupEditError(name, members.length, from, Object.keys($groups).filter((n) => n !== from));
+    if (problem) { groupNote = problem; return; }
+    // Rename FIRST so the room links follow the name, then store the new body
+    // (createdAt is preserved — a rename is not a new group).
+    if (name !== from && !renameGroup(from, name)) { groupNote = `تغییر نام «${from}» ممکن نشد`; return; }
+    saveGroup({ name, members, job: editJob, createdAt: $groups[from]?.createdAt ?? new Date().toISOString() });
+    editingName = null;
+    groupNote = groupEditNote(name, members.length, from);
+  }
+
+  function handleDeleteGroup(name: string) {
+    const rooms = deleteGroup(name); // also unlinks the group from every room
+    confirmDelete = null;
+    if (editingName === name) editingName = null;
+    groupNote = groupDeleteNote(name, rooms);
+  }
+
+  /** Link/unlink a group on ONE symbol — the link is a toggle, because the
+   *  one-way link was the bug: it could be made from here and never undone. */
+  function handleToggleLink(groupName: string, symbol: string) {
+    const linked = toggleGroupLink(symbol, groupName);
+    groupNote = linked ? `«${groupName}» به اتاق ${symbol} وصل شد` : `«${groupName}» از اتاق ${symbol} برداشته شد`;
+  }
+
+  // ── Discarding a DRAFT ──────────────────────────────────────────────────────
+  async function handleDeleteDraft(d: StrategyDraft) {
+    const res = await deleteStrategyDraft(d.id);
+    confirmDraft = null;
+    if (!res.ok) { draftNote = `حذف draft ممکن نشد: ${res.error}`; return; }
+    drafts = drafts.filter((x) => x.id !== d.id);
+    draftNote = `draft «${d.strategy_id}@${d.version}» حذف شد — ردیف برای audit در D1 میماند (status=deleted)`;
   }
 </script>
 
@@ -120,6 +181,12 @@
           : `Go registry unreachable${registryError ? ` (${registryError})` : ""} — showing the checked-in mirror`}
       </span>
     </div>
+    <p class="text-xs text-muted-foreground mb-3">
+      pinned artifacts are immutable on purpose: a published id@version is never overwritten or deleted
+      (ADR-009 — the runner executes exact bytes). To change behaviour, generate a NEW version, build it and
+      pin it. What you can edit or remove here is your own selection: groups (below) and a room's
+      “strategies in play”.
+    </p>
     <div class="grid gap-4 md:grid-cols-2">
       {#each pinnedList as p}
         <Card>
@@ -176,21 +243,64 @@
     <div class="grid gap-4 md:grid-cols-2 mt-6">
       {#each Object.values($groups) as g}
         <Card>
-          <CardHeader><CardTitle class="font-mono">{g.name}</CardTitle><CardDescription><Badge variant="outline">advisory-group</Badge> job: {g.job} — {g.members.length} members</CardDescription></CardHeader>
+          <CardHeader>
+            <CardTitle class="font-mono">{g.name}</CardTitle>
+            <CardDescription>
+              <Badge variant="outline">advisory-group</Badge> job: {g.job} — {g.members.length} members
+            </CardDescription>
+          </CardHeader>
           <CardContent class="space-y-1">
-            {#each g.members as m}<div class="text-sm font-mono">{m.id}@{m.version ?? "latest"}</div>{/each}
-            <div class="mt-3 space-y-2">
-              <Input bind:value={linkSearch} placeholder="search venue symbols..." />
-              <div class="lib-pick small">
-                {#each symList as s}
-                  <button class="pick-row as-btn" onclick={() => { linkSymbol = s; handleLink(g.name); }}>
-                    <span class="font-mono">{s}</span>
-                    {#if ($setups[s]?.groups ?? []).includes(g.name)}<Badge>linked</Badge>{/if}
-                  </button>
-                {/each}
+            {#if editingName === g.name}
+              <div class="space-y-2">
+                <Input bind:value={editName} placeholder="group name" />
+                <select bind:value={editJob} class="border rounded px-2 py-1 text-sm bg-background w-full">
+                  <option value="entry">entry</option><option value="confirmation">confirmation</option><option value="exit-scan">exit-scan</option>
+                </select>
+                <div class="lib-pick">
+                  {#each editRows as e}
+                    {@const k = entryKey(e.id, e.version)}
+                    <label class="pick-row">
+                      <input type="checkbox" bind:checked={editPicked[k]} />
+                      <span class="font-mono">{e.label}</span>
+                      <Badge variant={e.kind === "missing" ? "destructive" : e.kind === "pinned" ? "outline" : "default"}>{e.kind}</Badge>
+                      <span class="text-xs text-muted-foreground">{e.blurb}</span>
+                    </label>
+                  {/each}
+                </div>
+                <div class="text-xs text-muted-foreground">{editPickedCount} of {editRows.length} ticked — unticking removes a member</div>
+                <div class="flex gap-2">
+                  <Button size="sm" onclick={() => saveGroupEdit(g.name)}>save changes</Button>
+                  <Button size="sm" variant="outline" onclick={() => (editingName = null)}>cancel</Button>
+                </div>
+                {#if groupNote}<div class="text-xs text-muted-foreground">{groupNote}</div>{/if}
               </div>
-              <Button size="sm" variant="destructive" onclick={() => deleteGroup(g.name)}>delete group</Button>
-            </div>
+            {:else}
+              {#each g.members as m}<div class="text-sm font-mono">{m.id}@{m.version ?? "latest"}</div>{/each}
+              {@const rooms = Object.values($setups).filter((r) => r.groups?.includes(g.name)).map((r) => r.symbol).sort()}
+              <div class="text-xs text-muted-foreground mt-1">linked rooms: {rooms.join(", ") || "—"}</div>
+              <div class="flex gap-2 mt-2">
+                <Button size="sm" variant="outline" onclick={() => startEdit(g)}>edit</Button>
+                {#if confirmDelete === g.name}
+                  <Button size="sm" variant="destructive" onclick={() => handleDeleteGroup(g.name)}>confirm delete</Button>
+                  <Button size="sm" variant="outline" onclick={() => (confirmDelete = null)}>cancel</Button>
+                {:else}
+                  <Button size="sm" variant="destructive" onclick={() => (confirmDelete = g.name)}>delete group</Button>
+                {/if}
+              </div>
+              <div class="mt-3 space-y-2">
+                <Input bind:value={linkSearch} placeholder="search venue symbols..." />
+                <div class="lib-pick small">
+                  {#each symList as s}
+                    {@const linked = ($setups[s]?.groups ?? []).includes(g.name)}
+                    <button class="pick-row as-btn" onclick={() => handleToggleLink(g.name, s)}>
+                      <span class="font-mono">{s}</span>
+                      <Badge variant={linked ? "default" : "outline"}>{linked ? "linked — click to unlink" : "click to link"}</Badge>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              {#if groupNote}<div class="text-xs text-muted-foreground mt-2">{groupNote}</div>{/if}
+            {/if}
           </CardContent>
         </Card>
       {/each}
@@ -198,7 +308,7 @@
     {#if Object.keys($groups).length === 0}<p class="text-sm text-muted-foreground mt-4">no groups yet — tick library strategies above</p>{/if}
   {:else if tab === "drafts"}
     <Card>
-      <CardHeader><CardTitle>recent drafts</CardTitle><CardDescription>review-only — nothing executes until built + pinned</CardDescription></CardHeader>
+      <CardHeader><CardTitle>recent drafts</CardTitle><CardDescription>review-only — nothing executes until built + pinned. Discarding keeps the row for audit and takes it out of this list.</CardDescription></CardHeader>
       <CardContent class="space-y-3">
         {#each drafts as draft}
           <div class="border rounded p-3">
@@ -206,11 +316,21 @@
               <span class="font-mono font-semibold">{draft.strategy_id}</span>
               <Badge variant="outline">{draft.version}</Badge>
               <Badge>{draft.status}</Badge>
+              <span class="text-xs text-muted-foreground">{draft.model} · {draft.created_by} · {draft.created_at}</span>
             </div>
             <p class="text-sm text-muted-foreground line-clamp-2">{draft.prompt}</p>
+            <div class="flex gap-2 mt-2">
+              {#if confirmDraft === draft.id}
+                <Button size="sm" variant="destructive" onclick={() => handleDeleteDraft(draft)}>confirm delete</Button>
+                <Button size="sm" variant="outline" onclick={() => (confirmDraft = null)}>cancel</Button>
+              {:else}
+                <Button size="sm" variant="destructive" onclick={() => (confirmDraft = draft.id)}>delete draft</Button>
+              {/if}
+            </div>
           </div>
         {/each}
         {#if drafts.length === 0}<p class="text-sm text-muted-foreground">no drafts yet</p>{/if}
+        {#if draftNote}<div class="text-xs text-muted-foreground">{draftNote}</div>{/if}
       </CardContent>
     </Card>
   {:else if tab === "limits"}

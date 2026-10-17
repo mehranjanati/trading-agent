@@ -13,7 +13,7 @@
 // Imports the real module (setups-core.mjs), not a hand-copied mirror.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { roomWatches, roomWatchIds, deriveStatus } from "./setups-core.mjs";
+import { roomWatches, roomWatchIds, deriveStatus, linkStrategy, unlinkStrategy, linkGroup, unlinkGroup, renameGroupLinks, dropGroupLinks, groupRooms, strategyRefKey } from "./setups-core.mjs";
 
 const NOW = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
@@ -104,5 +104,72 @@ describe("deriveStatus — a triggered watch still drives the room's status", ()
     assert.equal(deriveStatus("CELRUSDT", {
       positions: [{ symbol: "CELRUSDT", size: "10" }], watches: [], watchIds: [], approvals: [],
     }), "OPEN");
+  });
+});
+
+// The second half of the report: a room's own selection was append-only. The
+// strategies page could link a group to a symbol and nothing could ever take it
+// back, `SymbolSetup.strategies` was written by nobody (so "strategies in play"
+// was permanently empty), and deleting a group left every room that linked it
+// pointing at a name that no longer existed.
+const ROOM = (patch = {}) => ({
+  CELRUSDT: { symbol: "CELRUSDT", chatSession: null, strategies: [], groups: [], analyzes: [], watches: [], updatedAt: iso(NOW), ...patch },
+});
+
+describe("room links — strategies and groups can be added AND removed", () => {
+  it("links a strategy once, and a different version is a different entry", () => {
+    let rooms = linkStrategy(ROOM(), "celrusdt", { id: "sma-cross", version: "0.1.0" });
+    rooms = linkStrategy(rooms, "CELRUSDT", { id: "sma-cross", version: "0.1.0" }); // idempotent
+    rooms = linkStrategy(rooms, "CELRUSDT", { id: "sma-cross", version: "0.2.0" });
+    assert.deepEqual(rooms.CELRUSDT.strategies, [
+      { id: "sma-cross", version: "0.1.0" },
+      { id: "sma-cross", version: "0.2.0" },
+    ]);
+    assert.equal(strategyRefKey({ id: "sma-cross" }), "sma-cross@latest");
+  });
+
+  it("unlinks exactly one id@version and leaves the rest", () => {
+    let rooms = linkStrategy(ROOM(), "CELRUSDT", { id: "a", version: "1" });
+    rooms = linkStrategy(rooms, "CELRUSDT", { id: "a", version: "2" });
+    rooms = unlinkStrategy(rooms, "CELRUSDT", { id: "a", version: "1" });
+    assert.deepEqual(rooms.CELRUSDT.strategies, [{ id: "a", version: "2" }]);
+  });
+
+  it("linking a strategy creates the room instead of throwing it away", () => {
+    const rooms = linkStrategy({}, "ETHUSDT", { id: "sma-x-v2", version: "0.1.0" });
+    assert.deepEqual(rooms.ETHUSDT.strategies, [{ id: "sma-x-v2", version: "0.1.0" }]);
+    assert.equal(linkStrategy({}, "", { id: "x" })[""], undefined); // blank symbol is a no-op
+  });
+
+  it("links and unlinks a group", () => {
+    let rooms = linkGroup(ROOM(), "CELRUSDT", "rsi-block");
+    rooms = linkGroup(rooms, "CELRUSDT", "rsi-block"); // idempotent
+    assert.deepEqual(rooms.CELRUSDT.groups, ["rsi-block"]);
+    rooms = unlinkGroup(rooms, "CELRUSDT", "rsi-block");
+    assert.deepEqual(rooms.CELRUSDT.groups, []);
+  });
+
+  it("a group rename follows into every room that linked it", () => {
+    const rooms = {
+      ...ROOM({ groups: ["rsi-block"] }),
+      BTCUSDT: { symbol: "BTCUSDT", chatSession: null, strategies: [], groups: ["rsi-block", "other"], analyzes: [], watches: [], updatedAt: iso(NOW) },
+      ETHUSDT: { symbol: "ETHUSDT", chatSession: null, strategies: [], groups: [], analyzes: [], watches: [], updatedAt: iso(NOW) },
+    };
+    const next = renameGroupLinks(rooms, "rsi-block", "rsi-div-block");
+    assert.deepEqual(next.CELRUSDT.groups, ["rsi-div-block"]);
+    assert.deepEqual(next.BTCUSDT.groups, ["rsi-div-block", "other"]);
+    assert.deepEqual(next.ETHUSDT.groups, []);
+  });
+
+  it("deleting a group removes it from every room (no ghost reference)", () => {
+    const rooms = {
+      ...ROOM({ groups: ["rsi-block"] }),
+      BTCUSDT: { symbol: "BTCUSDT", chatSession: null, strategies: [], groups: ["rsi-block", "keep"], analyzes: [], watches: [], updatedAt: iso(NOW) },
+    };
+    const next = dropGroupLinks(rooms, "rsi-block");
+    assert.deepEqual(next.CELRUSDT.groups, []);
+    assert.deepEqual(next.BTCUSDT.groups, ["keep"]);
+    assert.deepEqual(groupRooms(rooms, "rsi-block"), ["BTCUSDT", "CELRUSDT"]);
+    assert.deepEqual(groupRooms(next, "rsi-block"), []);
   });
 });

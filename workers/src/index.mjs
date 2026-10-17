@@ -64,6 +64,7 @@ export default {
       if (req.method === "POST" && p === "/api/strategy:chat") return ai.chat(req, env);
       if (req.method === "POST" && p === "/api/strategy:chat:stream") return ai.chatStream(req, env);
       if (req.method === "POST" && p === "/api/strategy:draft") return ai.saveDraft(req, env);
+      if (req.method === "POST" && p === "/api/strategy:draft:delete") return ai.deleteDraft(req, env);
       if (req.method === "GET" && p === "/api/strategy:drafts") return ai.drafts(req, env);
       // E14-T02: advisory Go-plane routes proxied to go-watcher (Render) when
       // the dashboard was built without VITE_ANALYZE_BASE. Advisory, no orders.

@@ -10,7 +10,8 @@
 // status) lives in setups-core.mjs so `node --test` imports the real
 // implementation instead of a hand-copied mirror — the freshness.mjs /
 // groups-core.mjs / library-core.mjs pattern.
-import { writable } from "svelte/store";
+import { writable, get } from "svelte/store";
+import { linkStrategy, unlinkStrategy, linkGroup, unlinkGroup, groupRooms } from "./setups-core.mjs";
 
 export type SetupStatus = "OPEN" | "STALKING" | "AWAITING-APPROVAL" | "IDLE";
 
@@ -25,6 +26,7 @@ export interface RoomWatch {
 }
 
 export { deriveStatus, roomWatches, roomWatchIds } from "./setups-core.mjs";
+export { linkStrategy, unlinkStrategy, linkGroup, unlinkGroup, groupRooms, strategyRefKey } from "./setups-core.mjs";
 
 export interface SymbolSetup {
   symbol: string;
@@ -70,4 +72,29 @@ export function touchSetup(symbol: string, patch: Partial<SymbolSetup>): void {
     const cur = all[symbol] ?? blank(symbol);
     return { ...all, [symbol]: { ...cur, ...patch, symbol, updatedAt: new Date().toISOString() } };
   });
+}
+
+// ── Room links: link/unlink a strategy or a group on ONE symbol ───────────────
+// These are the mutations the room page and the strategies page share. Advisory
+// linkage only (localStorage) — the canonical watch/order state stays in D1.
+// Each is idempotent, and the group link is a TOGGLE because a one-way link was
+// the bug: a group could be linked from /strategies and never removed.
+
+/** linkStrategyTo — put one id@version in a room's "strategies in play". */
+export function linkStrategyTo(symbol: string, entry: { id: string; version?: string }): void {
+  setups.update((rooms) => linkStrategy(rooms, symbol, entry));
+}
+
+/** unlinkStrategyFrom — take one id@version out of a room. */
+export function unlinkStrategyFrom(symbol: string, entry: { id: string; version?: string }): void {
+  setups.update((rooms) => unlinkStrategy(rooms, symbol, entry));
+}
+
+/** toggleGroupLink — link the group to the symbol, or unlink it when it is
+ *  already linked. Returns the state AFTER the toggle (true = linked). */
+export function toggleGroupLink(symbol: string, name: string): boolean {
+  const key = String(symbol ?? "").trim().toUpperCase();
+  const linked = (get(setups)[key]?.groups ?? []).includes(name);
+  setups.update((rooms) => (linked ? unlinkGroup(rooms, key, name) : linkGroup(rooms, key, name)));
+  return !linked;
 }

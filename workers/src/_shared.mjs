@@ -25,6 +25,9 @@ export const ALLOW = {
   "POST /api/strategy:chat:stream": ["trader", "operator", "admin"],
   // Save extracted code as draft: same RBAC.
   "POST /api/strategy:draft": ["trader", "operator", "admin"],
+  // Discard one draft (soft: status='deleted', kept for audit). Advisory-only
+  // data — nothing builds or executes from a draft — so trader+ may do it.
+  "POST /api/strategy:draft:delete": ["trader", "operator", "admin"],
   "POST /api/lease:handoff": ["operator", "admin"],
   "POST /api/kill-switch": ["operator", "admin"],
 };

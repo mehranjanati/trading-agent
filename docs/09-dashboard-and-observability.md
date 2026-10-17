@@ -27,6 +27,27 @@ The Stalk card also shows the trigger/invalidation distances from the close the
 zone was measured on (`bandStats` in `lib/stalk.ts`): a band a fraction of a
 percent wide is decided by the next tick, so the card says so before the click.
 
+**What is editable, and where (UX pass on `/strategies` + `/setups/{symbol}`).**
+The screen used to be mostly inert: a pinned artifact looked editable, a saved
+group could only be deleted (no rename, no job change, no member change, and the
+delete left every room pointing at a name that no longer existed), a room's
+"strategies in play" was written by nobody, and a generated draft could never be
+discarded. Now:
+
+- **Pinned artifacts stay immutable — on purpose, and the tab says so** (ADR-009:
+  a published `id@version` is never overwritten; the runner executes exact bytes).
+  Changing behaviour means generating a NEW version and pinning it.
+- **Groups are fully editable**: rename (the rename follows into every room link),
+  change job, add/remove members — the edit tick-list keeps members the current
+  library no longer carries, labelled, instead of dropping them silently — and
+  delete behind a confirm that also unlinks the group from every room and reports
+  which rooms it cleaned (`groups-core.mjs` / `setups-core.mjs`, unit-tested).
+- **A room's selection is two-way**: link a strategy from the pinned catalog and
+  `remove` it, and link/unlink a group per symbol (the old link was one-way).
+- **Drafts are discardable** (`POST /api/strategy:draft:delete`, docs/10 §10.2):
+  soft-deleted (`status='deleted'`, kept for audit, out of the list) so the answer
+  is "discarded and kept for audit", never a silent disappearance.
+
 ## 9.2 Freshness system
 Badge component on every data widget: LIVE (<5s) green · STALE (≥threshold) amber · CACHED (fallback/last-known) grey · UNAVAILABLE red. Global mode banner always visible; order buttons disabled with reason tooltip when uncertain (SAFE-001).
 

@@ -99,6 +99,25 @@ export async function postGenerateStrategy(body: {
   }
 }
 
+/** POST /api/strategy:draft:delete — discard one AI draft (advisory-only data:
+ *  nothing builds or executes from a draft). The Worker SOFT-deletes it
+ *  (status='deleted') so the row stays auditable and leaves the drafts list —
+ *  `kept_for_audit` in the response says so, the UI reports it. */
+export async function deleteStrategyDraft(id: string): Promise<Result<{ id: string; status: string; kept_for_audit?: boolean }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/strategy:draft:delete`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader", accept: "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 /** GET /api/strategy:drafts — list AI-generated strategy drafts. */
 export async function getStrategyDrafts(): Promise<Result<{ drafts: StrategyDraft[] }>> {
   try {

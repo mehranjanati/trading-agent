@@ -180,12 +180,33 @@ export function generateRoutes() {
       await recordDraft(env, { strategy_id, version, prompt: description, code: "", model: lastModel, status: "rejected", actor: roleOf(req), reason: lastProblems.join("; ") });
       return err("VALIDATION", "generated code rejected: " + lastProblems.join("; "), {});
     }),
-    /** GET /api/strategy:drafts — list drafts (newest first). */
+    /** GET /api/strategy:drafts — list drafts (newest first). Discarded drafts
+     *  (status 'deleted') stay in D1 for the audit trail but leave this list. */
     drafts: safe(async (req, env) => {
       const rows = await env.DB.prepare(
-        "SELECT id, strategy_id, version, prompt, code, model, status, created_by, created_at FROM strategy_drafts ORDER BY created_at DESC LIMIT 50",
+        "SELECT id, strategy_id, version, prompt, code, model, status, created_by, created_at FROM strategy_drafts WHERE status <> 'deleted' ORDER BY created_at DESC LIMIT 50",
       ).all().catch(() => ({ results: [] }));
       return ok({ drafts: rows.results ?? [] });
+    }),
+    /** POST /api/strategy:draft:delete — discard one AI draft.
+     *
+     *  Drafts are review-only: nothing builds or executes from them (the Go plane
+     *  reads only pinned registry rows), so the trader must be able to drop the
+     *  ones they no longer want. The row is NOT removed — status becomes
+     *  'deleted' and the list route hides it. Same rule as the watch FSM
+     *  (docs/05 §5.3): a row that simply vanishes is unauditable, and this repo
+     *  keeps the trail and says so in the response (`kept_for_audit`). */
+    deleteDraft: safe(async (req, env) => {
+      const g = guard("POST /api/strategy:draft:delete", req);
+      if (g) return g;
+      const b = await readBody(req);
+      const id = String(b.id ?? "").trim();
+      if (!id) { const e = new Error("id required"); e.code = "VALIDATION"; throw e; }
+      const row = ((await env.DB.prepare("SELECT id,status FROM strategy_drafts WHERE id=?").bind(id).all()).results ?? [])[0];
+      if (!row) return err("NOT_FOUND", `draft ${id} not found`, {});
+      if (row.status === "deleted") return ok({ id, status: "deleted", already: true }, 200);
+      await env.DB.prepare("UPDATE strategy_drafts SET status='deleted' WHERE id=?").bind(id).run();
+      return ok({ id, status: "deleted", kept_for_audit: true }, 200);
     }),
     /** POST /api/strategy:chat — multi-turn chat with AI (advisory only).
      *  Accepts full message history + optional principles (injected as system

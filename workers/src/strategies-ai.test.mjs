@@ -251,6 +251,74 @@ describe("strategies-ai — POST /api/strategy:generate (fake AI)", () => {
     const body = await r.json();
     assert.ok(body.drafts.some((d) => d.strategy_id === "draft-list"));
   });
+
+  // A draft you no longer want must be discardable — but the row stays in D1
+  // (status 'deleted'), because a row that simply vanishes is unauditable. Same
+  // rule as the watch FSM: transition, never delete (docs/05 §5.3).
+  it("POST /api/strategy:draft:delete discards a draft, keeps the row, hides it from the list", async () => {
+    const env = freshEnv({ AI: fakeAI("```go\n" + GOOD_CODE + "\n```") });
+    const gen = await post(app, env, "/api/strategy:generate",
+      JSON.stringify({ description: "d2", strategy_id: "draft-drop", version: "0.1.0" }));
+    const { id } = await gen.json();
+    assert.ok(id);
+
+    const del = await app.fetch(new Request("http://x/api/strategy:draft:delete", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader" },
+      body: JSON.stringify({ id }),
+    }), env);
+    assert.equal(del.status, 200);
+    const out = await del.json();
+    assert.equal(out.status, "deleted");
+    assert.equal(out.kept_for_audit, true);
+
+    // The row is still there (audit trail), the list no longer shows it.
+    const rows = sqlJson(`SELECT status FROM strategy_drafts WHERE id='${id}';`);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, "deleted");
+    const listed = await (await app.fetch(new Request("http://x/api/strategy:drafts"), env)).json();
+    assert.ok(!listed.drafts.some((d) => d.id === id));
+
+    // Idempotent: discarding twice answers 200 with `already`, never an error.
+    const again = await app.fetch(new Request("http://x/api/strategy:draft:delete", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader" },
+      body: JSON.stringify({ id }),
+    }), env);
+    assert.equal(again.status, 200);
+    assert.equal((await again.json()).already, true);
+  });
+
+  it("POST /api/strategy:draft:delete validates the id and gates the role", async () => {
+    const env = freshEnv({});
+    const noId = await app.fetch(new Request("http://x/api/strategy:draft:delete", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader" },
+      body: JSON.stringify({}),
+    }), env);
+    assert.equal(noId.status, 400);
+
+    const missing = await app.fetch(new Request("http://x/api/strategy:draft:delete", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader" },
+      body: JSON.stringify({ id: "dr_nope" }),
+    }), env);
+    assert.equal(missing.status, 404);
+
+    const denied = await app.fetch(new Request("http://x/api/strategy:draft:delete", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "viewer" },
+      body: JSON.stringify({ id: "dr_nope" }),
+    }), env);
+    assert.equal(denied.status, 403);
+  });
+
+  it("the draft-delete path is in the browser POST allow-list (advisory only)", () => {
+    assert.ok(BROWSER_POST_PATHS.has("/api/strategy:draft:delete"));
+    // ...and the order/approval paths stay out of it (D-08).
+    assert.ok(!BROWSER_POST_PATHS.has("/api/orders:intents"));
+    assert.ok(!BROWSER_POST_PATHS.has("/api/approvals"));
+  });
 });
 
 describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", () => {

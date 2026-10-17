@@ -5,7 +5,9 @@
 // execution path (analyze → StalkSetup → watch) still pins individual
 // strategy id@version rows. Labelled `advisory-group` in the UI so nobody
 // mistakes the bundle for a built composite WASM artifact.
-import { writable } from "svelte/store";
+import { writable, get } from "svelte/store";
+import { setups } from "./setups";
+import { renameGroupLinks, dropGroupLinks, groupRooms } from "./setups-core.mjs";
 
 export type GroupJob = "entry" | "confirmation" | "exit-scan";
 
@@ -40,12 +42,41 @@ export function saveGroup(g: StrategyGroup): void {
   groups.update((all) => ({ ...all, [g.name]: { ...g, createdAt: g.createdAt ?? new Date().toISOString() } }));
 }
 
-export function deleteGroup(name: string): void {
+/** renameGroup — rename a saved group AND follow the rename in every room that
+ *  linked it (the group name is the join key between the two stores, so a bare
+ *  rename would leave ghost references behind).
+ *
+ *  Returns false when there is nothing to rename, the name is unchanged, or the
+ *  target name already belongs to another group — a rename never silently
+ *  overwrites a sibling. */
+export function renameGroup(from: string, to: string): boolean {
+  const oldName = String(from ?? "").trim();
+  const newName = String(to ?? "").trim();
+  if (!oldName || !newName || oldName === newName) return false;
+  const all = get(groups);
+  if (!all[oldName] || all[newName]) return false;
+  const next = { ...all };
+  next[newName] = { ...all[oldName], name: newName };
+  delete next[oldName];
+  groups.set(next);
+  setups.update((rooms) => renameGroupLinks(rooms, oldName, newName));
+  return true;
+}
+
+/** deleteGroup — remove a saved group and unlink it from every room. Returns the
+ *  symbols it was linked to (the caller reports them, so a delete is never
+ *  silent about what it cleaned up). */
+export function deleteGroup(name: string): string[] {
+  const key = String(name ?? "").trim();
+  if (!key) return [];
+  const linked = groupRooms(get(setups), key);
   groups.update((all) => {
     const next = { ...all };
-    delete next[name];
+    delete next[key];
     return next;
   });
+  if (linked.length) setups.update((rooms) => dropGroupLinks(rooms, key));
+  return linked;
 }
 
 export function toggleMember(

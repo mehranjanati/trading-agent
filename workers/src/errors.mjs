@@ -31,6 +31,9 @@ export const BROWSER_POST_PATHS = new Set([
   "/api/strategy:chat",
   "/api/strategy:chat:stream",
   "/api/strategy:draft",
+  // Discarding a review-only draft is advisory-only (nothing executes from a
+  // draft), so the dashboard may POST it — same class as the save route above.
+  "/api/strategy:draft:delete",
   "/api/watches",
 ]);
 export const CORS = {

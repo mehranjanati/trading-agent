@@ -5,9 +5,9 @@
   import { getWatchesAll, getApprovals, getIntents, getPositions, postAnalyze, getRegistry, getAnalysis } from "$lib/api";
   import type { AnalyzeRequest, AnalyzeResponse } from "$lib/types";
   import { getSymbols } from "$lib/symbols";
-  import { setups, touchSetup, deriveStatus, roomWatches, roomWatchIds } from "$lib/setups";
+  import { setups, touchSetup, deriveStatus, roomWatches, roomWatchIds, linkStrategyTo, unlinkStrategyFrom, toggleGroupLink } from "$lib/setups";
   import { proposalFromAnalyze } from "$lib/stalk";
-  import { composeCatalog, PINNED_FALLBACK } from "$lib/library";
+  import { composeCatalog, PINNED_FALLBACK, entryKey, type LibraryEntry } from "$lib/library";
   import StalkSetup from "$lib/components/StalkSetup.svelte";
   $: symbol = String($page.params.symbol ?? "").toUpperCase();
   const SYM_RE = /^[A-Z]{2,12}USDT$/;
@@ -16,6 +16,12 @@
   let intents: any[] = [];
   let positions: any[] = [];
   let runs: any[] = [];
+  // The room's own selection: which strategies / groups are "in play" here. Both
+  // were append-only before — a group could be linked from /strategies and never
+  // removed, and `strategies` was written by nobody, so this card was permanently
+  // empty. The picker below links from the pinned catalog; every row unlinks.
+  let catalog: LibraryEntry[] = [];
+  let pickStrategy = "";
   let tradeable: boolean | null = null;
   let direction: "LONG" | "SHORT" | "" = "";
   let analyzing = false;
@@ -34,7 +40,15 @@
   $: symRuns = runs.filter((r: any) => watchIds.includes(r.watch_id));
   $: activeCount = symWatches.filter((w: any) => w.status === "ACTIVE").length;
   $: symPosition = positions.find((p: any) => p.symbol === symbol);
+  $: symStrategies = $setups[symbol]?.strategies ?? [];
+  $: symGroups = $setups[symbol]?.groups ?? [];
   $: status = deriveStatus(symbol, { positions, watches, approvals, watchIds });
+  function addStrategy() {
+    const [id, v] = pickStrategy.split("@");
+    if (!id) return;
+    linkStrategyTo(symbol, { id, version: !v || v === "latest" ? undefined : v });
+    pickStrategy = "";
+  }
   // A triggered watch writes an analysis run; the room shows the bias the engine
   // decided (output_json) so the watch→analysis hand-off is readable without
   // leaving the room. Unparsable output is "-", never an invented bias.
@@ -51,6 +65,7 @@
     if (r.ok) runs = (r.data as { runs: any[] }).runs;
     const reg = await getRegistry();
     const { entries, source } = composeCatalog(reg.ok ? reg.data.strategies : null, []);
+    catalog = entries;
     pinSource = source;
     if (source === "registry" && entries[0]) pin = { id: entries[0].id, version: entries[0].version };
   }
@@ -91,13 +106,29 @@
     {/if}
     <div class="grid">
       <section class="card">
-        <h2>strategies in play</h2>
-        {#if ($setups[symbol]?.strategies ?? []).length === 0 && ($setups[symbol]?.groups ?? []).length === 0}
-          <p class="empty">none linked yet — link from <a href="/strategies">/strategies</a> or stalk below</p>
-        {:else}
-          {#each $setups[symbol]?.strategies ?? [] as s}<div class="row">{s.id}@{s.version ?? "latest"}</div>{/each}
-          {#each $setups[symbol]?.groups ?? [] as g}<div class="row">group: {g}</div>{/each}
-        {/if}
+        <h2>strategies in play ({symStrategies.length})</h2>
+        <div class="row-btns">
+          <select bind:value={pickStrategy}>
+            <option value="">add a strategy…</option>
+            {#each catalog as e}<option value={entryKey(e.id, e.version)}>{e.label}{e.kind === "draft" ? " (draft)" : ""}</option>{/each}
+          </select>
+          <button class="primary" on:click={addStrategy} disabled={!pickStrategy}>link</button>
+        </div>
+        {#each symStrategies as s}
+          <div class="row">
+            {s.id}@{s.version ?? "latest"}
+            <button class="mini" on:click={() => unlinkStrategyFrom(symbol, s)}>remove</button>
+          </div>
+        {/each}
+        {#if symStrategies.length === 0}<p class="empty">no strategies linked yet — pick one above</p>{/if}
+        <h2 class="sub">groups in play ({symGroups.length})</h2>
+        {#each symGroups as g}
+          <div class="row">
+            group: {g}
+            <button class="mini" on:click={() => toggleGroupLink(symbol, g)}>unlink</button>
+          </div>
+        {/each}
+        {#if symGroups.length === 0}<p class="empty">no groups linked yet — link one from <a href="/strategies">/strategies</a></p>{/if}
       </section>
       <section class="card">
         <h2>quick analysis</h2>
@@ -182,6 +213,12 @@
   .empty a { color: #60a5fa; }
   .row-btns { display: flex; gap: 8px; margin-bottom: 10px; }
   .row-btns select { padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6e9ef; }
+  h2.sub { margin-top: 16px; font-size: 0.9rem; }
+  .mini {
+    margin-left: 8px; padding: 1px 8px; font-size: 0.7rem; background: none;
+    border: 1px solid #30363d; border-radius: 20px; color: #8b949e; cursor: pointer;
+  }
+  .mini:hover { color: #ef4444; border-color: #ef4444; }
   .agg { font-size: 1.1rem; margin-bottom: 4px; }
   .agg .long { color: #22c55e; } .agg .short { color: #ef4444; } .agg .flat { color: #9ca3af; }
   .meta { font-size: 0.8rem; color: #8b949e; margin-bottom: 8px; }

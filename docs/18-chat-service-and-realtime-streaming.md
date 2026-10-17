@@ -12,7 +12,8 @@
 | Session store | Redis (`ta-redis`) | `chat:{id}:meta` HASH{created_at, principles} + `chat:{id}:msgs` LIST of JSON turns, both 24h TTL, refreshed on write |
 | Chat service | routes inside `go-watcher` (:8080) | HTTP for session CRUD, WebSocket for the turn loop — same binary/port as the watcher, no second process |
 | AI plane | Worker `POST /api/strategy:chat:stream` | owns the `AI` binding (no keys in Go); passes the model's SSE through untouched, reports the model on `x-ai-model` |
-| Client | dashboard `/chat` | WS when the Go chat routes are reachable, Worker REST (`/api/strategy:chat`) otherwise |
+| Platform context | Worker `platform-snapshot.mjs` (§18.8) | every turn carries the read-only platform state the model advises on — same single injection point covers WS and REST |
+| Client | dashboard `/chat` + floating `ChatWidget` on every page | WS when the Go chat routes are reachable, Worker REST (`/api/strategy:chat`) otherwise; the widget reuses the global `chat_session_id`, capped at the newest 30 turns |
 
 ## 18.2 Contract
 
@@ -116,4 +117,33 @@ Two probed gotchas are load-bearing: `/no_think` must be appended to the text
 
 `strategy_drafts.message_id` records the turn id, so "which chart produced this
 code?" is a join against `chat_attachments`, not a guess.
+
+## 18.8 Platform snapshot (per-turn advisory context)
+
+The chat model has no platform access of its own — no D1, no API calls. In
+every turn (`:chat` and `:chat:stream` alike) the Worker therefore prepends a
+`PLATFORM SNAPSHOT` system message built by `workers/src/platform-snapshot.mjs`
+from D1, **before** the principles and history:
+
+- **Content (compact, counts + newest ≤5 per domain):** health mode (+reasons),
+  watch counts by status + newest watches, newest signals, recent approvals
+  with the **pending-grant count first**, open (non-terminal) intents, all
+  positions, newest recovery incidents.
+- **Ages, not interpolation (ADR-004):** every line carries `(Ns/Nm/Nh ago)`;
+  empty tables render `unavailable`/`none` — never a fabricated row.
+- **Ephemeral:** the message is NOT stored — only user/assistant turns are
+  persisted (Redis history, Worker drafts). A later turn never quotes
+  yesterday's injected state as history. Same pattern as the Go market-context
+  injection (`chat/server.go`), which stays untouched: the Go window still
+  carries live prices, the Worker adds platform state. One injection point
+  covers both WS and REST paths.
+- **Budget:** ~15–40 short lines; `SNAPSHOT_LIMIT = 5` keeps the assembled
+  turn inside the 24K window.
+- **Fail-soft:** a missing table or a D1 outage degrades to labelled absence —
+  the turn proceeds, the answer just says what it cannot see. The
+  `ADVISORY_GUARD` line rides every snapshot (D-08 at prompt level).
+- **Tests:** `platform-snapshot.test.mjs` (seeded/empty/dead DB) plus
+  injection assertions on both `:chat` and `:chat:stream` in
+  `strategies-ai.test.mjs`. No migration, no new env/secret.
+
 

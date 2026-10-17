@@ -354,7 +354,22 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
     assert.equal(seen.messages[0].role, "system");
     assert.ok(seen.messages[0].content.includes("Never exceed 2% risk"));
     assert.ok(seen.messages.at(-1).content.endsWith("/no_think"));
-    assert.equal(seen.messages.length, 4); // 1 system + 3 history
+    assert.equal(seen.messages.length, 5); // principles + snapshot + 3 history
+  });
+
+  it("every turn carries the ephemeral platform snapshot (docs/18 §18.8)", async () => {
+    let seen = null;
+    const env = freshEnv({
+      AI: { run: async (_m, opts) => { seen = opts; return SSE; } },
+    });
+    await post(app, env, "/api/strategy:chat:stream",
+      JSON.stringify({ messages: [{ role: "user", content: "what is the state?" }] }));
+    const snap = seen.messages.find((m) => m.role === "system" && String(m.content).startsWith("PLATFORM SNAPSHOT"));
+    assert.ok(snap, "a PLATFORM SNAPSHOT system message is injected");
+    assert.ok(String(snap.content).includes("ADVISORY-ONLY"), "the D-08 guard rides along");
+    // Ephemeral: history itself is untouched (1 real turn, not duplicated).
+    const users = seen.messages.filter((m) => m.role === "user");
+    assert.equal(users.length, 1);
   });
 
   it("400 VALIDATION on an empty messages array (no AI call)", async () => {
@@ -522,6 +537,18 @@ describe("strategies-ai — chart-image turns (ADR-010)", () => {
     assert.equal(body.model, "@cf/qwen/qwen3.8-27b");
     assert.equal(body.vision, true);
     assert.equal(body.attachments, 1);
+  });
+
+  it("the REST :chat route also carries the platform snapshot (docs/18 §18.8)", async () => {
+    let seen = null;
+    const env = freshEnv({
+      AI: { run: async (_m, opts) => { seen = opts; return { response: "ok" }; } },
+    });
+    const r = await post(app, env, "/api/strategy:chat",
+      JSON.stringify({ messages: [{ role: "user", content: "state?" }] }));
+    assert.equal(r.status, 200);
+    const snap = seen.messages.find((m) => m.role === "system" && String(m.content).startsWith("PLATFORM SNAPSHOT"));
+    assert.ok(snap, "a PLATFORM SNAPSHOT system message is injected on :chat too");
   });
 
   it("a saved draft records the turn id that produced it", async () => {

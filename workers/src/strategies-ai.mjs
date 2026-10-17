@@ -234,6 +234,15 @@ export function generateRoutes() {
       if (principles) {
         fullMessages.push({ role: "system", content: `Trading principles (apply to all strategies):\n${principles}` });
       }
+      // Platform snapshot (docs/18 §18.8): the model has no platform access of
+      // its own, so every turn carries the read-only state it advises on
+      // (mode/watches/signals/approvals/intents/positions/incidents, with
+      // ages). Ephemeral — NOT stored, never history (mirrors the Go market
+      // injection). Fail-soft: a D1 outage degrades the answer, not the turn.
+      try {
+        const { platformSnapshot } = await import("./platform-snapshot.mjs");
+        fullMessages.push({ role: "system", content: await platformSnapshot(env) });
+      } catch { /* advisory only — the turn proceeds without it */ }
       fullMessages.push(...messages);
       // /no_think disables Qwen3's reasoning trace (thinking mode blows the
       // wall-clock and burns output tokens). appendNoThink keeps the directive
@@ -284,6 +293,11 @@ export function generateRoutes() {
       if (principles) {
         fullMessages.push({ role: "system", content: `Trading principles (apply to all strategies):\n${principles}` });
       }
+      // Platform snapshot (docs/18 §18.8) — identical to :chat above.
+      try {
+        const { platformSnapshot } = await import("./platform-snapshot.mjs");
+        fullMessages.push({ role: "system", content: await platformSnapshot(env) });
+      } catch { /* advisory only — the turn proceeds without it */ }
       fullMessages.push(...messages);
       // The directive rides the TEXT part, never the array (see :chat).
       const lastTurn = fullMessages[fullMessages.length - 1];

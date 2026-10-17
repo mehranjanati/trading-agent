@@ -1,6 +1,7 @@
 <script lang="ts">
   import "../app.css";
   import ModeBanner from "$lib/components/ModeBanner.svelte";
+  import ChatWidget from "$lib/components/ChatWidget.svelte";
   import { getHealth, modeBanner } from "$lib/api";
   import { onMount } from "svelte";
   import type { Health } from "$lib/types";
@@ -9,7 +10,7 @@
   export let data: { result: { ok: boolean; data?: Health; at?: string; ageMs?: number } | null };
 
   const routes = [
-    ["/", "overview"], ["/setups", "setups"], ["/strategies", "strategies"],
+    ["/", "overview"], ["/chat", "💬 chat"], ["/setups", "setups"], ["/strategies", "strategies"],
     ["/approvals", "approvals"], ["/alerts", "🔔 alerts"], ["/logs", "logs"],
   ];
 
@@ -53,6 +54,7 @@
   <main>
     <slot />
   </main>
+  <ChatWidget />
 </div>
 
 <style>

@@ -5,7 +5,7 @@
   import { Textarea } from "$lib/components/ui/textarea";
   import { Badge } from "$lib/components/ui/badge";
   import {
-    postChat,
+    streamChat,
     postDraft,
     chatServiceUp,
     postChatCreate,
@@ -254,8 +254,11 @@
       return;
     }
 
-    // REST path (Worker fallback): synchronous round-trip. The chart rides the
-    // newest user turn as an image_url content part.
+    // REST path (Worker fallback). The chart rides the newest user turn as an
+    // image_url content part — and the turn MUST stream (chat:stream): a
+    // vision generation runs ~60s, past the single-shot response wall-clock,
+    // so the non-stream POST dies mid-request (the browser saw an opaque 400).
+    // Deltas render into `live` exactly like the WS path, then commit on end.
     const outbound: ChatOutboundMessage[] = messages.map((m) =>
       m.id === turnId && img
         ? {
@@ -268,14 +271,20 @@
           }
         : { id: m.id, role: m.role, content: m.content },
     );
-    const res = await postChat({ session_id: sessionId || undefined, messages: outbound, principles, ...(roomContext() ? { context: roomContext() } : {}) });
+    live = "";
+    const res = await streamChat(
+      { session_id: sessionId || undefined, messages: outbound, principles, ...(roomContext() ? { context: roomContext() } : {}) },
+      (t) => { live += t; },
+    );
+    const streamed = live;
+    live = "";
     loading = false;
     if (!res.ok) {
       error = res.error;
       return;
     }
     lastTurnId = turnId;
-    messages = [...messages, { role: "assistant", content: res.data.response, timestamp: new Date().toISOString() }];
+    messages = [...messages, { role: "assistant", content: res.data.response || streamed, timestamp: new Date().toISOString() }];
     saveToStorage();
     setTimeout(() => Prism.highlightAll(), 0);
   }

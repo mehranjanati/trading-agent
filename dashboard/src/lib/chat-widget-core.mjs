@@ -116,3 +116,44 @@ export function buildRestOutbound(messages, turnId, image) {
       : { id: m.id, role: m.role, content: m.content },
   );
 }
+
+/** parseChatStreamFrame extracts the delta text from ONE SSE `data:` line of
+ *  POST /api/strategy:chat:stream — the same wire the Go chat service consumes
+ *  (go-watcher/chat parseSSEFrame), so both frontends agree on the shape.
+ *
+ *  WHY streaming is mandatory for chart turns: a vision generation runs ~60s,
+ *  PAST the single-shot Worker response wall-clock. The non-stream
+ *  POST /api/strategy:chat gets its connection killed mid-request (measured
+ *  2026-10-18: dead at exactly 60s, the browser sees an opaque 4xx) while the
+ *  SSE stream stays alive and the deltas render progressively.
+ *
+ *  Returns {text, model, done, ok}:
+ *    - comment/keep-alive lines  → ok:false (skip)
+ *    - the [DONE] sentinel       → done:true
+ *    - a non-JSON payload        → tolerated as raw text (ok:true)
+ *    - a JSON frame              → the FIRST non-empty of: the top-level
+ *      `response` mirror (echoes delta.content verbatim), choices[0].delta.content,
+ *      the legacy `result` field — exactly one source per frame, never doubled.
+ *    - `model` rides the first JSON frame that carries it. */
+export function parseChatStreamFrame(
+  /** @type {string} */ line,
+) {
+  line = String(line ?? "").trim();
+  if (!line.startsWith("data:")) return { text: "", model: "", done: false, ok: false };
+  const payload = line.slice(5).trim();
+  if (!payload || payload === "[DONE]") return { text: "", model: "", done: payload === "[DONE]", ok: false };
+  let ev;
+  try {
+    ev = JSON.parse(payload);
+  } catch {
+    return { text: payload, model: "", done: false, ok: true }; // tolerate raw text
+  }
+  const model = typeof ev?.model === "string" ? ev.model : "";
+  const mirror = typeof ev?.response === "string" ? ev.response : "";
+  if (mirror) return { text: mirror, model, done: false, ok: true };
+  const delta = ev?.choices?.[0]?.delta?.content;
+  if (typeof delta === "string" && delta) return { text: delta, model, done: false, ok: true };
+  const result = typeof ev?.result === "string" ? ev.result : "";
+  if (result) return { text: result, model, done: false, ok: true };
+  return { text: "", model, done: false, ok: false };
+}

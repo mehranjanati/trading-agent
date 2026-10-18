@@ -10,6 +10,7 @@ import {
   applyWsEvent,
   buildOutbound,
   buildRestOutbound,
+  parseChatStreamFrame,
   pageContext,
   SETUPS_KEY,
   WIDGET_CONTEXT_MAX,
@@ -131,5 +132,56 @@ describe("buildRestOutbound", () => {
     assert.ok(Array.isArray(out[1].content));
     assert.equal(out[1].content[1].type, "image_url");
     assert.equal(typeof out[2].content, "string");
+  });
+});
+
+describe("parseChatStreamFrame (POST /api/strategy:chat:stream — the vision-turn transport)", () => {
+  const deltaFrame = (content) =>
+    JSON.stringify({ id: "x", object: "chat.completion.chunk", model: "@cf/qwen/qwen3.8-27b", choices: [{ index: 0, delta: { content } }] });
+
+  it("extracts the delta text and the model from an OpenAI-style chunk", () => {
+    const f = parseChatStreamFrame(`data: ${deltaFrame("سلام")}`);
+    assert.ok(f.ok && !f.done);
+    assert.equal(f.text, "سلام");
+    assert.equal(f.model, "@cf/qwen/qwen3.8-27b");
+  });
+
+  it("prefers the top-level response mirror when a frame carries it", () => {
+    // The mirror echoes delta.content verbatim — consuming BOTH would double
+    // the text; exactly one source per frame.
+    const f = parseChatStreamFrame(`data: ${JSON.stringify({ response: "متن", model: "m", choices: [{ delta: { content: "متن" } }] })}`);
+    assert.ok(f.ok);
+    assert.equal(f.text, "متن");
+    assert.equal(f.model, "m");
+  });
+
+  it("reads the mirror-only frames (the final usage frame)", () => {
+    const f = parseChatStreamFrame('data: {"response":"پایان","usage":{"total_tokens":1}}');
+    assert.ok(f.ok && !f.done);
+    assert.equal(f.text, "پایان");
+  });
+
+  it("marks the [DONE] sentinel and skips keep-alives/comments", () => {
+    assert.equal(parseChatStreamFrame("data: [DONE]").done, true);
+    assert.equal(parseChatStreamFrame(": keep-alive").ok, false);
+    assert.equal(parseChatStreamFrame("").ok, false);
+  });
+
+  it("tolerates a non-JSON payload as raw text", () => {
+    const f = parseChatStreamFrame("data: قطعه‌ی خام");
+    assert.ok(f.ok);
+    assert.equal(f.text, "قطعه‌ی خام");
+  });
+
+  it("ignores frames with no consumable text (empty delta, usage-only mirror)", () => {
+    assert.equal(parseChatStreamFrame(`data: ${deltaFrame("")}`).text, "");
+    assert.equal(parseChatStreamFrame('data: {"response":"","usage":{}}').text, "");
+    assert.equal(parseChatStreamFrame('data: {"usage":{}}').ok, false);
+  });
+
+  it("is the wire twin of the Go side (chat.go parseSSEFrame) — same decisions", () => {
+    // data: prefix required; empty payload is a skip, not an error.
+    assert.equal(parseChatStreamFrame("hello world").ok, false);
+    assert.equal(parseChatStreamFrame("data:").ok, false);
   });
 });

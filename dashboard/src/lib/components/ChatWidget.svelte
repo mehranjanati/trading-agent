@@ -6,7 +6,7 @@
   // approvals or kill-switch state (D-08).
   import { onMount, onDestroy } from "svelte";
   import {
-    postChat,
+    streamChat,
     chatServiceUp,
     postChatCreate,
     getChatSession,
@@ -181,14 +181,24 @@
       loading = false;
       return;
     }
+    // REST fallback. Streamed (chat:stream) for the same reason as the chat
+    // page: a long generation (a chart analysis runs ~60s) outlives the
+    // single-shot response wall-clock — the non-stream POST dies mid-request.
+    // Deltas render into `live` like the WS path, then commit.
     const outbound: ChatOutboundMessage[] = buildRestOutbound(messages, turnId, null);
-    const res = await postChat({ session_id: sessionId || undefined, messages: outbound, context: currentContext() });
+    live = "";
+    const res = await streamChat(
+      { session_id: sessionId || undefined, messages: outbound, context: currentContext() },
+      (t) => { live += t; },
+    );
+    const streamed = live;
+    live = "";
     loading = false;
     if (!res.ok) {
       error = res.error;
       return;
     }
-    messages = [...messages, { role: "assistant", content: res.data.response, timestamp: new Date().toISOString() }];
+    messages = [...messages, { role: "assistant", content: res.data.response || streamed, timestamp: new Date().toISOString() }];
     persistLocal();
   }
 </script>

@@ -8,6 +8,7 @@
 // submits orders.
 import type { Health, Watch, Signal, AnalysisRun, Approval, OrderIntent, Position, RecoveryIncident, StrategyVersion, BadgeLabel, StrategyDraft, AnalyzeRequest, AnalyzeResponse } from "./types";
 import { badge, modeBanner, actionBlocker } from "./freshness.mjs";
+import { parseChatStreamFrame } from "./chat-widget-core.mjs";
 
 // Production Worker — the fallback when no VITE_* env is baked in (Pages
 // deploys must set VITE_API_BASE at build time; this default keeps a stale
@@ -160,6 +161,66 @@ export async function postChat(body: {
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     const data = await res.json();
     return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** POST /api/strategy:chat:stream — the SSE variant, consumed with the same
+ *  frame parser the Go chat service uses (chat-widget-core.parseChatStreamFrame).
+ *
+ *  REQUIRED for chart (vision) turns: the generation runs ~60s, past the
+ *  single-shot response wall-clock — the non-stream POST /api/strategy:chat
+ *  gets its connection killed mid-request (measured 2026-10-18: dead at
+ *  exactly 60s; the browser surfaces an opaque 400) while the SSE stream
+ *  stays alive. onChunk fires per delta so the REST fallback renders
+ *  progressively, like the WebSocket path. */
+export async function streamChat(
+  body: {
+    session_id?: string;
+    messages: ChatOutboundMessage[];
+    principles?: string;
+    context?: string;
+  },
+  onChunk?: (text: string) => void,
+): Promise<Result<{ response: string; model: string; vision: boolean }>> {
+  try {
+    const vision = body.messages.some(
+      (m) => Array.isArray(m.content) && m.content.some((p) => (p as { type?: string })?.type === "image_url"),
+    );
+    const res = await fetch(`${API_BASE}/api/strategy:chat:stream`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader", accept: "text/event-stream" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok || !res.body) {
+      const detail = res.body ? await res.text().catch(() => "") : "";
+      return { ok: false, error: `HTTP ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ""}` };
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let text = "";
+    let model = "";
+    stream: for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).replace(/\r$/, "");
+        buf = buf.slice(nl + 1);
+        const frame = parseChatStreamFrame(line);
+        if (frame.done) break stream;
+        if (!frame.ok || !frame.text) continue;
+        if (!model && frame.model) model = frame.model;
+        text += frame.text;
+        onChunk?.(frame.text);
+      }
+    }
+    // A stream that ended without any delta is a degraded (empty) answer, not
+    // an error — the Worker already ran the model; surface what it said.
+    return { ok: true, data: { response: text, model, vision }, at: new Date().toISOString(), ageMs: 0 };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

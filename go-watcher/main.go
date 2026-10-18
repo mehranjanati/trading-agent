@@ -17,6 +17,7 @@ import (
 	"trading-agent/go-watcher/chat"
 	"trading-agent/go-watcher/heartbeat"
 	"trading-agent/go-watcher/metrics"
+	"trading-agent/go-watcher/opstate"
 	"trading-agent/go-watcher/prices"
 	"trading-agent/go-watcher/redisx"
 	"trading-agent/go-watcher/snapshot"
@@ -101,7 +102,14 @@ func main() {
 		market := func(ctx context.Context, texts ...string) string {
 			return prices.FetchAndRender(ctx, texts...)
 		}
-		s := &chat.Service{Store: chat.NewStore(), AI: chat.NewAIClient(base), Market: market, Origins: origins}
+		// State = the operator context: armed watches, latest analyses, open
+		// approvals, order intents, positions, active strategy config — read
+		// from our own control plane (read-only GETs, never an order). Without
+		// it the model can quote a price but cannot know the book.
+		state := func(ctx context.Context, texts ...string) string {
+			return opstate.FetchAndRender(ctx, base, texts...)
+		}
+		s := &chat.Service{Store: chat.NewStore(), AI: chat.NewAIClient(base), Market: market, State: state, Origins: origins}
 		mux.Handle("/api/chat/", s)
 		mux.Handle("/ws/chat/", s)
 	}

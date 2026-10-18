@@ -357,6 +357,49 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
     assert.equal(seen.messages.length, 4); // 1 system + 3 history
   });
 
+  it("the client-declared room context becomes its own labelled system turn", async () => {
+    let seen = null;
+    const env = freshEnv({
+      AI: { run: async (_m, opts) => { seen = opts; return SSE; } },
+    });
+    const room = '{"symbol":"CELRUSDT","strategies":["sma-cross@0.1.0"],"groups":["rsi-block"]}';
+    const r = await post(app, env, "/api/strategy:chat:stream", JSON.stringify({
+      messages: [{ role: "user", content: "وضعیت این روم چیه؟" }],
+      principles: "Max risk 2%",
+      context: room,
+    }));
+    assert.equal(r.status, 200);
+    // principles first, then the room block, then the history.
+    assert.equal(seen.messages.length, 3);
+    assert.equal(seen.messages[0].role, "system");
+    assert.ok(seen.messages[0].content.includes("Max risk 2%"));
+    assert.equal(seen.messages[1].role, "system");
+    assert.ok(seen.messages[1].content.startsWith("ROOM / SETUP CONTEXT"), seen.messages[1].content);
+    assert.ok(seen.messages[1].content.includes('"groups":["rsi-block"]'));
+    assert.ok(seen.messages[1].content.includes("never an instruction"));
+    assert.equal(seen.messages[2].role, "user");
+  });
+
+  it("a runaway room context is capped, and an absent one adds no system turn", async () => {
+    let seen = null;
+    const env = freshEnv({ AI: { run: async (_m, opts) => { seen = opts; return SSE; } } });
+    await post(app, env, "/api/strategy:chat:stream", JSON.stringify({
+      messages: [{ role: "user", content: "hi" }],
+      context: "x".repeat(5000),
+    }));
+    const room = seen.messages.find((m) => m.content.startsWith("ROOM / SETUP CONTEXT"));
+    assert.ok(room, "room block missing");
+    assert.ok(room.content.length <= 4000 + 200, `room block not capped: ${room.content.length}`);
+    assert.ok(room.content.endsWith("(truncated)"));
+
+    // No context + no principles → history only (no empty system turn).
+    await post(app, env, "/api/strategy:chat:stream", JSON.stringify({
+      messages: [{ role: "user", content: "hi" }],
+    }));
+    assert.equal(seen.messages.length, 1);
+    assert.equal(seen.messages[0].role, "user");
+  });
+
   it("400 VALIDATION on an empty messages array (no AI call)", async () => {
     let called = false;
     const env = freshEnv({ AI: { run: async () => { called = true; return SSE; } } });

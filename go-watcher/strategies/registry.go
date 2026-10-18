@@ -1,10 +1,17 @@
 // Strategy registry: versioned WASM artifacts on disk + hot reload.
 //
 // Layout (STRATEGIES_DIR, default ./strategies/samples):
-//   registry.json                       — [{id, version, file, name?, description?, configuration}]
+//   registry.json                       — [{id, version, file, name?, description?, configuration?, status?, retired_reason?}]
 //   <id>-<version>.wasm                 — wasip1 command modules
 // Versions are immutable: a file that changes under a loaded version is only
 // picked up by :reload (fail-closed reads keep serving the pinned bytes).
+//
+// RETIREMENT (status: "retired", ADR-011): a retired version stays LOADED and
+// EXECUTABLE — an in-flight reference (a watch already armed, an approval mid
+// flight, a room/group that pins it) must keep working and must never become
+// invalid mid-trade. What retirement removes is SELECTABILITY for new work: the
+// callers that build a NEW pin set ask for `Active()`. There is no delete: the
+// artifact + its sha256 stay on disk, so every recorded run remains reproducible.
 package strategies
 
 import (
@@ -15,7 +22,17 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
+)
+
+// Lifecycle statuses a registry row may carry. Absent means StatusActive.
+const (
+	// StatusActive is the default: selectable for new work, executable.
+	StatusActive = "active"
+	// StatusRetired is still executable (in-flight references keep working) but
+	// is NOT selectable for new work.
+	StatusRetired = "retired"
 )
 
 // Entry is one pinned strategy version.
@@ -26,13 +43,24 @@ type Entry struct {
 	Name          string         `json:"name,omitempty"`
 	Description   string         `json:"description,omitempty"`
 	Configuration map[string]any `json:"configuration"`
-	WASM          []byte         `json:"-"`
-	SHA256        string         `json:"-"`
+	// Status is StatusActive or StatusRetired (never empty: an absent manifest
+	// field resolves to StatusActive at load).
+	Status string `json:"status"`
+	// RetiredReason is the human note that rode with the retirement ("" when
+	// active). It is served to the dashboard so the picker can say WHY.
+	RetiredReason string `json:"retired_reason,omitempty"`
+	WASM          []byte `json:"-"`
+	SHA256        string `json:"-"`
 }
+
+// Retired reports whether the version is retired (kept executable, not
+// selectable for new work).
+func (e Entry) Retired() bool { return e.Status == StatusRetired }
 
 // manifestRow is the on-disk registry.json row. Name/Description are optional
 // catalog labels: the dashboard renders them verbatim so the pinned list has
 // exactly ONE source (this file), never a hardcoded copy in the UI.
+// Status/RetiredReason are optional lifecycle fields (ADR-011).
 type manifestRow struct {
 	ID            string         `json:"id"`
 	Version       string         `json:"version"`
@@ -40,6 +68,8 @@ type manifestRow struct {
 	Name          string         `json:"name"`
 	Description   string         `json:"description"`
 	Configuration map[string]any `json:"configuration"`
+	Status        string         `json:"status"`
+	RetiredReason string         `json:"retired_reason"`
 }
 
 // Registry loads pinned WASM bytes. Reads are lock-guarded; :reload swaps
@@ -87,10 +117,22 @@ func (r *Registry) Reload() error {
 		if cfg == nil {
 			cfg = map[string]any{}
 		}
+		// Lifecycle: an absent status is ACTIVE; anything else must be one of the
+		// two known values. A typo must never be read as "active" (fail closed at
+		// load, like every other manifest fault here).
+		status := strings.TrimSpace(row.Status)
+		if status == "" {
+			status = StatusActive
+		}
+		if status != StatusActive && status != StatusRetired {
+			return fmt.Errorf("strategies: registry %s@%s: unknown status %q (want %q|%q)",
+				row.ID, row.Version, row.Status, StatusActive, StatusRetired)
+		}
 		by[row.ID+"@"+row.Version] = Entry{
 			ID: row.ID, Version: row.Version, File: row.File,
 			Name: row.Name, Description: row.Description,
-			Configuration: cfg, WASM: wasm, SHA256: hex.EncodeToString(sum[:]),
+			Configuration: cfg, Status: status, RetiredReason: row.RetiredReason,
+			WASM: wasm, SHA256: hex.EncodeToString(sum[:]),
 		}
 	}
 	r.mu.Lock()
@@ -121,12 +163,27 @@ func (r *Registry) Get(id, version string) (Entry, bool) {
 	return e, ok
 }
 
-// List returns the pinned catalog sorted by id, then version.
+// List returns the pinned catalog sorted by id, then version. It includes
+// RETIRED versions: callers that render or audit the catalog need to see them
+// (a group may still pin one). Callers building a NEW pin set want Active().
 func (r *Registry) List() []Entry {
+	return r.list(false)
+}
+
+// Active returns the selectable catalog (status active) sorted by id, then
+// version — the set a NEW analysis run / a new selection may pin (ADR-011).
+func (r *Registry) Active() []Entry {
+	return r.list(true)
+}
+
+func (r *Registry) list(activeOnly bool) []Entry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]Entry, 0, len(r.by))
 	for _, e := range r.by {
+		if activeOnly && e.Retired() {
+			continue
+		}
 		c := e
 		c.WASM = nil
 		out = append(out, c)

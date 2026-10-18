@@ -17,7 +17,8 @@
 
 /**
  * @typedef {{ id: string, version: string, kind: "pinned"|"draft", label: string, blurb: string,
- *             sha256?: string, configuration?: Record<string, unknown>, draftId?: string }} LibraryEntry
+ *             sha256?: string, configuration?: Record<string, unknown>, draftId?: string,
+ *             status?: "active"|"retired", retired_reason?: string }} LibraryEntry
  */
 
 /** Offline fallback mirroring go-watcher/strategies/samples/registry.json. */
@@ -36,9 +37,13 @@ export const entryKey = (id, version) => `${id}@${version ?? "latest"}`;
 
 /** pinnedEntry maps one registry row to a library entry. `sha256` rides along
  *  when the endpoint supplied it, so the UI can show the exact artifact.
- *  @param {{ id: string, version: string, name?: string, description?: string, sha256?: string, configuration?: Record<string, unknown> }} p
+ *  `status` (ADR-011) rides along too: a RETIRED version is still executable for
+ *  references already in flight, but it must not be offered for new work — the
+ *  pickers filter it out and the library tab labels it.
+ *  @param {{ id: string, version: string, name?: string, description?: string, sha256?: string, configuration?: Record<string, unknown>, status?: string, retired_reason?: string }} p
  *  @returns {LibraryEntry} */
 export function pinnedEntry(p) {
+  const retired = p.status === "retired";
   return {
     id: p.id,
     version: p.version,
@@ -47,7 +52,26 @@ export function pinnedEntry(p) {
     blurb: [p.name, p.description].filter(Boolean).join(" — ") || "pinned wasm",
     sha256: p.sha256 || undefined,
     configuration: p.configuration ?? {},
+    status: retired ? "retired" : "active",
+    ...(retired && p.retired_reason ? { retired_reason: p.retired_reason } : {}),
   };
+}
+
+/** isRetired — true for a retired pinned version (see ADR-011). A draft is never
+ *  "retired": drafts are review-only and are discarded explicitly instead.
+ *  @param {{ status?: string }|null|undefined} e
+ *  @returns {boolean} */
+export function isRetired(e) {
+  return e?.status === "retired";
+}
+
+/** selectableCatalog — the entries a NEW selection may draw from: everything
+ *  except retired pinned versions. The library still LISTS retired ones (a group
+ *  may pin one, and the trader must see why it is not offered).
+ *  @param {LibraryEntry[]|null|undefined} catalog
+ *  @returns {LibraryEntry[]} */
+export function selectableCatalog(catalog) {
+  return (catalog ?? []).filter((e) => !isRetired(e));
 }
 
 /** draftEntry maps one D1 draft row to a library entry.

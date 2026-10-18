@@ -32,10 +32,20 @@
 - Artifacts: <store>/strategies/<id>/<ver>/module.wasm + manifest.json{id,ver,sha256,contract_ver,go_ver,flags,built_at,test_report}. Immutable publish (reject overwrite). D1 strategy_artifacts mirrors manifest+status.
 - Read endpoint: `GET /strategies/registry` (go-watcher, `registry_endpoint.go`)
   serves the catalog the runner actually loaded — id/version/file/name/
-  description/sha256/configuration — so the dashboard library tab renders the
-  REAL pins (and the hash it will execute) instead of a hardcoded copy that can
+  description/sha256/configuration/status — so the dashboard library tab renders
+  the REAL pins (and the hash it will execute) instead of a hardcoded copy that can
   drift from registry.json. Advisory read-only: no D1, no approval, no order.
   `name`/`description` are optional registry.json labels.
+- Retirement (ADR-011): a registry.json row may carry `status: "retired"` (+
+  optional `retired_reason`); absent means `"active"`, and an unknown value fails
+  the LOAD (fail closed). A retired version stays loaded, resolvable and
+  executable — an in-flight watch/approval/room/group that pins it must never
+  break mid-trade — but it leaves the selectable set: `Registry.Active()` is what
+  a NEW pin set draws from, the endpoint still serves the row with its status
+  (`count` = full catalog, `active_count` = selectable), and the Worker's
+  `analyzeWatch` filters `status !== "retired"` before pinning (nothing active ⇒
+  DEGRADED, no run written). There is no delete: the bytes and their sha256 stay,
+  so every recorded run stays reproducible. Changing behaviour = a NEW version.
 - Redis loss => rebuild from D1 active-snapshot (extended strategies[]). Store loss => fail-closed, HELD_UNCERTAIN.
 
 ## 17.4 Failures + observability

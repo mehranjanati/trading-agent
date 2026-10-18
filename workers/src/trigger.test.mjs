@@ -83,11 +83,18 @@ function fire(body, headers = {}) {
 }
 
 const ENGINE_AGG = { bias: "LONG", confidence: 0.31, agree: 1, disagree: 0, flat: 0, errors: 0, n: 1, explanation: "1 verdicts (0 errors): longW=0.62 shortW=0.00 flat=0" };
-function stubEngine({ analyzeStatus = 200 } = {}) {
-  globalThis.fetch = async (url) => {
+/** stubEngine stands in for the Go plane. `registry` lets a test drive the
+ *  catalog (ADR-011 retirement); `seen` collects the /analyze bodies so a test
+ *  can prove WHICH strategies a new run pinned. */
+function stubEngine({ analyzeStatus = 200, registry = null, seen = [] } = {}) {
+  globalThis.fetch = async (url, init) => {
     const u = String(url);
     const json = (v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
-    if (u.endsWith("/strategies/registry")) return json({ count: 1, strategies: [{ id: "sma-cross", version: "0.1.0" }] });
+    if (u.endsWith("/strategies/registry")) {
+      const strategies = registry ?? [{ id: "sma-cross", version: "0.1.0", status: "active" }];
+      return json({ count: strategies.length, active_count: strategies.filter((s) => s.status !== "retired").length, strategies });
+    }
+    if (init?.body) { try { seen.push(JSON.parse(String(init.body))); } catch { /* not JSON */ } }
     if (analyzeStatus !== 200) return json({ code: "DATA_UNAVAILABLE" }, analyzeStatus);
     return json({
       id: "an_engine_1", symbol: "BTCUSDT", at: "2026-10-16T00:00:00Z", aggregate: ENGINE_AGG,
@@ -170,6 +177,44 @@ describe("E03-T01 trigger edge — the loop's view can be stale", () => {
       assert.equal(sql("SELECT status || version FROM watches WHERE id='w4';").trim(), "CLOSED5");
       assert.equal(sql("SELECT COUNT(*) FROM events WHERE entity_id='w4';").trim(), "0");
       assert.equal(sql("SELECT COUNT(*) FROM analysis_runs WHERE watch_id='w4';").trim(), "0");
+    } finally { clearStub(); }
+  });
+});
+
+describe("E03-T01 trigger edge — a retired strategy is never pinned for a NEW run (ADR-011)", () => {
+  it("the new pin set skips retired entries but keeps the active ones", async () => {
+    seedActive("w_retire_1");
+    const seen = [];
+    try {
+      stubEngine({
+        registry: [
+          { id: "sma-cross", version: "0.1.0", status: "active" },
+          { id: "sma-cross", version: "0.9.0", status: "retired", retired_reason: "bad invalidation" },
+          { id: "sma-x-v2", version: "0.1.0" }, // no status = active (older registry)
+        ],
+        seen,
+      });
+      const res = await fire({ ...FIRE, watch_id: "w_retire_1" });
+      assert.equal(res.status, 201);
+      assert.equal(seen.length, 1, "one /analyze call expected");
+      assert.deepEqual(seen[0].strategies.map((s) => `${s.id}@${s.version}`), ["sma-cross@0.1.0", "sma-x-v2@0.1.0"]);
+      assert.equal(sql("SELECT COUNT(*) FROM analysis_runs WHERE watch_id='w_retire_1';").trim(), "1");
+    } finally { clearStub(); }
+  });
+
+  it("a catalog with nothing active is DEGRADED — no run, no invented pin", async () => {
+    seedActive("w_retire_2");
+    try {
+      stubEngine({ registry: [{ id: "sma-cross", version: "0.9.0", status: "retired" }] });
+      const res = await fire({ ...FIRE, watch_id: "w_retire_2" });
+      assert.equal(res.status, 202);
+      const j = await res.json();
+      assert.equal(j.status, "TRIGGERED");
+      assert.match(j.analysis_degraded, /no ACTIVE pinned strategy/);
+      // The edge is recorded; the run is NOT (nothing fabricated, and no run
+      // pinned to a withdrawn artifact).
+      assert.equal(sql("SELECT status FROM watches WHERE id='w_retire_2';").trim(), "TRIGGERED");
+      assert.equal(sql("SELECT COUNT(*) FROM analysis_runs WHERE watch_id='w_retire_2';").trim(), "0");
     } finally { clearStub(); }
   });
 });

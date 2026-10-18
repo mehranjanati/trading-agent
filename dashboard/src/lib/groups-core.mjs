@@ -62,17 +62,22 @@ export function groupMemberKey(m) {
  *  that was deleted, a version the registry stopped pinning). Those rows must
  *  stay VISIBLE: rebuilding the member list from the library alone would drop
  *  them silently — the trader would lose a member by opening the editor.
- *  @param {{ id: string, version?: string, kind?: string, label?: string, blurb?: string }[]|null|undefined} catalog
+ *  @param {{ id: string, version?: string, kind?: string, label?: string, blurb?: string, status?: string }[]|null|undefined} catalog
  *  @param {{ id: string, version?: string }[]|null|undefined} members
- *  @returns {{ id: string, version?: string, kind: string, label: string, blurb: string }[]} */
+ *  @returns {{ id: string, version?: string, kind: string, label: string, blurb: string, status?: string, selectable: boolean }[]} */
 export function groupEditRows(catalog, members) {
-  const rows = (catalog ?? []).map((e) => ({ ...e, kind: e.kind ?? "pinned", label: e.label ?? groupMemberKey(e), blurb: e.blurb ?? "" }));
+  // `selectable: false` = a RETIRED version (ADR-011): it stays visible and an
+  // existing member stays editable, but it cannot be ADDED to a new group.
+  const rows = (catalog ?? []).map((e) => ({
+    ...e, kind: e.kind ?? "pinned", label: e.label ?? groupMemberKey(e), blurb: e.blurb ?? "",
+    selectable: e.status !== "retired",
+  }));
   const have = new Set(rows.map((e) => groupMemberKey(e)));
   for (const m of members ?? []) {
     const k = groupMemberKey(m);
     if (have.has(k)) continue;
     have.add(k);
-    rows.push({ id: m.id, version: m.version, kind: "missing", label: k, blurb: "not in the current library — kept unless you untick it" });
+    rows.push({ id: m.id, version: m.version, kind: "missing", label: k, blurb: "not in the current library — kept unless you untick it", selectable: true });
   }
   return rows;
 }

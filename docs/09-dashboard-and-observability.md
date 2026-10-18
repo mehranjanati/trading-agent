@@ -45,6 +45,13 @@ discarded. Now:
   (`make strategy-build` → `registry.json` → sha256), never to a published
   artifact: the dashboard cannot build or sign bytes, and an analysis run pins the
   version active at run start.
+- **Retirement replaces deletion** (ADR-011): a version may be marked
+  `status: "retired"` in `registry.json`. It stays executable for references
+  already in flight (so an armed watch, a pending approval or a group that pins it
+  never breaks mid-trade) but it is **not selectable for new work** — the analysis
+  picker, the room picker and the group tick-list drop it, while the library tab and
+  the group editor keep it visible with a `retired` badge and its
+  `retired_reason`. Nothing is deleted, so every recorded run stays reproducible.
 - **Groups are fully editable**: rename (the rename follows into every room link),
   change job, add/remove members — the edit tick-list keeps members the current
   library no longer carries, labelled, instead of dropping them silently — and

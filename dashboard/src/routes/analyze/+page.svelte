@@ -3,7 +3,7 @@
   import { postAnalyze, badgeFor, getRegistry } from "$lib/api";
   import type { AnalyzeRequest, AnalyzeResponse } from "$lib/types";
   import { proposalFromAnalyze, isVenueSourced } from "$lib/stalk";
-  import { composeCatalog, PINNED_FALLBACK, type CatalogSource } from "$lib/library";
+  import { composeCatalog, selectableCatalog, PINNED_FALLBACK, type CatalogSource } from "$lib/library";
   import StalkSetup from "$lib/components/StalkSetup.svelte";
   import Badge from "$lib/components/Badge.svelte";
 
@@ -31,10 +31,14 @@
     const { entries, source } = composeCatalog(r.ok ? r.data.strategies : null, []);
     catalogSource = source;
     if (source !== "registry") return; // keep the mirror until the plane answers; never claim it is live
-    availableStrategies = entries.map((e) => ({ id: e.id, version: e.version, name: e.blurb || e.label }));
+    // ADR-011: a NEW analysis may only pin an ACTIVE version. Retired ones are
+    // still executable for references already in flight (and still listed in the
+    // library tab, labelled), but they are never offered for new work here.
+    const selectable = selectableCatalog(entries);
+    availableStrategies = selectable.map((e) => ({ id: e.id, version: e.version, name: e.blurb || e.label }));
     // A pin the mirror carried but the registry does not must not stay selected.
-    if (!entries.some((e) => e.id === strategies[0]?.id && e.version === strategies[0]?.version) && entries[0]) {
-      strategies = [{ id: entries[0].id, version: entries[0].version, config: {} }];
+    if (!selectable.some((e) => e.id === strategies[0]?.id && e.version === strategies[0]?.version) && selectable[0]) {
+      strategies = [{ id: selectable[0].id, version: selectable[0].version, config: {} }];
     }
   });
 

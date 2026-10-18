@@ -75,10 +75,22 @@ async function analyzeWatch(env, w) {
   try {
     const regRes = await fetch(`${base}/strategies/registry`);
     if (!regRes.ok) throw new Error(`registry HTTP ${regRes.status}`);
-    pins = (((await regRes.json()).strategies) ?? [])
+    const catalog = ((await regRes.json()).strategies) ?? [];
+    // ADR-011: a RETIRED version stays executable for references already in
+    // flight, but a NEW run must never pin one. The registry serves the full
+    // catalog with each entry's status, so the filter lives here, at the only
+    // place that builds a new pin set. An entry without a status is active
+    // (older registry), and if everything is retired this is a DEGRADED run —
+    // never a run pinned to a withdrawn artifact.
+    const active = catalog.filter((s) => s.status !== "retired");
+    pins = active
       .slice(0, 8) // /analyze caps the set at 8
       .map((s) => ({ id: s.id, version: s.version, config: {} }));
-    if (!pins.length) throw new Error("registry has no pinned strategy");
+    if (!pins.length) {
+      throw new Error(catalog.length
+        ? `registry has no ACTIVE pinned strategy (${catalog.length} retired)`
+        : "registry has no pinned strategy");
+    }
   } catch (e) {
     throw degraded(`analysis engine unavailable (${e.message})`);
   }

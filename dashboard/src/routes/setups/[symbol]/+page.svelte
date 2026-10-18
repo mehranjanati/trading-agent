@@ -7,7 +7,7 @@
   import { getSymbols } from "$lib/symbols";
   import { setups, touchSetup, deriveStatus, roomWatches, roomWatchIds, linkStrategyTo, unlinkStrategyFrom, toggleGroupLink } from "$lib/setups";
   import { proposalFromAnalyze } from "$lib/stalk";
-  import { composeCatalog, PINNED_FALLBACK, entryKey, type LibraryEntry } from "$lib/library";
+  import { composeCatalog, selectableCatalog, PINNED_FALLBACK, entryKey, type LibraryEntry } from "$lib/library";
   import StalkSetup from "$lib/components/StalkSetup.svelte";
   $: symbol = String($page.params.symbol ?? "").toUpperCase();
   const SYM_RE = /^[A-Z]{2,12}USDT$/;
@@ -21,6 +21,7 @@
   // removed, and `strategies` was written by nobody, so this card was permanently
   // empty. The picker below links from the pinned catalog; every row unlinks.
   let catalog: LibraryEntry[] = [];
+  $: selectable = selectableCatalog(catalog);
   let pickStrategy = "";
   let tradeable: boolean | null = null;
   let direction: "LONG" | "SHORT" | "" = "";
@@ -110,7 +111,7 @@
         <div class="row-btns">
           <select bind:value={pickStrategy}>
             <option value="">add a strategy…</option>
-            {#each catalog as e}<option value={entryKey(e.id, e.version)}>{e.label}{e.kind === "draft" ? " (draft)" : ""}</option>{/each}
+            {#each selectable as e}<option value={entryKey(e.id, e.version)}>{e.label}{e.kind === "draft" ? " (draft)" : ""}</option>{/each}
           </select>
           <button class="primary" on:click={addStrategy} disabled={!pickStrategy}>link</button>
         </div>
@@ -119,8 +120,10 @@
           publishing a new id@version, which then shows up in this picker.
         </div>
         {#each symStrategies as s}
+          {@const entry = catalog.find((e) => entryKey(e.id, e.version) === entryKey(s.id, s.version))}
           <div class="row">
             {s.id}@{s.version ?? "latest"}
+            {#if entry?.status === "retired"}<span class="row-note">retired — this reference keeps working, it is just not offered for new work</span>{/if}
             <button class="mini" on:click={() => unlinkStrategyFrom(symbol, s)}>remove</button>
           </div>
         {/each}

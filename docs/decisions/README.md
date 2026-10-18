@@ -14,3 +14,4 @@ Format: Status / Context / Decision / Alternatives / Consequences / Verification
 | [008](./ADR-008-wasm-persistence-isolation.md) | WASM persistence + isolation | PROPOSED |
 | [009](./ADR-009-wasm-supply-chain.md) | WASM supply chain (AI-generated) | PROPOSED |
 | [010](./ADR-010-multimodal-chart-chat.md) | Multimodal chart chat (vision, R2/D1, turn ids) | PROPOSED |
+| [011](./ADR-011-strategy-retirement.md) | Retiring a published strategy version (never deleting it) | PROPOSED |

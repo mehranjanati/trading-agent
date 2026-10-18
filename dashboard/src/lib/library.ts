@@ -16,6 +16,11 @@ export interface LibraryEntry {
   /** Pinned only: the baseline configuration the runner merges. */
   configuration?: Record<string, unknown>;
   draftId?: string;
+  /** Pinned only (ADR-011): "retired" = still executable for in-flight
+   *  references, NOT selectable for new work. Absent/active otherwise. */
+  status?: "active" | "retired";
+  /** Pinned only: why it was retired (shown on the card / in the editor). */
+  retired_reason?: string;
 }
 
 export type CatalogSource = "registry" | "fallback";
@@ -25,4 +30,4 @@ export interface LibraryCatalog {
   source: CatalogSource;
 }
 
-export { PINNED_FALLBACK, entryKey, composeCatalog, pinnedEntry, draftEntry } from "./library-core.mjs";
+export { PINNED_FALLBACK, entryKey, composeCatalog, pinnedEntry, draftEntry, isRetired, selectableCatalog } from "./library-core.mjs";

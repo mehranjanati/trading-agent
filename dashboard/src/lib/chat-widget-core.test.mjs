@@ -10,6 +10,9 @@ import {
   applyWsEvent,
   buildOutbound,
   buildRestOutbound,
+  pageContext,
+  SETUPS_KEY,
+  WIDGET_CONTEXT_MAX,
 } from "./chat-widget-core.mjs";
 
 describe("widget session keys", () => {
@@ -76,6 +79,43 @@ describe("buildOutbound", () => {
     const e = buildOutbound({ id: "t1", content: "look", image: { mediaType: "image/png", dataUrl: "data:.." } });
     assert.equal(e.image.detail, "low");
     assert.equal(e.image.mediaType, "image/png");
+  });
+  it("carries the page/room context only when non-empty", () => {
+    assert.ok(!("context" in buildOutbound({ id: "t1", content: "hi", context: "   " })));
+    const e = buildOutbound({ id: "t1", content: "hi", context: '{"route":"/chat"}' });
+    assert.equal(e.context, '{"route":"/chat"}');
+  });
+});
+
+describe("pageContext", () => {
+  it("declares the route and the setup rooms in compact JSON", () => {
+    const setups = {
+      CELRUSDT: { strategies: [{ id: "sma-cross", version: "1.0.0" }, "rsi-block@0.2.0"], groups: ["g1"], watches: ["w1"], updatedAt: "2026-10-18T09:00:00Z" },
+      BTCUSDT: { strategies: [], groups: [], watches: [], updatedAt: "2026-10-18T08:00:00Z" },
+    };
+    const ctx = JSON.parse(pageContext({ route: "/symbols/CELRUSDT", setups }));
+    assert.equal(ctx.route, "/symbols/CELRUSDT");
+    assert.equal(ctx.rooms.length, 2);
+    assert.deepEqual(ctx.rooms[0].strategies, ["sma-cross@1.0.0", "rsi-block@0.2.0"]);
+    assert.deepEqual(ctx.rooms[0].groups, ["g1"]);
+  });
+  it("caps rooms and total bytes (never an unbounded prompt)", () => {
+    const setups = Object.fromEntries(
+      Array.from({ length: 40 }, (_, i) => [`S${i}`, { strategies: [], groups: [], watches: [] }]),
+    );
+    const ctx = JSON.parse(pageContext({ route: "/", setups }));
+    assert.equal(ctx.rooms.length, 12);
+
+    const huge = { X: { strategies: Array.from({ length: 40 }, (_, i) => `s${i}@1`), groups: [], watches: [] } };
+    const capped = pageContext({ route: "/", setups: huge, max: 60 });
+    assert.ok(capped.length <= 60 + "…(truncated)".length);
+    assert.ok(capped.endsWith("…(truncated)"));
+    assert.equal(WIDGET_CONTEXT_MAX, 4000);
+    assert.equal(SETUPS_KEY, "ta_setups_v1");
+  });
+  it("tolerates junk storage", () => {
+    const ctx = JSON.parse(pageContext({ route: "", setups: null }));
+    assert.deepEqual(ctx, { route: "", rooms: [] });
   });
 });
 

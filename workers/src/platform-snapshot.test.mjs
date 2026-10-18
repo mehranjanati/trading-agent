@@ -9,10 +9,10 @@ import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ageSec, ageLabel, platformSnapshot, ADVISORY_GUARD, SNAPSHOT_LIMIT } from "./platform-snapshot.mjs";
+import { ageSec, ageLabel, platformSnapshot, fillCount, ADVISORY_GUARD, SNAPSHOT_LIMIT } from "./platform-snapshot.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql"]
+const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql"]
   .map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
 let dbFile;
 function sql(q) {
@@ -64,6 +64,9 @@ function seededEnv() {
   sql(`INSERT INTO positions(symbol,size,entry_px,leverage,updated_at) VALUES('BTCUSDT','0.1','67000',5,'${iso(NOW - 5_000)}');`);
   sql(`INSERT INTO health_snapshots(id,component,status,detail_json,at) VALUES('hs1','mode','PRIMARY','{"reasons":[]}','${iso(NOW - 2_000)}');`);
   sql(`INSERT INTO recovery_log(id,incident,action,actor,at) VALUES('r1','health.recovered','none','system','${iso(NOW - 90_000)}');`);
+  sql(`INSERT INTO orders(client_order_id,exchange_order_id,status,fills_json,last_reconciled_at,at) VALUES('co1','ex9','FILLED','[{"qty":"0.1"}]','${iso(NOW - 8_000)}','${iso(NOW - 10_000)}');`);
+  sql(`INSERT INTO strategy_configs(version,config_json,activated_by,at) VALUES('v2-test','{"max_leverage":3}','system-seed','${iso(NOW - 48 * 3600_000)}');`);
+  sql(`INSERT INTO strategy_drafts(id,strategy_id,version,prompt,code,model,status,created_by,created_at) VALUES('dr1','sma-cross','0.1.0','p','package x','qwen','generated','trader','${iso(NOW - 600_000)}');`);
   return { DB: fakeDb() };
 }
 function emptyEnv() { initDb(); return { DB: fakeDb() }; }
@@ -75,6 +78,11 @@ describe("platform-snapshot — ages", () => {
     assert.equal(ageLabel(iso(NOW - 7_200_000), NOW), "2h ago");
     assert.equal(ageLabel("not-a-date", NOW), "n/a");
     assert.equal(ageSec(null, NOW), null);
+  });
+  it("fillCount tolerates absent/malformed fills_json", () => {
+    assert.equal(fillCount('[{"qty":"1"},{"qty":"2"}]'), 2);
+    assert.equal(fillCount("not-json"), 0);
+    assert.equal(fillCount(null), 0);
   });
 });
 
@@ -88,8 +96,11 @@ describe("platform-snapshot — render", () => {
     assert.match(text, /1 pending grant/);
     assert.match(text, /pending: ap1/);
     assert.match(text, /1 open/);
-    assert.match(text, /open-intent: BUY 0.1 INTENT/);
-    assert.match(text, /position: BTCUSDT size=0.1/);
+    assert.match(text, /open-intent: BUY 0\.1 INTENT/);
+    assert.match(text, /order: co1 FILLED fills=1/);
+    assert.match(text, /strategy: v2-test by=system-seed config=\{"max_leverage":3\}/);
+    assert.match(text, /draft: dr1 sma-cross@0\.1\.0 generated/);
+    assert.match(text, /position: BTCUSDT size=0\.1/);
     assert.match(text, /incident: health.recovered/);
     assert.ok(text.includes(ADVISORY_GUARD));
   });
@@ -98,7 +109,8 @@ describe("platform-snapshot — render", () => {
     assert.match(text, /mode: unavailable/);
     assert.match(text, /watches: none/);
     assert.match(text, /positions: none/);
-    assert.ok(!text.includes("BTCUSDT"));
+    assert.ok(!text.includes("watch: "));
+    assert.ok(!text.includes("position: "));
   });
   it("a dead DB degrades to labelled absence, never a throw", async () => {
     const text = await platformSnapshot({ DB: { prepare: () => { throw new Error("d1 down"); } } });

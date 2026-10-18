@@ -53,6 +53,7 @@ export default {
       if (req.method === "GET" && p === "/api/signals") return misc.listSignals(req, env);
       if (req.method === "GET" && p === "/api/analysis") return misc.listAnalysis(req, env);
       if (req.method === "GET" && p === "/api/orders:intents") return misc.listIntents(req, env);
+      if (req.method === "GET" && p === "/api/orders") return misc.listOrders(req, env);
       if (req.method === "GET" && p === "/api/positions") return misc.listPositions(req, env);
       if (req.method === "GET" && p === "/api/notify:prefs") return misc.listNotifyPrefs(req, env);
       if (req.method === "POST" && p === "/api/notify:prefs") return misc.setNotifyPrefs(req, env);

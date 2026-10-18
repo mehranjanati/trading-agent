@@ -21,6 +21,8 @@
     applyWsEvent,
     buildOutbound,
     buildRestOutbound,
+    pageContext,
+    SETUPS_KEY,
   } from "$lib/chat-widget-core.mjs";
 
   type Msg = { id?: string; role: "user" | "assistant"; content: string; timestamp: string };
@@ -148,6 +150,18 @@
     localStorage.setItem(WIDGET_MESSAGES_KEY, JSON.stringify(messages));
   }
 
+  /** Browser-only state for this turn: current route + the setup rooms in
+   *  localStorage (the control plane cannot see either). Labelled DATA by the
+   *  service; empty when storage is blocked/unparseable. */
+  function currentContext(): string {
+    try {
+      const setups = JSON.parse(localStorage.getItem(SETUPS_KEY) ?? "{}");
+      return pageContext({ route: `${location.pathname}${location.search}`, setups });
+    } catch {
+      return "";
+    }
+  }
+
   async function handleSend() {
     const text = input.trim();
     if (!text || loading) return;
@@ -159,7 +173,7 @@
 
     if (mode === "ws" && ws && ws.readyState === WebSocket.OPEN) {
       live = "";
-      ws.send(JSON.stringify(buildOutbound({ id: turnId, content: text, image: null })));
+      ws.send(JSON.stringify(buildOutbound({ id: turnId, content: text, image: null, context: currentContext() })));
       return; // the done event completes the turn
     }
     if (mode === "ws") {
@@ -168,7 +182,7 @@
       return;
     }
     const outbound: ChatOutboundMessage[] = buildRestOutbound(messages, turnId, null);
-    const res = await postChat({ session_id: sessionId || undefined, messages: outbound });
+    const res = await postChat({ session_id: sessionId || undefined, messages: outbound, context: currentContext() });
     loading = false;
     if (!res.ok) {
       error = res.error;

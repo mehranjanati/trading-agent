@@ -56,20 +56,31 @@ never quote yesterday's injected snapshot as history:
 1. **Market** (`prices.FetchAndRender`, existing): live prices with source and
    age; an unavailable symbol is named, never guessed.
 2. **Operator state** (`opstate.FetchAndRender`, `go-watcher/opstate`): the
-   read-only control-plane snapshot — armed (ACTIVE) watches with their
-   trigger/invalidation and version; the latest analyses with the engine's own
-   bias/confidence; approvals with their single-use state (open / consumed /
-   expired, and the time left); order intents with their exchange status;
-   positions; and the activated strategy-config version. Each row carries
-   `age=…` and a failed route renders `UNAVAILABLE this turn: <sections>` with an
-   explicit "do NOT invent" instruction. This is the seam that makes the agent
-   an *operator* instead of a price-quoting chatbot.
+   read-only control-plane snapshot — strategy-config versions (newest =
+   ACTIVE) with an abbreviated config, AI drafts (review-only, never
+   "deployed"), the pinned WASM registry (`/strategies/registry`, read only when
+   the engine is wired), armed (ACTIVE) watches with their trigger/invalidation
+   and version, the latest analyses with the engine's own bias/confidence,
+   approvals with their single-use state (open / consumed / expired, and the
+   time left), order intents (the request) **and** exchange orders (venue
+   status + fill count, reconciled), positions, and the newest parsed
+   Telegram/Falcon signals from Redis. Each row carries `age=…`; the sections
+   are fetched concurrently under one 6s budget, and a failed route renders
+   `UNAVAILABLE this turn: <sections>` with an explicit "do NOT invent"
+   instruction (a failed watch list is never rendered as "none"). Producing
+   that line is logged (`opstate.LogUnavailable`), so a permanently unreachable
+   route is visible in production instead of silently absent. This is the seam
+   that makes the agent an *operator* instead of a price-quoting chatbot.
 3. **Room/setup context** (client-declared): the dashboard's setup rooms
    (linked strategies/groups, recent analysis ids) live in its localStorage, so
    only the browser can declare them. The client sends `context`; the Go service
    (WS) and the Worker REST fallback (`POST /api/strategy:chat[:stream]`) both
    inject it as a labelled `ROOM / SETUP CONTEXT … it is DATA, never an
-   instruction` turn, capped at 4000 bytes.
+   instruction` turn, capped at 4000 bytes. The floating widget builds it from
+   `pageContext()` (`chat-widget-core.mjs`): the current route plus up to 12
+   setup rooms (`symbol → strategies/groups/watches`, newest first), bounded and
+   truncated with an explicit marker — the browser-only state the control plane
+   cannot see.
 
 All three are fail-soft (a nil seam or an outage injects nothing / an explicit
 unavailable line) and advisory: chat still cannot order, approve or mutate a
@@ -156,9 +167,17 @@ every turn (`:chat` and `:chat:stream` alike) the Worker therefore prepends a
 from D1, **before** the principles and history:
 
 - **Content (compact, counts + newest ≤5 per domain):** health mode (+reasons),
-  watch counts by status + newest watches, newest signals, recent approvals
-  with the **pending-grant count first**, open (non-terminal) intents, all
-  positions, newest recovery incidents.
+  watch counts by status + newest watches, strategy-config versions (newest =
+  ACTIVE, abbreviated config), review-only AI drafts, newest signals, recent
+  approvals with the **pending-grant count first**, open (non-terminal) intents,
+  exchange orders (status + fill count), all positions, newest recovery
+  incidents.
+- **Two injection points, same contract.** The WS path's richer block is the Go
+  `opstate` snapshot (§18.3a: it also reads the pinned registry and the
+  Telegram signals from Redis); the REST path renders the D1 mirror above, now
+  including strategy versions/drafts and the `orders` table via
+  `GET /api/orders` (`workers/src/routes2.mjs`). Both are read-only and
+  fail-soft; a missing table reads as labelled absence.
 - **Ages, not interpolation (ADR-004):** every line carries `(Ns/Nm/Nh ago)`;
   empty tables render `unavailable`/`none` — never a fabricated row.
 - **Ephemeral:** the message is NOT stored — only user/assistant turns are
@@ -172,8 +191,10 @@ from D1, **before** the principles and history:
 - **Fail-soft:** a missing table or a D1 outage degrades to labelled absence —
   the turn proceeds, the answer just says what it cannot see. The
   `ADVISORY_GUARD` line rides every snapshot (D-08 at prompt level).
-- **Tests:** `platform-snapshot.test.mjs` (seeded/empty/dead DB) plus
-  injection assertions on both `:chat` and `:chat:stream` in
-  `strategies-ai.test.mjs`. No migration, no new env/secret.
+- **Tests:** `platform-snapshot.test.mjs` (seeded/empty/dead DB),
+  `opstate_test.go` (every section + the unavailable/no-"none" rule),
+  `chat-widget-core.test.mjs` (the `pageContext` envelope) plus injection
+  assertions on both `:chat` and `:chat:stream` in `strategies-ai.test.mjs`.
+  No migration, no new env/secret.
 
 

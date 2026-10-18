@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -67,6 +68,18 @@ func main() {
 	// Phase 1 (AI strategies): advisory deep-analysis engine. Never gates
 	// readiness: the heartbeat plane is safety-critical, analysis is not.
 	initStrategies()
+	if strategyEngine != nil {
+		// The operator-state chat block reads the pinned catalog from this
+		// process's own read-only route (docs/18 §18.8). Loopback is enough:
+		// the handler is served by this mux and never leaves the host.
+		opstate.RegistryURL = "http://127.0.0.1:" + port + "/strategies/registry"
+	}
+	// Observability (plan step 0): a section that is permanently unreachable in
+	// production must be visible in the log, not silently absent from the
+	// prompt. Only fires when something failed.
+	opstate.LogUnavailable = func(missing []string) {
+		log.Printf("opstate: unavailable sections: %s", strings.Join(missing, ", "))
+	}
 
 	// E03-T01: the trigger loop (ACTIVE set → live ticks → watch edge → Worker).
 	// Also advisory-adjacent: a dead feed degrades evaluation, it never gates

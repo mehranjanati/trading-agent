@@ -450,6 +450,15 @@ export function miscRoutes() {
       ).all().catch(() => ({ results: [] }));
       return ok({ intents: rows.results ?? [] });
     }),
+    /** GET /api/orders — exchange-side order state + fills (reconciled).
+     *  Distinct from order_intents: that is the REQUEST, this is what the
+     *  venue acknowledged. The chat operator snapshot reads it (docs/18). */
+    listOrders: safe(async (_req, env) => {
+      const rows = await env.DB.prepare(
+        "SELECT client_order_id, exchange_order_id, status, fills_json, last_reconciled_at, at FROM orders ORDER BY at DESC LIMIT 100",
+      ).all().catch(() => ({ results: [] }));
+      return ok({ orders: rows.results ?? [] });
+    }),
     /** GET /api/positions — current position snapshots (from fills only). */
     listPositions: safe(async (_req, env) => {
       const rows = await env.DB.prepare(

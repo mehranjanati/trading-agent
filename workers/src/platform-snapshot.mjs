@@ -54,17 +54,37 @@ export function ageLabel(at, nowMs = Date.now()) {
 
 /** Collect the raw snapshot (counts + newest rows) from D1. */
 export async function collectSnapshot(env, { limit = SNAPSHOT_LIMIT } = {}) {
-  const [modeRows, watchCounts, watches, signals, approvals, intents, positions, incidents] = await Promise.all([
+  const [modeRows, watchCounts, watches, signals, approvals, intents, orders, positions, incidents, versions, drafts] = await Promise.all([
     rows(env, "SELECT status, at, detail_json FROM health_snapshots WHERE component='mode' ORDER BY at DESC, rowid DESC LIMIT 1"),
     rows(env, "SELECT status, COUNT(*) AS n FROM watches GROUP BY status"),
     rows(env, "SELECT id, symbol, direction, status, updated_at FROM watches ORDER BY updated_at DESC LIMIT ?", limit),
     rows(env, "SELECT kind, watch_id, source, at FROM signals ORDER BY at DESC LIMIT ?", limit),
     rows(env, "SELECT id, watch_id, decision, approver, used_at, expires_at, at FROM approvals ORDER BY at DESC LIMIT ?", limit),
     rows(env, "SELECT id, watch_id, side, qty, status, at FROM order_intents ORDER BY at DESC LIMIT ?", limit),
+    rows(env, "SELECT client_order_id, exchange_order_id, status, fills_json, last_reconciled_at, at FROM orders ORDER BY at DESC LIMIT ?", limit),
     rows(env, "SELECT symbol, size, entry_px, leverage, updated_at FROM positions ORDER BY symbol"),
     rows(env, "SELECT incident, action, actor, at FROM recovery_log ORDER BY at DESC LIMIT ?", limit),
+    rows(env, "SELECT version, config_json, activated_by, at FROM strategy_configs ORDER BY at DESC LIMIT ?", limit),
+    rows(env, "SELECT id, strategy_id, version, status, created_at FROM strategy_drafts WHERE status <> 'deleted' ORDER BY created_at DESC LIMIT ?", limit),
   ]);
-  return { modeRows, watchCounts, watches, signals, approvals, intents, positions, incidents };
+  return { modeRows, watchCounts, watches, signals, approvals, intents, orders, positions, incidents, versions, drafts };
+}
+
+/** Number of fills in a fills_json blob (0 when absent/malformed). */
+export function fillCount(raw) {
+  try {
+    const fills = JSON.parse(raw ?? "[]");
+    return Array.isArray(fills) ? fills.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Compact config one-liner (one line, bounded — same discipline as ages). */
+function configText(raw, max = 120) {
+  const one = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!one) return "{}";
+  return one.length > max ? `${one.slice(0, max)}…` : one;
 }
 
 /** Render the collected snapshot as compact system-message text. */
@@ -87,6 +107,12 @@ export function renderSnapshot(s, { nowMs = Date.now() } = {}) {
   } else {
     L.push("watches: none");
   }
+  if (s.versions?.length) {
+    for (const v of s.versions) L.push(`strategy: ${v.version} by=${v.activated_by ?? "?"} config=${configText(v.config_json)} (${ageLabel(v.at, nowMs)})`);
+  }
+  if (s.drafts?.length) {
+    for (const d of s.drafts) L.push(`draft: ${d.id} ${d.strategy_id}@${d.version} ${d.status} (${ageLabel(d.created_at, nowMs)})`);
+  }
   if (s.watches?.length) for (const w of s.watches) L.push(`watch: ${w.symbol} ${w.direction} ${w.status} (${ageLabel(w.updated_at, nowMs)})`);
   if (s.signals?.length) for (const g of s.signals) L.push(`signal: ${g.kind} watch=${String(g.watch_id ?? "?").slice(0, 12)} src=${g.source} (${ageLabel(g.at, nowMs)})`);
   const pending = (s.approvals ?? []).filter((a) => a.decision === "approve" && !a.used_at);
@@ -95,6 +121,9 @@ export function renderSnapshot(s, { nowMs = Date.now() } = {}) {
   const open = (s.intents ?? []).filter((i) => !["FILLED", "CANCELLED", "REJECTED"].includes(String(i.status)));
   L.push(`intents: ${s.intents?.length ?? 0} recent, ${open.length} open`);
   for (const i of open.slice(0, SNAPSHOT_LIMIT)) L.push(`open-intent: ${i.side} ${i.qty} ${i.status} (${ageLabel(i.at, nowMs)})`);
+  if (s.orders?.length) {
+    for (const o of s.orders) L.push(`order: ${o.client_order_id} ${o.status} fills=${fillCount(o.fills_json)} (${ageLabel(o.at, nowMs)})`);
+  }
   if (s.positions?.length) {
     for (const p of s.positions) L.push(`position: ${p.symbol} size=${p.size} entry=${p.entry_px ?? "?"} lev=${p.leverage ?? "?"} (${ageLabel(p.updated_at, nowMs)})`);
   } else {

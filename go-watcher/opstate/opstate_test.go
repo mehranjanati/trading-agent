@@ -13,10 +13,20 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestMain pins the Telegram seam to a deterministic stub: Fetch must never
+// reach a real Redis in tests, and the stub proves the section renders.
+func TestMain(m *testing.M) {
+	SignalHistory = func(int) (string, error) {
+		return `[{"bot":"FalconToobitBot","symbol":"CELR-SWAP-USDT","canonical":"CELRUSDT","timeframe":"FiveMinutes","position":"Toobit Tiger","pivot":"SuperMinor","close_time":"10/18/2026 12:15:00 AM","recv_at":"2026-10-18T00:00:00Z"}]`, nil
+	}
+	os.Exit(m.Run())
+}
 
 // fakePlane serves the read-only routes Fetch consumes. fail names routes that
 // answer 503 (proving a missing section is rendered, not invented).
@@ -41,11 +51,20 @@ func fakePlane(t *testing.T, fail map[string]bool) *httptest.Server {
 		"/api/orders:intents": map[string]any{"intents": []map[string]any{
 			{"id": "in1", "watch_id": "w2", "side": "SELL", "qty": "10", "leverage": 3, "status": "FILLED", "at": ago(6 * time.Minute)},
 		}},
+		"/api/orders": map[string]any{"orders": []map[string]any{
+			{"client_order_id": "co1", "exchange_order_id": "ex_9", "status": "FILLED", "fills_json": `[{"qty":"10","price":"0.0027"}]`, "last_reconciled_at": ago(time.Minute), "at": ago(6 * time.Minute)},
+		}},
+		"/api/strategy:drafts": map[string]any{"drafts": []map[string]any{
+			{"id": "dr1", "strategy_id": "sma-cross", "version": "0.1.0", "model": "qwen", "status": "generated", "created_by": "trader", "created_at": ago(20 * time.Minute)},
+		}},
+		"/strategies/registry": map[string]any{"strategies": []map[string]any{
+			{"id": "sma-cross", "version": "1.0.0", "name": "SMA Cross", "status": "active"},
+		}},
 		"/api/positions": map[string]any{"positions": []map[string]any{
 			{"symbol": "CELRUSDT", "size": "10", "entry_px": "0.0027", "leverage": 3, "updated_at": ago(6 * time.Minute)},
 		}},
 		"/api/strategy": map[string]any{"versions": []map[string]any{
-			{"version": "v1-paper", "activated_by": "system-seed", "at": ago(48 * time.Hour)},
+			{"version": "v1-paper", "config_json": `{"risk_per_trade":"0.01","max_leverage":3}`, "activated_by": "system-seed", "at": ago(48 * time.Hour)},
 		}},
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,18 +84,29 @@ func fakePlane(t *testing.T, fail map[string]bool) *httptest.Server {
 func TestSystemMessageRendersTheWholeBook(t *testing.T) {
 	srv := fakePlane(t, nil)
 	defer srv.Close()
+	oldReg := RegistryURL
+	RegistryURL = srv.URL + "/strategies/registry"
+	defer func() { RegistryURL = oldReg }()
 
 	msg := SystemMessage(Fetch(context.Background(), srv.URL, []string{"CELRUSDT"}))
 
 	for _, want := range []string{
 		"OPERATOR STATE",
 		"strategy config: v1-paper (activated by system-seed",
+		"strategy versions (newest first",
+		`v1-paper by=system-seed config={"risk_per_trade":"0.01","max_leverage":3}`,
+		"strategy drafts (AI-generated, REVIEW-ONLY",
+		"dr1 sma-cross@0.1.0 status=generated model=qwen by=trader",
+		"pinned strategy registry",
+		"sma-cross@1.0.0 status=active (SMA Cross)",
 		"w1 BTCUSDT LONG v2 trigger >= 100 / invalidation <= 90",
 		"an1 CELRUSDT watch=w2 bias=SHORT conf=0.39 model=wasm-engine",
 		"ap1 CELRUSDT decision=approve open (expires in",
 		"ap2 BTCUSDT decision=approve consumed at",
 		"in1 CELRUSDT watch=w2 SELL qty=10 lev=3 status=FILLED",
+		"co1 exchange=ex_9 status=FILLED fills=1 reconciled age=",
 		"CELRUSDT size=10 entry=0.0027 lev=3",
+		"CELR-SWAP-USDT→CELRUSDT tf=FiveMinutes pos=Toobit Tiger",
 		"age=",
 		"cannot submit an order",
 	} {
@@ -86,6 +116,36 @@ func TestSystemMessageRendersTheWholeBook(t *testing.T) {
 	}
 	if strings.Contains(msg, "- w2 CELRUSDT SHORT v4 trigger") {
 		t.Errorf("a non-ACTIVE watch was rendered as armed:\n%s", msg)
+	}
+}
+
+// A section that failed must never be rendered as "none": an unread watch list
+// is unknown, not empty.
+func TestMissingWatchesNeverRenderAsNone(t *testing.T) {
+	srv := fakePlane(t, map[string]bool{"/api/watches": true})
+	defer srv.Close()
+	msg := SystemMessage(Fetch(context.Background(), srv.URL, nil))
+	if strings.Contains(msg, "armed watches: none") {
+		t.Errorf("unread watches rendered as none:\n%s", msg)
+	}
+	if !strings.Contains(msg, "UNAVAILABLE this turn: watches") {
+		t.Errorf("watches must be declared unavailable, got:\n%s", msg)
+	}
+}
+
+func TestFillsCountAndShortJSON(t *testing.T) {
+	if got := fillsCount(`[{"qty":"1"},{"qty":"2"}]`); got != 2 {
+		t.Errorf("fillsCount = %d, want 2", got)
+	}
+	if got := fillsCount("not-json"); got != 0 {
+		t.Errorf("malformed fillsCount = %d, want 0", got)
+	}
+	long := strings.Repeat("x", maxConfigChars+10)
+	if got := shortJSON(long, maxConfigChars); len(got) > maxConfigChars+4 || !strings.HasSuffix(got, "…") {
+		t.Errorf("shortJSON did not abbreviate: %d chars", len(got))
+	}
+	if got := shortJSON("", maxConfigChars); got != "{}" {
+		t.Errorf("empty shortJSON = %q, want {}", got)
 	}
 }
 

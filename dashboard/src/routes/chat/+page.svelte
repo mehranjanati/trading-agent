@@ -19,7 +19,7 @@
     type ChatOutboundMessage,
   } from "$lib/api";
   import { page } from "$app/stores";
-  import { chatSessionKey, touchSetup } from "$lib/setups";
+  import { setups, chatSessionKey, touchSetup } from "$lib/setups";
   import { validateSymbolInput } from "$lib/symbols";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
@@ -48,6 +48,9 @@
   // WS mode: the chat routes inside go-watcher. REST mode: Worker POST fallback.
   let mode: "ws" | "rest" = "rest";
   let sessionId = "";
+  // The room symbol (from ?symbol=) — component-level so every turn can declare
+  // its ROOM/SETUP context, not just the loader.
+  let roomSymbol = "";
   let live = ""; // streamed assistant text, committed on "done"
   let ws: WebSocket | null = null;
   let wsState: "connecting" | "open" | "closed" = "connecting";
@@ -57,7 +60,7 @@
   onMount(async () => {
     // Per-symbol rooms: /chat?symbol=BTCUSDT reuses that room's session, so
     // each coin keeps its own conversation. No param = legacy global session.
-    const roomSymbol = validateSymbolInput($page.url.searchParams.get("symbol") ?? "");
+    roomSymbol = validateSymbolInput($page.url.searchParams.get("symbol") ?? "") ?? "";
     const sessionKey = roomSymbol ? chatSessionKey(roomSymbol) : "chat_session_id";
     const msgKey = roomSymbol ? `chat_messages_${roomSymbol}` : "chat_messages";
     const principlesKey = roomSymbol ? `chat_principles_${roomSymbol}` : "chat_principles";
@@ -205,6 +208,21 @@
     }
   }
 
+  /** roomContext — the dashboard's ROOM/SETUP block for this turn. Setup rooms
+   *  (linked strategies/groups/analyses) live in localStorage, so only this
+   *  client can declare them; the Go chat service and the Worker REST fallback
+   *  both inject it as a labelled DATA system turn (never an instruction).
+   *  Omitted entirely when the room has no selection yet. */
+  function roomContext(): string {
+    if (!roomSymbol) return "";
+    const room = $setups[roomSymbol];
+    const strategies = (room?.strategies ?? []).map((s) => `${s.id}@${s.version ?? "latest"}`);
+    const groups = room?.groups ?? [];
+    const analyzes = (room?.analyzes ?? []).slice(-3);
+    if (!strategies.length && !groups.length && !analyzes.length) return "";
+    return JSON.stringify({ symbol: roomSymbol, strategies, groups, recent_analyze_ids: analyzes });
+  }
+
   async function handleSend() {
     const text = input.trim() || (attachment ? "Analyze the attached chart." : "");
     if ((!text && !attachment) || loading) return;
@@ -225,6 +243,7 @@
           id: turnId,
           content: text,
           ...(img ? { image: { mediaType: img.mediaType, dataUrl: img.dataUrl, detail: "low" } } : {}),
+          ...(roomContext() ? { context: roomContext() } : {}),
         }),
       );
       return; // the done event completes the turn
@@ -249,7 +268,7 @@
           }
         : { id: m.id, role: m.role, content: m.content },
     );
-    const res = await postChat({ session_id: sessionId || undefined, messages: outbound, principles });
+    const res = await postChat({ session_id: sessionId || undefined, messages: outbound, principles, ...(roomContext() ? { context: roomContext() } : {}) });
     loading = false;
     if (!res.ok) {
       error = res.error;

@@ -146,6 +146,10 @@ export async function postChat(body: {
   session_id?: string;
   messages: ChatOutboundMessage[];
   principles?: string;
+  /** The dashboard's ROOM/SETUP block for this turn (setup rooms live in this
+   *  browser's localStorage). The Worker injects it as a labelled DATA system
+   *  turn — the same block the Go chat service injects over WebSocket. */
+  context?: string;
 }): Promise<Result<{ response: string; codeBlocks: { language: string; code: string }[]; model: string; vision?: boolean }>> {
   try {
     const res = await fetch(`${API_BASE}/api/strategy:chat`, {

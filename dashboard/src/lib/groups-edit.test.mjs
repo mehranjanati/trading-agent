@@ -84,3 +84,30 @@ describe("groupEditNote / groupDeleteNote — the action always answers", () => 
     assert.doesNotMatch(groupDeleteNote("g1", []), /اتاق/);
   });
 });
+
+describe("groupEditRows — a RETIRED version (ADR-011)", () => {
+  const CAT = [
+    { id: "sma-cross", version: "0.1.0", kind: "pinned", label: "sma-cross@0.1.0", blurb: "", status: "active" },
+    { id: "sma-cross", version: "0.9.0", kind: "pinned", label: "sma-cross@0.9.0", blurb: "", status: "retired" },
+  ];
+
+  it("stays visible but is not selectable for a NEW group", () => {
+    const rows = groupEditRows(CAT, []);
+    const retired = rows.find((r) => r.label === "sma-cross@0.9.0");
+    assert.equal(retired.status, "retired");
+    assert.equal(retired.selectable, false);
+    assert.equal(rows.find((r) => r.label === "sma-cross@0.1.0").selectable, true);
+  });
+
+  it("an existing retired member is still listed once (kept, labelled)", () => {
+    const rows = groupEditRows(CAT, [{ id: "sma-cross", version: "0.9.0" }]);
+    assert.equal(rows.filter((r) => r.label === "sma-cross@0.9.0").length, 1);
+    assert.equal(rows.length, 2);
+  });
+
+  it("a missing member is selectable only so it can be unticked/kept", () => {
+    const rows = groupEditRows([], [{ id: "gone", version: "1.0.0" }]);
+    assert.equal(rows[0].selectable, true);
+    assert.equal(rows[0].kind, "missing");
+  });
+});

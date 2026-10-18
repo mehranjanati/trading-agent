@@ -37,6 +37,9 @@ const (
 	// the model. Re-sending every chart on every turn would dominate the bill;
 	// older charts degrade to a text marker the model has already seen.
 	maxImageTurns = 2
+	// maxClientContext caps the client-declared room/setup block: it is a
+	// prompt, not a document — a runaway client must not eat the 32K budget.
+	maxClientContext = 4000
 )
 
 // Message is one stored conversation turn.

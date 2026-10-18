@@ -25,7 +25,7 @@
   // feedback never ran (silent button).
   // One row of the edit tick-list (groupEditRows): a library entry, or a stored
   // member the library no longer carries (`kind: "missing"`).
-  type EditRow = { id: string; version?: string; kind: string; label: string; blurb: string };
+  type EditRow = { id: string; version?: string; kind: string; label: string; blurb: string; status?: string; selectable?: boolean };
   let tab = $state<"library" | "groups" | "drafts" | "limits">("groups");
   let description = $state("");
   let strategy_id = $state("");
@@ -198,8 +198,16 @@
           <CardContent class="space-y-1">
             <div class="flex items-center gap-2">
               <Badge variant="outline">pinned wasm</Badge>
-              <span class="text-xs text-muted-foreground">immutable bytes — to change it, publish a new version</span>
+              {#if p.status === "retired"}
+                <Badge variant="destructive">retired</Badge>
+                <span class="text-xs text-muted-foreground">still executable for existing references — not selectable for new work</span>
+              {:else}
+                <span class="text-xs text-muted-foreground">immutable bytes — to change it, publish a new version</span>
+              {/if}
             </div>
+            {#if p.status === "retired" && p.retired_reason}
+              <div class="text-xs text-muted-foreground">why retired: {p.retired_reason}</div>
+            {/if}
             {#if p.sha256}<div class="text-xs text-muted-foreground font-mono break-all">sha256 {p.sha256.slice(0, 16)}…</div>{/if}
             <div class="text-xs text-muted-foreground">
               {#if use.total}
@@ -271,9 +279,10 @@
                   {#each editRows as e}
                     {@const k = entryKey(e.id, e.version)}
                     <label class="pick-row">
-                      <input type="checkbox" bind:checked={editPicked[k]} />
+                      <input type="checkbox" bind:checked={editPicked[k]} disabled={e.selectable === false && !editPicked[k]} />
                       <span class="font-mono">{e.label}</span>
                       <Badge variant={e.kind === "missing" ? "destructive" : e.kind === "pinned" ? "outline" : "default"}>{e.kind}</Badge>
+                      {#if e.status === "retired"}<Badge variant="destructive">retired</Badge>{/if}
                       <span class="text-xs text-muted-foreground">{e.blurb}</span>
                     </label>
                   {/each}

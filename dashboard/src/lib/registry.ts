@@ -21,11 +21,18 @@ export interface RegistryEntry {
   description?: string;
   sha256: string;
   configuration: Record<string, unknown>;
+  /** ADR-011 lifecycle: "retired" stays executable but is not selectable for
+   *  new work. The Go registry always serves the field; older deployments may
+   *  omit it (treated as active). */
+  status?: "active" | "retired";
+  retired_reason?: string;
 }
 
 export interface RegistryData {
   strategies: RegistryEntry[];
   count: number;
+  /** Selectable subset (active only) — what a NEW pin set may draw from. */
+  active_count?: number;
   at: string;
 }
 

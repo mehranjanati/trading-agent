@@ -3,7 +3,14 @@
 set -euo pipefail
 # Self-excluding: skip this script. .env.example allowed (placeholders only, enforced below).
 pat='AKIA[0-9A-Z]{16}|sk-live-[A-Za-z0-9]{8,}|xox[bap]-|ghp_[A-Za-z0-9]{8,}|TOOBIT_API_SECRET[\"\x27 ]{0,3}[:=][\"\x27 ]{0,3}[A-Za-z0-9/+_=]{8,}'
-if grep -rniE "$pat" --exclude-dir=node_modules --exclude-dir=.git --exclude='secret-scan.sh' --exclude='*.md' --exclude='.env.example' --exclude='*.mjs' --exclude='BACKLOG.json' . ; then
+# Toolchain/build caches are gitignored local tooling (.toolchain/, .gopath/,
+# .gocache/ — see .gitignore): they hold compiler test fixtures that can look
+# like secret shapes (e.g. Go's buildinfo base64), never repo content.
+# .cline-home is the coding agent's own home (session logs, task db): local
+# tooling state, never tracked repo content.
+if grep -rniE "$pat" --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.toolchain \
+  --exclude-dir=.gopath --exclude-dir=.gocache --exclude-dir=.svelte-kit --exclude-dir=.cline-home \
+  --exclude='secret-scan.sh' --exclude='*.md' --exclude='.env.example' --exclude='*.mjs' --exclude='BACKLOG.json' . ; then
   echo "secret-scan: FAIL (possible secret shape)"; exit 1
 fi
 # .env.example must contain only placeholders

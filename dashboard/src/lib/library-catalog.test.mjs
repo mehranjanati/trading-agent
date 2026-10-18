@@ -10,7 +10,7 @@
 // Imports the real module (library-core.mjs), not a hand-copied mirror.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { composeCatalog, pinnedEntry, draftEntry, entryKey, PINNED_FALLBACK } from "./library-core.mjs";
+import { composeCatalog, pinnedEntry, draftEntry, entryKey, PINNED_FALLBACK, isRetired, selectableCatalog } from "./library-core.mjs";
 
 const LIVE = [
   { id: "sma-cross", version: "0.1.0", name: "SMA Cross (fast)", description: "fast 2 / slow 3", sha256: "aa".repeat(32), configuration: { fast_window: 2 } },
@@ -72,5 +72,42 @@ describe("catalog — entry shaping", () => {
     assert.equal(entryKey("sma-cross", "0.1.0"), "sma-cross@0.1.0");
     assert.equal(entryKey("sma-cross"), "sma-cross@latest");
     assert.equal(draftEntry({ id: "d", strategy_id: "s", version: "2.0.0", status: "generated" }).label, "s@2.0.0");
+  });
+});
+
+describe("catalog — retirement is labelled, never hidden (ADR-011)", () => {
+  const RETIRED = [
+    { id: "sma-cross", version: "0.1.0", name: "active one", sha256: "aa".repeat(32), configuration: {}, status: "active" },
+    { id: "sma-cross", version: "0.9.0", name: "withdrawn", sha256: "cc".repeat(32), configuration: {}, status: "retired", retired_reason: "bad invalidation" },
+    { id: "sma-x-v2", version: "0.1.0", name: "old registry row", sha256: "bb".repeat(32), configuration: {} },
+  ];
+
+  it("pinnedEntry carries the status and the retirement reason", () => {
+    const { entries } = composeCatalog(RETIRED, []);
+    const retired = entries.find((e) => e.version === "0.9.0");
+    assert.equal(retired.status, "retired");
+    assert.equal(retired.retired_reason, "bad invalidation");
+    assert.equal(entries.find((e) => e.version === "0.1.0").status, "active");
+  });
+
+  it("an older registry row without a status is active, never retired", () => {
+    const { entries } = composeCatalog(RETIRED, []);
+    const row = entries.find((e) => e.id === "sma-x-v2");
+    assert.equal(row.status, "active");
+    assert.equal(isRetired(row), false);
+  });
+
+  it("selectableCatalog drops retired versions but the catalog still lists them", () => {
+    const { entries } = composeCatalog(RETIRED, [{ id: "sma-cross", strategy_id: "sma-cross", version: "0.1.0", status: "generated" }]);
+    assert.equal(entries.length, 3); // the draft dedupes against the pin, not the retired row
+    const selectable = selectableCatalog(entries);
+    assert.deepEqual(selectable.map((e) => `${e.id}@${e.version}`), ["sma-cross@0.1.0", "sma-x-v2@0.1.0"]);
+    assert.ok(!selectable.some((e) => isRetired(e)));
+  });
+
+  it("the offline mirror is fully selectable (no status = active)", () => {
+    const { entries, source } = composeCatalog(null, []);
+    assert.equal(source, "fallback");
+    assert.equal(selectableCatalog(entries).length, entries.length);
   });
 });

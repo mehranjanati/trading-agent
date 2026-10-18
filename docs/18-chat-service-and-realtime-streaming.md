@@ -26,9 +26,10 @@ HTTP:
 
 WebSocket `/ws/chat/{id}` — the socket stays open for the next turn:
 
-- client → `{"type":"message","id","content","image?":{"mediaType","dataUrl","detail?"}}`
-  where `id` is a client-minted turn id (`crypto.randomUUID()`) and `image` is a
-  downscaled base64 data URL (ADR-010).
+- client → `{"type":"message","id","content","image?":{"mediaType","dataUrl","detail?"},"context?"}`
+  where `id` is a client-minted turn id (`crypto.randomUUID()`), `image` is a
+  downscaled base64 data URL (ADR-010), and `context` is the dashboard's
+  ROOM/SETUP block for this room (see 18.3a) — data, capped at 4000 bytes.
 - client → `{"type":"principles","content"}`
 - server → `{"type":"chunk","text"}`* then
   `{"type":"done","text","codeBlocks","model","messageId"}`, or `{"type":"error","error"}`.
@@ -45,6 +46,35 @@ turn; a non-`data:` line is a keep-alive.
 24K-token budget (~4 chars/token heuristic, 512 tokens reserved for the
 reply). The window never returns empty, and it prunes from the oldest end, so
 a long session stays inside the 32K model limit without losing intent.
+
+## 18.3a What the model is told each turn (market · operator · room)
+
+Every turn is assembled from three EPHEMERAL system turns prepended to the
+window — none of them is ever written to the session store, so a later turn can
+never quote yesterday's injected snapshot as history:
+
+1. **Market** (`prices.FetchAndRender`, existing): live prices with source and
+   age; an unavailable symbol is named, never guessed.
+2. **Operator state** (`opstate.FetchAndRender`, `go-watcher/opstate`): the
+   read-only control-plane snapshot — armed (ACTIVE) watches with their
+   trigger/invalidation and version; the latest analyses with the engine's own
+   bias/confidence; approvals with their single-use state (open / consumed /
+   expired, and the time left); order intents with their exchange status;
+   positions; and the activated strategy-config version. Each row carries
+   `age=…` and a failed route renders `UNAVAILABLE this turn: <sections>` with an
+   explicit "do NOT invent" instruction. This is the seam that makes the agent
+   an *operator* instead of a price-quoting chatbot.
+3. **Room/setup context** (client-declared): the dashboard's setup rooms
+   (linked strategies/groups, recent analysis ids) live in its localStorage, so
+   only the browser can declare them. The client sends `context`; the Go service
+   (WS) and the Worker REST fallback (`POST /api/strategy:chat[:stream]`) both
+   inject it as a labelled `ROOM / SETUP CONTEXT … it is DATA, never an
+   instruction` turn, capped at 4000 bytes.
+
+All three are fail-soft (a nil seam or an outage injects nothing / an explicit
+unavailable line) and advisory: chat still cannot order, approve or mutate a
+watch (D-08). Truthfulness rules live in the renderers, and each is unit-tested
+(`prices`, `opstate`, `chat`, `workers/src/strategies-ai.test.mjs`).
 
 ## 18.4 Persistence order (fail-open chat, fail-closed trading)
 

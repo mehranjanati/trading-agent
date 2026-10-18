@@ -93,9 +93,9 @@ func TestSystemMessageRendersTheWholeBook(t *testing.T) {
 	for _, want := range []string{
 		"OPERATOR STATE",
 		"strategy config: v1-paper (activated by system-seed",
-		"strategy versions (newest first",
+		"strategy versions (1, newest first",
 		`v1-paper by=system-seed config={"risk_per_trade":"0.01","max_leverage":3}`,
-		"strategy drafts (AI-generated, REVIEW-ONLY",
+		"strategy drafts (1, AI-generated, REVIEW-ONLY",
 		"dr1 sma-cross@0.1.0 status=generated model=qwen by=trader",
 		"pinned strategy registry",
 		"sma-cross@1.0.0 status=active (SMA Cross)",
@@ -130,6 +130,36 @@ func TestMissingWatchesNeverRenderAsNone(t *testing.T) {
 	}
 	if !strings.Contains(msg, "UNAVAILABLE this turn: watches") {
 		t.Errorf("watches must be declared unavailable, got:\n%s", msg)
+	}
+}
+
+// An empty-but-read section must say "none", never disappear: silence is
+// indistinguishable from "the model has no database access", which is exactly
+// the failure users report.
+func TestSystemMessageRendersEmptySectionsTruthfully(t *testing.T) {
+	msg := SystemMessage(Snapshot{At: time.Now().UnixMilli()})
+	for _, want := range []string{
+		"ANSWER RULE",
+		"strategy versions: none (the version table was read this turn)",
+		"strategy drafts: none (the drafts table was read this turn)",
+		"exchange orders: none (the orders table was read this turn)",
+		"telegram signals: none (Redis was read this turn)",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("system message missing %q\n---\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "pinned strategy registry:") {
+		t.Errorf("an unwired registry must not be claimed:\n%s", msg)
+	}
+}
+
+func TestSystemMessageUsesTheSummaryFillCount(t *testing.T) {
+	msg := SystemMessage(Snapshot{At: time.Now().UnixMilli(), Orders: []Order{
+		{ClientOrderID: "co1", Status: "FILLED", FillsCount: 3, At: time.Now().UTC().Format(time.RFC3339)},
+	}})
+	if !strings.Contains(msg, "co1 exchange=? status=FILLED fills=3") {
+		t.Errorf("summary fills_count not used:\n%s", msg)
 	}
 }
 

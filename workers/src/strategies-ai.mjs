@@ -211,10 +211,17 @@ export function generateRoutes() {
       return err("VALIDATION", "generated code rejected: " + lastProblems.join("; "), {});
     }),
     /** GET /api/strategy:drafts — list drafts (newest first). Discarded drafts
-     *  (status 'deleted') stay in D1 for the audit trail but leave this list. */
+     *  (status 'deleted') stay in D1 for the audit trail but leave this list.
+     *  `?summary=1` omits prompt/code: the chat operator snapshot only needs the
+     *  row identity, and 50 generated source blobs can exceed the server-side
+     *  1 MB decode cap (which would drop the whole section). */
     drafts: safe(async (req, env) => {
+      const summary = new URL(req.url).searchParams.get("summary") === "1";
+      const cols = summary
+        ? "id, strategy_id, version, model, status, created_by, created_at"
+        : "id, strategy_id, version, prompt, code, model, status, created_by, created_at";
       const rows = await env.DB.prepare(
-        "SELECT id, strategy_id, version, prompt, code, model, status, created_by, created_at FROM strategy_drafts WHERE status <> 'deleted' ORDER BY created_at DESC LIMIT 50",
+        `SELECT ${cols} FROM strategy_drafts WHERE status <> 'deleted' ORDER BY created_at DESC LIMIT 50`,
       ).all().catch(() => ({ results: [] }));
       return ok({ drafts: rows.results ?? [] });
     }),

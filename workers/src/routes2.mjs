@@ -452,10 +452,16 @@ export function miscRoutes() {
     }),
     /** GET /api/orders — exchange-side order state + fills (reconciled).
      *  Distinct from order_intents: that is the REQUEST, this is what the
-     *  venue acknowledged. The chat operator snapshot reads it (docs/18). */
-    listOrders: safe(async (_req, env) => {
+     *  venue acknowledged. The chat operator snapshot reads it (docs/18).
+     *  `?summary=1` returns fills_count instead of the fills_json blob: the
+     *  chat only needs the count, and blobs can blow the server's 1 MB read. */
+    listOrders: safe(async (req, env) => {
+      const summary = new URL(req.url).searchParams.get("summary") === "1";
+      const cols = summary
+        ? "client_order_id, exchange_order_id, status, CASE WHEN json_valid(fills_json) THEN json_array_length(fills_json) ELSE 0 END AS fills_count, last_reconciled_at, at"
+        : "client_order_id, exchange_order_id, status, fills_json, last_reconciled_at, at";
       const rows = await env.DB.prepare(
-        "SELECT client_order_id, exchange_order_id, status, fills_json, last_reconciled_at, at FROM orders ORDER BY at DESC LIMIT 100",
+        `SELECT ${cols} FROM orders ORDER BY at DESC LIMIT 100`,
       ).all().catch(() => ({ results: [] }));
       return ok({ orders: rows.results ?? [] });
     }),

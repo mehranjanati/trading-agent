@@ -120,7 +120,14 @@ func main() {
 		// from our own control plane (read-only GETs, never an order). Without
 		// it the model can quote a price but cannot know the book.
 		state := func(ctx context.Context, texts ...string) string {
-			return opstate.FetchAndRender(ctx, base, texts...)
+			snap := opstate.Fetch(ctx, base, prices.ExtractSymbols(texts...))
+			msg := opstate.SystemMessage(snap)
+			if os.Getenv("CHAT_DEBUG") == "1" {
+				// Exactly what the model receives, plus what failed. Off by
+				// default (the block contains the operator's book).
+				log.Printf("chat operator state (%d bytes, missing=%v):\n%s", len(msg), snap.Missing, msg)
+			}
+			return msg
 		}
 		s := &chat.Service{Store: chat.NewStore(), AI: chat.NewAIClient(base), Market: market, State: state, Origins: origins}
 		mux.Handle("/api/chat/", s)

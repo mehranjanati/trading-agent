@@ -67,10 +67,17 @@ never quote yesterday's injected snapshot as history:
    Telegram/Falcon signals from Redis. Each row carries `age=…`; the sections
    are fetched concurrently under one 6s budget, and a failed route renders
    `UNAVAILABLE this turn: <sections>` with an explicit "do NOT invent"
-   instruction (a failed watch list is never rendered as "none"). Producing
-   that line is logged (`opstate.LogUnavailable`), so a permanently unreachable
-   route is visible in production instead of silently absent. This is the seam
-   that makes the agent an *operator* instead of a price-quoting chatbot.
+   instruction (a failed watch list is never rendered as "none"). An EMPTY but
+   successfully-read strategy/orders/TG section renders
+   `none (the … table was read this turn)` — silence is indistinguishable from
+   "the model has no database access", which was the reported failure. The
+   block also carries an explicit ANSWER RULE: when asked for the strategies in
+   the database, the model must list the rows (or say the section is empty) and
+   must never claim it lacks database access while those sections are present.
+   Producing the `UNAVAILABLE` line is logged (`opstate.LogUnavailable`), so a
+   permanently unreachable route is visible in production instead of silently
+   absent. This is the seam that makes the agent an *operator* instead of a
+   price-quoting chatbot.
 3. **Room/setup context** (client-declared): the dashboard's setup rooms
    (linked strategies/groups, recent analysis ids) live in its localStorage, so
    only the browser can declare them. The client sends `context`; the Go service
@@ -178,6 +185,17 @@ from D1, **before** the principles and history:
   including strategy versions/drafts and the `orders` table via
   `GET /api/orders` (`workers/src/routes2.mjs`). Both are read-only and
   fail-soft; a missing table reads as labelled absence.
+- **Bounded reads.** The chat readers use `?summary=1` on
+  `GET /api/strategy:drafts` and `GET /api/orders`: prompt/code and the
+  `fills_json` blob are replaced by the row identity and `fills_count`. Full
+  blobs (≤50 drafts, ≤100 orders) can exceed the Go client's 1 MB decode cap,
+  which would silently drop the entire section. The REST snapshot fetches the
+  pinned registry through the Go plane with a 60s per-isolate cache and a 3s
+  timeout (skipped when `GO_WATCHER_URL` is unset, e.g. unit tests).
+- **Answering rule.** Both renderers end with an explicit rule: the rows are a
+  live database read for this turn; a strategy-list question is answered from
+  them, and "I have no database access" is not a valid reply while those rows
+  are present. Empty-but-read sections say `none (… was read this turn)`.
 - **Ages, not interpolation (ADR-004):** every line carries `(Ns/Nm/Nh ago)`;
   empty tables render `unavailable`/`none` — never a fabricated row.
 - **Ephemeral:** the message is NOT stored — only user/assistant turns are
@@ -196,5 +214,39 @@ from D1, **before** the principles and history:
   `chat-widget-core.test.mjs` (the `pageContext` envelope) plus injection
   assertions on both `:chat` and `:chat:stream` in `strategies-ai.test.mjs`.
   No migration, no new env/secret.
+
+## 18.9 Troubleshooting "the bot says it has no database access"
+
+The answer is produced by the model, but the fix is in the context path. Check
+in this order:
+
+1. **Did the running binary get rebuilt?** A code change in
+   `go-watcher/opstate` only reaches chat after the watcher image/binary is
+   rebuilt and restarted; Worker changes need `wrangler deploy`, dashboard
+   changes a rebuild. An old Go binary injects the old block (no strategies).
+2. **Read the exact block the model receives.** Set `CHAT_DEBUG=1` on the
+   watcher and send one turn; the log prints the block and `missing=[…]`. A
+   compact equivalent is the `opstate: unavailable sections: …` line, which is
+   always logged when a section failed.
+3. **Probe the routes the block reads** (from the watcher host, because the Go
+   process calls the Worker origin):
+   - `curl -s "$WORKERS_URL/api/strategy"` → `{versions:[…]}`
+   - `curl -s "$WORKERS_URL/api/strategy:drafts?summary=1"` → `{drafts:[…]}`
+   - `curl -s "$WORKERS_URL/api/orders?summary=1"` → `{orders:[…]}`
+   - `curl -s "http://127.0.0.1:$PORT/strategies/registry"` → `{strategies:[…]}`
+   A non-200 on any of them appears as that section in `UNAVAILABLE` — and a
+   `UNAVAILABLE` section is the only case where the model is allowed to say it
+   cannot see it.
+4. **Empty vs unread.** `strategy drafts: none (the drafts table was read this
+   turn)` means the path works and D1 has no rows; `UNAVAILABLE … strategy
+   drafts` means the route failed. Only the former is a real "nothing there".
+5. **REST path.** If the dashboard is on the Worker fallback, the
+   `PLATFORM SNAPSHOT` block supplies the same strategy/draft/registry rows from
+   D1 (registry path: Go plane, 60s cache). The REST path has no Telegram
+   signals (the Worker cannot read the Go Redis) — that section is WS-only.
+
+If the block contains the rows and the model still refuses, the failure is
+prompt-following, not data: the explicit ANSWER RULE added in this section is
+the mitigation; re-test on the deployed build before changing more code.
 
 

@@ -252,6 +252,19 @@ describe("strategies-ai — POST /api/strategy:generate (fake AI)", () => {
     assert.ok(body.drafts.some((d) => d.strategy_id === "draft-list"));
   });
 
+  it("GET /api/strategy:drafts?summary=1 omits prompt/code (chat snapshot reads this)", async () => {
+    const env = freshEnv({ AI: fakeAI("```go\n" + GOOD_CODE + "\n```") });
+    await post(app, env, "/api/strategy:generate",
+      JSON.stringify({ description: "summary", strategy_id: "draft-summary", version: "0.1.0" }));
+    const r = await app.fetch(new Request("http://x/api/strategy:drafts?summary=1"), env);
+    assert.equal(r.status, 200);
+    const d = (await r.json()).drafts.find((x) => x.strategy_id === "draft-summary");
+    assert.ok(d);
+    assert.equal(d.code, undefined);
+    assert.equal(d.prompt, undefined);
+    assert.ok(d.status && d.created_at);
+  });
+
   // A draft you no longer want must be discardable — but the row stays in D1
   // (status 'deleted'), because a row that simply vanishes is unauditable. Same
   // rule as the watch FSM: transition, never delete (docs/05 §5.3).

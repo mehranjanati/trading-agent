@@ -37,6 +37,17 @@ describe("read lists", () => {
     assert.deepEqual(body.orders, [{ client_order_id: "co_1" }]);
   });
 
+  it("GET /api/orders?summary=1 selects a fills COUNT, not the blob", async () => {
+    let sqlText = "";
+    const db = { prepare: (s) => { sqlText = s; return { all: async () => ({ results: [] }) }; } };
+    const misc = miscRoutes();
+    const res = await misc.listOrders(req("/api/orders?summary=1"), { DB: db });
+    assert.equal(res.status, 200);
+    assert.match(sqlText, /AS fills_count/);
+    assert.match(sqlText, /json_array_length\(fills_json\)/);
+    assert.ok(!/status, fills_json,/.test(sqlText));
+  });
+
   it("GET /api/positions returns {positions}", async () => {
     const misc = miscRoutes();
     const res = await misc.listPositions(req("/api/positions"), { DB: rowsFor([{ symbol: "BTCUSDT" }]) });

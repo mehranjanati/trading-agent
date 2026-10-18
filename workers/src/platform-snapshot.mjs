@@ -25,6 +25,15 @@ export const ADVISORY_GUARD =
   "touch watches/approvals/leases/kill-switch state, or execute anything. " +
   "Answer with analysis and proposals; the human decides and acts.";
 
+/** Answering rule for catalog questions: the rows ARE the database read for
+ *  this turn, so a blanket "I have no database access" is never a valid reply
+ *  while a strategy/draft/registry row is present. */
+export const SNAPSHOT_RULES =
+  "The rows above are a LIVE read of the platform database for this turn. " +
+  "When asked for the strategies in the database / the strategy list, list the " +
+  "strategy, draft and registry rows above (or say that domain is empty); do not " +
+  "claim you lack database access while those rows are present.";
+
 /** One guarded query: missing table/env.DB -> [], never a throw. */
 async function rows(env, sqlText, ...args) {
   try {
@@ -54,7 +63,7 @@ export function ageLabel(at, nowMs = Date.now()) {
 
 /** Collect the raw snapshot (counts + newest rows) from D1. */
 export async function collectSnapshot(env, { limit = SNAPSHOT_LIMIT } = {}) {
-  const [modeRows, watchCounts, watches, signals, approvals, intents, orders, positions, incidents, versions, drafts] = await Promise.all([
+  const [modeRows, watchCounts, watches, signals, approvals, intents, orders, positions, incidents, versions, drafts, registry] = await Promise.all([
     rows(env, "SELECT status, at, detail_json FROM health_snapshots WHERE component='mode' ORDER BY at DESC, rowid DESC LIMIT 1"),
     rows(env, "SELECT status, COUNT(*) AS n FROM watches GROUP BY status"),
     rows(env, "SELECT id, symbol, direction, status, updated_at FROM watches ORDER BY updated_at DESC LIMIT ?", limit),
@@ -66,8 +75,9 @@ export async function collectSnapshot(env, { limit = SNAPSHOT_LIMIT } = {}) {
     rows(env, "SELECT incident, action, actor, at FROM recovery_log ORDER BY at DESC LIMIT ?", limit),
     rows(env, "SELECT version, config_json, activated_by, at FROM strategy_configs ORDER BY at DESC LIMIT ?", limit),
     rows(env, "SELECT id, strategy_id, version, status, created_at FROM strategy_drafts WHERE status <> 'deleted' ORDER BY created_at DESC LIMIT ?", limit),
+    registryRows(env, limit),
   ]);
-  return { modeRows, watchCounts, watches, signals, approvals, intents, orders, positions, incidents, versions, drafts };
+  return { modeRows, watchCounts, watches, signals, approvals, intents, orders, positions, incidents, versions, drafts, registry };
 }
 
 /** Number of fills in a fills_json blob (0 when absent/malformed). */
@@ -85,6 +95,32 @@ function configText(raw, max = 120) {
   const one = String(raw ?? "").replace(/\s+/g, " ").trim();
   if (!one) return "{}";
   return one.length > max ? `${one.slice(0, max)}…` : one;
+}
+
+// The pinned catalog is static for minutes at a time and lives on the Go plane;
+// cache it per isolate so chat turns do not pay a cross-service hop each time.
+let registryCache = { at: 0, rows: [] };
+const REGISTRY_TTL_MS = 60_000;
+
+/** Newest pinned registry rows, [] when the Go plane is unwired/unreachable.
+ *  Never throws: a catalog outage degrades the answer, not the turn. */
+async function registryRows(env, limit) {
+  if (!env?.GO_WATCHER_URL) return []; // unwired in tests/local — skip the hop
+  if (Date.now() - registryCache.at < REGISTRY_TTL_MS) return registryCache.rows.slice(0, limit);
+  try {
+    const { watcherBase } = await import("./proxy.mjs");
+    const res = await fetch(`${watcherBase(env)}/strategies/registry`, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return [];
+    const body = await res.json();
+    const rows = Array.isArray(body?.strategies) ? body.strategies : [];
+    registryCache = { at: Date.now(), rows };
+    return rows.slice(0, limit);
+  } catch {
+    return [];
+  }
 }
 
 /** Render the collected snapshot as compact system-message text. */
@@ -113,6 +149,9 @@ export function renderSnapshot(s, { nowMs = Date.now() } = {}) {
   if (s.drafts?.length) {
     for (const d of s.drafts) L.push(`draft: ${d.id} ${d.strategy_id}@${d.version} ${d.status} (${ageLabel(d.created_at, nowMs)})`);
   }
+  if (s.registry?.length) {
+    for (const r of s.registry) L.push(`registry: ${r.id}@${r.version} ${r.status}`);
+  }
   if (s.watches?.length) for (const w of s.watches) L.push(`watch: ${w.symbol} ${w.direction} ${w.status} (${ageLabel(w.updated_at, nowMs)})`);
   if (s.signals?.length) for (const g of s.signals) L.push(`signal: ${g.kind} watch=${String(g.watch_id ?? "?").slice(0, 12)} src=${g.source} (${ageLabel(g.at, nowMs)})`);
   const pending = (s.approvals ?? []).filter((a) => a.decision === "approve" && !a.used_at);
@@ -130,6 +169,7 @@ export function renderSnapshot(s, { nowMs = Date.now() } = {}) {
     L.push("positions: none (fills only — paper-sim fills are simulated, D-06)");
   }
   if (s.incidents?.length) for (const r of s.incidents) L.push(`incident: ${r.incident} action=${r.action} (${ageLabel(r.at, nowMs)})`);
+  L.push(SNAPSHOT_RULES);
   L.push(ADVISORY_GUARD);
   return L.join("\n");
 }

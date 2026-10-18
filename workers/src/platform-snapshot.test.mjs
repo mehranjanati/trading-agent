@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ageSec, ageLabel, platformSnapshot, fillCount, ADVISORY_GUARD, SNAPSHOT_LIMIT } from "./platform-snapshot.mjs";
+import { ageSec, ageLabel, platformSnapshot, renderSnapshot, fillCount, ADVISORY_GUARD, SNAPSHOT_RULES, SNAPSHOT_LIMIT } from "./platform-snapshot.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql"]
@@ -103,6 +103,7 @@ describe("platform-snapshot — render", () => {
     assert.match(text, /position: BTCUSDT size=0\.1/);
     assert.match(text, /incident: health.recovered/);
     assert.ok(text.includes(ADVISORY_GUARD));
+    assert.ok(text.includes(SNAPSHOT_RULES));
   });
   it("an empty D1 renders labelled absence, never fabricated rows", async () => {
     const text = await platformSnapshot(emptyEnv(), { nowMs: NOW });
@@ -111,6 +112,10 @@ describe("platform-snapshot — render", () => {
     assert.match(text, /positions: none/);
     assert.ok(!text.includes("watch: "));
     assert.ok(!text.includes("position: "));
+  });
+  it("renders the pinned registry rows when the Go plane supplied them", () => {
+    const text = renderSnapshot({ registry: [{ id: "sma-cross", version: "1.0.0", status: "active" }] }, { nowMs: NOW });
+    assert.match(text, /registry: sma-cross@1\.0\.0 active/);
   });
   it("a dead DB degrades to labelled absence, never a throw", async () => {
     const text = await platformSnapshot({ DB: { prepare: () => { throw new Error("d1 down"); } } });

@@ -9,6 +9,7 @@ import { RISK_CODES, validate, limitsFrom, mulDec, addDec, cmpDec, normDec } fro
 const LIMITS = {
   max_leverage: 5, max_notional_usd: "1000", max_exposure_usd: "5000",
   allowlist: ["BTCUSDT", "ETHUSDT", "SOLUSDT"], stale_s_seconds: 5,
+  max_active_watches: 5, max_active_watches_per_symbol: 2,
 };
 const NOW = 1_800_000_000_000;
 const INTENT = { approval_id: "a1", side: "BUY", qty: "1", leverage: 5 };
@@ -20,6 +21,7 @@ const okCtx = (over = {}) => ({
   watch: { id: "w1", symbol: "BTCUSDT", direction: "LONG" },
   price: { px: "100", at_ms: NOW - 1000 },
   exposure: { open_notional_usd: "0" },
+  active_watches: 0, active_watches_for_symbol: 0,
   live_intent_for_approval: false,
   ...over,
 });
@@ -154,6 +156,57 @@ describe("E08-T01 the 8-code reject matrix (fixed order, first failure wins)", (
     assert.equal(validate(INTENT, okCtx({ exposure: {} })).code, "R-EXP");
   });
 
+  // --- R-SLOT ---------------------------------------------------------------
+  it("R-SLOT: the global active-watch cap rejects with limit + active", () => {
+    const r = validate(INTENT, okCtx({ active_watches: 5 })); // cap 5 → 5 >= 5
+    assert.equal(r.code, "R-SLOT");
+    assert.equal(r.detail.limit, 5);
+    assert.equal(r.detail.active, 5);
+  });
+  it("R-SLOT: the per-symbol cap is checked independently of the global one", () => {
+    const r = validate(INTENT, okCtx({ active_watches: 0, active_watches_for_symbol: 2 })); // cap 2
+    assert.equal(r.code, "R-SLOT");
+    assert.equal(r.detail.limit, 2);
+    assert.equal(r.detail.symbol, "BTCUSDT");
+  });
+  it("R-SLOT: an unknown count fails closed (SAFE-001)", () => {
+    assert.equal(validate(INTENT, okCtx({ active_watches: null })).code, "R-SLOT");
+    assert.equal(validate(INTENT, okCtx({ active_watches: undefined })).code, "R-SLOT");
+    assert.equal(validate(INTENT, okCtx({ active_watches_for_symbol: null })).code, "R-SLOT");
+  });
+  it("R-SLOT: a config WITHOUT the caps skips the gate (no invented limit)", () => {
+    const L = { ...LIMITS };
+    delete L.max_active_watches;
+    delete L.max_active_watches_per_symbol;
+    const r = validate(INTENT, okCtx({ limits: L, active_watches: undefined, active_watches_for_symbol: undefined }));
+    assert.equal(r.ok, true);
+  });
+  it("R-SLOT: one slot below the cap passes", () => {
+    assert.equal(validate(INTENT, okCtx({ active_watches: 4, active_watches_for_symbol: 1 })).ok, true);
+  });
+
+  // --- stop_loss (direction consistency, part of R-NOT) ---------------------
+  it("stop_loss: a LONG stop above the entry is rejected", () => {
+    const r = validate({ ...INTENT, stop_loss: "110" }, okCtx()); // entry 100
+    assert.equal(r.code, "R-NOT");
+    assert.equal(r.detail.stop_loss, "110");
+  });
+  it("stop_loss: a SHORT stop below the entry is rejected", () => {
+    const ctx = okCtx({ watch: { id: "w1", symbol: "BTCUSDT", direction: "SHORT" } });
+    assert.equal(validate({ ...INTENT, side: "SELL", stop_loss: "90" }, ctx).code, "R-NOT");
+  });
+  it("stop_loss: a direction-consistent stop passes", () => {
+    assert.equal(validate({ ...INTENT, stop_loss: "90" }, okCtx()).ok, true);
+    const ctx = okCtx({ watch: { id: "w1", symbol: "BTCUSDT", direction: "SHORT" } });
+    assert.equal(validate({ ...INTENT, side: "SELL", stop_loss: "110" }, ctx).ok, true);
+  });
+  it("stop_loss: a non-decimal stop fails closed", () => {
+    assert.equal(validate({ ...INTENT, stop_loss: "1e3" }, okCtx()).code, "R-NOT");
+  });
+  it("stop_loss: a stop equal to the entry is rejected (it is not a stop)", () => {
+    assert.equal(validate({ ...INTENT, stop_loss: "100" }, okCtx()).code, "R-NOT");
+  });
+
   // --- R-STALE --------------------------------------------------------------
   it("R-STALE: aged price → HOLD + age/threshold", () => {
     const r = validate(INTENT, okCtx({ price: { px: "100", at_ms: NOW - 8000 } }));
@@ -192,17 +245,19 @@ describe("E08-T01 coverage, order, and AI-override immunity", () => {
       "R-EXP": okCtx({ exposure: { open_notional_usd: "4500" } }), // 4500 + 1000 > 5000
       "R-STALE": okCtx({ price: { px: "100", at_ms: NOW - 8000 } }),
       "R-DUP": okCtx({ live_intent_for_approval: true }),
+      "R-SLOT": okCtx({ active_watches: 5 }), // global cap reached (5 >= 5)
     };
     const seen = [];
     for (const code of RISK_CODES) {
       const intent = code === "R-LEV" ? { ...INTENT, leverage: 6 }
         : code === "R-NOT" ? { ...INTENT, qty: "11" }
-        : code === "R-EXP" ? { ...INTENT, qty: "10" } : INTENT;
+        : code === "R-EXP" ? { ...INTENT, qty: "10" }
+        : code === "R-SLOT" ? { ...INTENT } : INTENT;
       const r = validate(intent, red[code]);
       assert.equal(r.code, code, code);
       seen.push(r.code);
     }
-    assert.deepEqual(seen.sort(), [...RISK_CODES].sort()); // all 8, no extras
+    assert.deepEqual(seen.sort(), [...RISK_CODES].sort()); // all 9, no extras
   });
 
   it("fixed evaluation order: peel one gate at a time, code advances in table order", () => {
@@ -224,10 +279,13 @@ describe("E08-T01 coverage, order, and AI-override immunity", () => {
     assert.equal(validate({ ...badIntent, leverage: 5 }, ctx3).code, "R-NOT");
     assert.equal(validate({ ...badIntent, leverage: 5, qty: "1" }, ctx3).code, "R-EXP");
     const ctx5 = { ...ctx3, exposure: { open_notional_usd: "0" } };
-    assert.equal(validate({ ...badIntent, leverage: 5, qty: "1" }, ctx5).code, "R-STALE");
-    const ctx6 = { ...ctx5, price: { px: "100", at_ms: NOW - 1000 } };
-    assert.equal(validate({ ...badIntent, leverage: 5, qty: "1" }, ctx6).code, "R-DUP");
-    assert.equal(validate({ ...badIntent, leverage: 5, qty: "1" }, { ...ctx6, live_intent_for_approval: false }).ok, true);
+    delete ctx5.active_watches; // unknown count must fail closed → R-SLOT before R-STALE
+    assert.equal(validate({ ...badIntent, leverage: 5, qty: "1" }, ctx5).code, "R-SLOT"); // active_watches undefined → fail closed
+    const ctx6 = { ...ctx5, active_watches: 0, active_watches_for_symbol: 0 }; // price still has no timestamp → R-STALE
+    assert.equal(validate({ ...badIntent, leverage: 5, qty: "1" }, ctx6).code, "R-STALE");
+    const ctx7 = { ...ctx6, price: { px: "100", at_ms: NOW - 1000 } };
+    assert.equal(validate({ ...badIntent, leverage: 5, qty: "1" }, ctx7).code, "R-DUP");
+    assert.equal(validate({ ...badIntent, leverage: 5, qty: "1" }, { ...ctx7, live_intent_for_approval: false }).ok, true);
   });
 
   it("AI output is an input, never an override (SAFE-003)", () => {

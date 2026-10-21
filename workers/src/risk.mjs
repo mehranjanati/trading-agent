@@ -1,6 +1,6 @@
 // risk.mjs — E08-T01: deterministic risk gates (docs/08 §8.2). Pure, no network.
 //
-// `validate(intent, ctx) -> PASS | REJECT(code, detail)`. The eight codes are
+// `validate(intent, ctx) -> PASS | REJECT(code, detail)`. The nine codes are
 // user-visible and evaluated in a FIXED order; the first failure wins, so a
 // reject is reproducible. AI output can never reach this function (SAFE-003) —
 // it takes limits and evidence, nothing else.
@@ -8,7 +8,7 @@
 // Fail closed (SAFE-001): a missing/unknown input is a REJECT, never a PASS.
 // Money is exact decimal strings, never floats — notional is computed with
 // BigInt scaled arithmetic so 0.1*0.3 never drifts into a false pass.
-export const RISK_CODES = ["R-KILL", "R-APPROVAL", "R-SYM", "R-LEV", "R-NOT", "R-EXP", "R-STALE", "R-DUP"];
+export const RISK_CODES = ["R-KILL", "R-APPROVAL", "R-SYM", "R-LEV", "R-NOT", "R-EXP", "R-SLOT", "R-STALE", "R-DUP"];
 
 const DEC_RE = /^\d+(\.\d+)?$/;
 const isDec = (v) => typeof v === "string" && DEC_RE.test(v);
@@ -44,7 +44,7 @@ export function divDec(a, b, scale = 8) {
 const reject = (code, reason, detail = {}) => ({ ok: false, code, reason, detail, risk_code: code });
 const pass = (limits_version) => ({ ok: true, code: "PASS", limits_version });
 
-/** validate — the eight gates in fixed order, first failure wins.
+/** validate — the nine gates in fixed order, first failure wins.
  *
  *  ctx shape (all evidence supplied by the caller, so this stays pure):
  *    { now_ms, limits, limits_version,
@@ -53,6 +53,8 @@ const pass = (limits_version) => ({ ok: true, code: "PASS", limits_version });
  *      watch:    { id, symbol, direction } | null,
  *      price:    { px, at_ms, symbol } | null,
  *      exposure: { open_notional_usd } | null,
+ *      active_watches: number | null,
+ *      active_watches_for_symbol: number | null,
  *      live_intent_for_approval: boolean }
  */
 export function validate(intent, ctx = {}) {
@@ -97,6 +99,20 @@ export function validate(intent, ctx = {}) {
   if (!isDec(px ?? "") || !isDec(intent.qty ?? "")) return reject("R-NOT", "notional not computable (bad qty/price)", { qty: intent.qty ?? null, px: px ?? null });
   const notional = mulDec(intent.qty, px);
 
+  // stop_loss, when present, must be a valid decimal and direction-consistent:
+  //   LONG  -> stop_loss below entry price
+  //   SHORT -> stop_loss above entry price
+  const sl = intent.stop_loss;
+  if (sl !== undefined && sl !== null && sl !== "") {
+    if (!isDec(sl)) return reject("R-NOT", "stop_loss must be a decimal string", { stop_loss: sl });
+    const dir = ctx.watch?.direction ?? ctx.watch?.side;
+    if (dir === "LONG" || dir === "BUY") {
+      if (cmpDec(sl, px) >= 0) return reject("R-NOT", `stop_loss ${normDec(sl)} must be below entry ${normDec(px)} for LONG`, { stop_loss: sl, px });
+    } else if (dir === "SHORT" || dir === "SELL") {
+      if (cmpDec(sl, px) <= 0) return reject("R-NOT", `stop_loss ${normDec(sl)} must be above entry ${normDec(px)} for SHORT`, { stop_loss: sl, px });
+    }
+  }
+
   // R-NOT — per-intent notional <= cap
   if (cmpDec(notional, L.max_notional_usd) > 0) {
     return reject("R-NOT", `notional ${normDec(notional)} exceeds max ${normDec(L.max_notional_usd)}`, { limit: L.max_notional_usd, asked: normDec(notional) });
@@ -108,6 +124,21 @@ export function validate(intent, ctx = {}) {
   const total = addDec(open, notional);
   if (cmpDec(total, L.max_exposure_usd) > 0) {
     return reject("R-EXP", `exposure ${normDec(total)} exceeds cap ${normDec(L.max_exposure_usd)}`, { limit: L.max_exposure_usd, open: normDec(open), asked: normDec(total) });
+  }
+
+  // R-SLOT — portfolio slot cap: max_active_watches (global) and
+  // max_active_watches_per_symbol (per symbol). Unknown count fails closed.
+  const activeWatches = ctx.active_watches;
+  const activeWatchesSym = ctx.active_watches_for_symbol;
+  const maxSlot = L.max_active_watches;
+  const maxSlotSym = L.max_active_watches_per_symbol;
+  if (maxSlotSym !== undefined && maxSlotSym !== null) {
+    if (!Number.isFinite(activeWatchesSym)) return reject("R-SLOT", "active watch count per symbol unknown", { symbol: ctx.watch?.symbol ?? null, limit: maxSlotSym, active: activeWatchesSym ?? null });
+    if (activeWatchesSym >= maxSlotSym) return reject("R-SLOT", `per-symbol active watch limit ${maxSlotSym} reached`, { symbol: ctx.watch?.symbol ?? null, limit: maxSlotSym, active: activeWatchesSym });
+  }
+  if (maxSlot !== undefined && maxSlot !== null) {
+    if (!Number.isFinite(activeWatches)) return reject("R-SLOT", "active watch count unknown", { limit: maxSlot, active: activeWatches ?? null });
+    if (activeWatches >= maxSlot) return reject("R-SLOT", `global active watch limit ${maxSlot} reached`, { limit: maxSlot, active: activeWatches });
   }
 
   // R-STALE — price age <= threshold (missing price/at == stale, SAFE-001)
@@ -144,6 +175,8 @@ export function limitsFrom(config, version) {
     max_exposure_usd: need("max_exposure_usd"),
     allowlist: need("allowlist"),
     stale_s_seconds: need("stale_s_seconds"),
+    max_active_watches: c["max_active_watches"],
+    max_active_watches_per_symbol: c["max_active_watches_per_symbol"],
   };
   if (!Number.isInteger(limits.max_leverage) || limits.max_leverage < 1) { const e = new Error("max_leverage must be a positive integer"); e.code = "DEGRADED"; throw e; }
   if (!isDec(limits.max_notional_usd) || !isDec(limits.max_exposure_usd)) { const e = new Error("notional/exposure limits must be decimal strings"); e.code = "DEGRADED"; throw e; }

@@ -34,15 +34,18 @@ export function createPaperExchange({ loseAck = false, fill = true, reject = fal
   let seq = 0;
   return {
     orders,
-    async submit({ client_order_id, symbol, side, qty, price }) {
+    async submit({ client_order_id, symbol, side, qty, price, stop_loss }) {
       const exchange_order_id = `EX${String(++seq).padStart(6, "0")}`;
       if (reject) {
-        orders.set(client_order_id, { exchange_order_id: null, venue_status: "REJECTED", fills: [] });
+        orders.set(client_order_id, { exchange_order_id: null, venue_status: "REJECTED", fills: [], stop_loss: stop_loss ?? null });
         return { exchange_order_id: null, venue_status: "REJECTED", fills: [] };
       }
       const fills = fill ? Array.from({ length: ttlFills }, () => ({ px: price, qty })) : [];
       orders.set(client_order_id, {
         exchange_order_id, venue_status: fill ? "FILLED" : "NEW", fills,
+        // The stop is carried to the venue as an attached protective stop
+        // (advisory here: it never triggers an exit by itself).
+        stop_loss: stop_loss ?? null,
       });
       if (loseAck) throw ackLost(); // placed, but we never saw the answer
       return { exchange_order_id, venue_status: fill ? "FILLED" : "NEW", fills };

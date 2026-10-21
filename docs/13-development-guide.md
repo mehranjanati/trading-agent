@@ -21,3 +21,10 @@ Forward-only `NNNN_desc.sql`; each migration has up-only SQL + rollback *plan* i
 - Never add auto-trade, withdrawal, or live-enable flags without ADR + human sign-off.
 - Safety-path changes need a reviewer model different from the author (see `15-model-routing`).
 - Record model + date in PR description for E06/E08/E09 changes.
+
+## 13.6 Bot-run & strategy rules (docs/19, binding)
+- Every new strategy follows docs/19 §19.6: standalone module (own `go.mod`, stdlib-only), stdin/stdout contract v1, `make strategy-build SRC=… ID=… VERSION=…`, registry row, golden fixtures pass, `analyze-live` reproduces `POST /analyze`.
+- New work pins `Registry.Active()` only — never pin `retired` for a new run (ADR-011).
+- `aggregate.confidence` is a vote share, not a win probability — never display it as predicted return (SAFE-009).
+- `PreviousState` stays `{}` until the `strat:state:{id}` checkpoint path (docs/17 §17.3) is implemented; stateful strategies must document the gap in the PR.
+- Paper-only until gate: no change in this doc enables live trading.

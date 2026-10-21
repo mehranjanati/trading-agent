@@ -72,4 +72,4 @@ flowchart TB
 - **REST adequacy:** NOT assumed. Required math in ADR-004: `poll_interval ≥ symbols × reqs_per_symbol / rate_limit × 2`. Until proven, claim only "best-effort degraded quotes".
 
 ## 2.7 Interface to other docs
-Components §03 · Data §04 · Events/FSM §05 · Failover §06 · Security §07 · Risk §08 · APIs §10.
+Components §03 · Data §04 · Events/FSM §05 · Failover §06 · Security §07 · Risk §08 · APIs §10 · Bot runs (single/multi-strategy pattern) §19.

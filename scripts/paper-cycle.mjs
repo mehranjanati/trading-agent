@@ -82,6 +82,9 @@ async function main() {
     max_leverage: 5, max_notional_usd: "1000", max_exposure_usd: "5000",
     allowlist: ["BTCUSDT", "ETHUSDT", "SOLUSDT"], stale_s_seconds: 5, approval_ttl_s: 600,
     signal_sources: { paper_sim: ["MTF"] },
+    // Portfolio slot cap (E09-T01c, docs/08 §8.6): the paper cycle must prove
+    // the R-SLOT gate on the real submit path, not only in unit tests.
+    max_active_watches: 10, max_active_watches_per_symbol: 3,
   };
   const act = await http("/api/strategy:activate", { method: "POST", role: "admin", body: { version: `v-paper-${nowMs}`, config: cfg } });
   step("strategy_activated", act.status === 201, { version: act.body?.version });

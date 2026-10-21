@@ -41,5 +41,9 @@ export function intentBody(b) {
   need(SIDE.has(b.side), "side BUY|SELL");
   decStr(b.qty, "qty");
   need(Number.isInteger(b.leverage) && b.leverage >= 1 && b.leverage <= 100, "leverage 1..100");
+  // stop_loss is OPTIONAL and advisory: a decimal price string. Direction
+  // consistency vs the entry price is checked by the risk gate (R-NOT), not
+  // here — the gate owns every numeric verdict (docs/08 §8.2).
+  if (b.stop_loss !== undefined && b.stop_loss !== null) decStr(b.stop_loss, "stop_loss");
   return true;
 }

@@ -21,6 +21,7 @@
 | R-LEV | leverage ≤ max | 5x | reject with limit/asked |
 | R-NOT | notional ≤ max | $1,000/intent (tunable, Q) | reject |
 | R-EXP | total exposure ≤ cap | $5,000 | reject |
+| R-SLOT | concurrent ACTIVE watches ≤ cap | 10 portfolio / 3 per symbol (v2-paper) | reject |
 | R-STALE | price age ≤ threshold | 5s | HOLD + refresh |
 | R-DUP | no live intent for same approval | strict | 409 |
 Limits live in versioned `strategy_configs`; changes need the **admin** role + audit row (RBAC matrix; SAFE-010 separation of duties).
@@ -30,7 +31,7 @@ Limits live in versioned `strategy_configs`; changes need the **admin** role + a
 2. **Every gate fails closed** (SAFE-001): a missing/unknown input — kill state, approval, symbol, price, open exposure, duplicate state — is a reject, never a pass. An unknown kill state is treated as engaged.
 3. Notional and exposure arithmetic is **exact decimal (string) math**, never floats — a boundary like `0.1 × 0.7 = 0.07` must pass exactly.
 4. Limits are the active `strategy_configs` version (E07-T01 pinning); every verdict echoes `limits_version` for audit, and a config missing any bound is a `DEGRADED` system fault — no invented defaults (SAFE-003).
-5. Gate carries: `R-LEV`/`R-NOT`/`R-EXP` include `limit` + `asked` (J3); `R-SYM` includes the permitted set; `R-STALE` includes `action: "HOLD"`.
+5. Gate carries: `R-LEV`/`R-NOT`/`R-EXP` include `limit` + `asked` (J3); `R-SYM` includes the permitted set; `R-STALE` includes `action: "HOLD"`; `R-SLOT` includes `limit` + `active` (+ `symbol` for the per-symbol bound).
 6. Rejections surface as `422 RISK_REJECT {risk_code}` (docs/10); the E09 submit path must call this validator — no other gate implementation is allowed.
 
 ## 8.3 Approval workflow (states)
@@ -43,3 +44,8 @@ Timeout/no-response → `SUBMIT_UNKNOWN` → reconcile by `client_order_id` → 
 `POST /api/kill-switch {engaged, reason}` (operator+). Engaged persists in D1 + DO mirror; all submit paths check first. Release needs second human confirm + reason.
 
 **Implemented (E09-T01, `workers/src/kill.mjs`):** the flag is a fixed-id D1 row read fresh on every submit — a restart cannot silently clear a halt, and the halt is a single indexed read (the <5s requirement is asserted in tests, not assumed). Engage writes the row + `kill.engaged_v1` event + a `kill.engaged` incident with actor and reason; release requires **admin** AND an explicit `confirm: true` (two-person rule enforced in code, RBAC matrix) and writes `kill.released_v1` + a `kill.released` incident. A read failure is surfaced to the gate as `engaged: "unknown"`, which risk.mjs treats as engaged (fail closed).
+
+## 8.6 Portfolio slot cap (`R-SLOT`) & protective stop
+**Slot cap (E09-T01c, docs/19 §19.7 gap 1).** `R-NOT`/`R-EXP` cap *money*, not *concurrency*: a bot could arm unlimited ACTIVE watches and blow every slot at once. `R-SLOT` caps the number of concurrent `ACTIVE` watches, portfolio-wide (`max_active_watches`) and per symbol (`max_active_watches_per_symbol`). Both bounds are **optional config**: absent → the gate is skipped (no invented limit); present → the cap applies. Only `status='ACTIVE'` watches occupy a slot (`DRAFT`/`TRIGGERED`/`INVALIDATED`/`EXPIRED`/`CLOSED` do not). The counts are read from D1 by the submit path itself (`activeWatchCounts`); a failed or unreadable count is **unknown → reject** (SAFE-001), never a pass. The bounds ship in the `v2-paper` config version (migration `0009_slot_cap.sql`); `strategy_configs` rows are immutable, so a new version — never an edit of `v1-paper` — carries the change, keeping every verdict auditable against the version that judged it.
+
+**Protective stop (`stop_loss`, advisory).** `POST /api/orders:intents` accepts an OPTIONAL decimal `stop_loss`. It is validated by the risk gate (a LONG stop must be strictly below the entry price, a SHORT stop strictly above; anything else is `R-NOT`) and stored on `order_intents.stop_loss` (migration `0008_stop_loss.sql`) and passed to the venue. Storing a stop does **not** place an exit order: a watcher/executor reads the column and submits the exit separately. Absent → the column stays `NULL` — a stop is never invented.

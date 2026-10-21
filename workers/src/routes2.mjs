@@ -203,6 +203,7 @@ export function miscRoutes() {
       const limits = limitsFrom(active ? JSON.parse(active.config_json) : null, active?.version);
       const out = await runSubmit(env, {
         approval_id: b.approval_id, side: b.side, qty: b.qty, leverage: b.leverage,
+        ...(b.stop_loss !== undefined ? { stop_loss: b.stop_loss } : {}),
         exchange: env.EXCHANGE ?? defaultExchange,
         lease: await readLease(env).catch(() => null),
         kill: await (async () => { try { return await readKill(env); } catch { return { engaged: "unknown", read_error: true }; } })(),

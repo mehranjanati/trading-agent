@@ -30,9 +30,10 @@ Tables: watches, watch_transitions, signals, events, analysis_runs, approvals, o
 ## 3.6 AI Analyst — owner: advisory rationale
 - **Input:** trigger + signals + regime + config version hash. **Output:** `{bias: LONG|SHORT|FLAT, confidence 0..1, reasons[], invalidation_refs[], model, input_hash, strategy_version}` stored in `analysis_runs`. No order fields. Low-confidence (<0.55 default) → auto-FLAT with reason.
 - **Version pinning (E07-T01-S2a):** `strategy_version` is the active `strategy_configs` version **at run start**, recorded in the run's `output_json`; later activations never rewrite old pins (pin-immutability). Ingested signals likewise carry the schema-registry version they were admitted under (`payload_json._schema_version`).
+- **Bot-run pattern (docs/19, normative for new strategies):** every analysis run is a `BotRun` — 1..8 pinned WASM strategies × 1..4 timeframes for one symbol via `POST /analyze`. Single-strategy runs validate one artifact; multi-strategy runs roll up via vote-share `aggregate` (ERROR excluded, ties → FLAT). New work pins `Registry.Active()` only (ADR-011).
 
 ## 3.7 Risk Engine — owner: deterministic gates (see §08)
-Pure function `validate(intent, ctx) → PASS | REJECT(code, detail)`. Gates: R-KILL, R-APPROVAL, R-SYM, R-LEV, R-NOT, R-EXP, R-STALE, R-DUP. Unit-tested matrix, no network calls except clock. Implemented in `workers/src/risk.mjs` (E08-T01): fixed gate order with first-failure-wins, fail-closed on unknown evidence, exact decimal arithmetic, and every verdict echoing the active `strategy_configs` limits version.
+Pure function `validate(intent, ctx) → PASS | REJECT(code, detail)`. Gates: R-KILL, R-APPROVAL, R-SYM, R-LEV, R-NOT, R-EXP, R-SLOT, R-STALE, R-DUP. Unit-tested matrix, no network calls except clock. Implemented in `workers/src/risk.mjs` (E08-T01): fixed gate order with first-failure-wins, fail-closed on unknown evidence, exact decimal arithmetic, and every verdict echoing the active `strategy_configs` limits version. `R-SLOT` (E09-T01c) caps concurrent ACTIVE watches — the `max_open_trades` equivalent of docs/19 §19.7.
 
 ## 3.8 Execution — owner: submit + reconcile
 `submit(intent)` requires lease epoch + risk PASS + fresh approval; sends signed REST with `clientOrderId`; on timeout → `SUBMIT_UNKNOWN`; `reconcile()` polls to terminal; writes `orders` + `positions` + events.

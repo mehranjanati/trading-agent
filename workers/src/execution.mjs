@@ -54,6 +54,27 @@ export async function hasLiveIntent(env, approval_id) {
   return (r.results?.[0]?.n ?? 0) > 0;
 }
 
+/** Portfolio slot counts for the R-SLOT gate (docs/19 §19.7 gap 1): the number
+ *  of concurrent ACTIVE watches, globally and for one symbol. A failed read is
+ *  `null` (unknown) — the gate then fails closed (SAFE-001), never passes. */
+export async function activeWatchCounts(env, symbol) {
+  const count = async (sql, ...binds) => {
+    const stmt = env.DB.prepare(sql);
+    const r = await (binds.length ? stmt.bind(...binds) : stmt).all();
+    const n = r.results?.[0]?.n;
+    return Number.isFinite(n) ? Number(n) : null;
+  };
+  try {
+    const total = await count("SELECT COUNT(*) AS n FROM watches WHERE status='ACTIVE'");
+    const perSymbol = symbol
+      ? await count("SELECT COUNT(*) AS n FROM watches WHERE status='ACTIVE' AND symbol=?", symbol)
+      : null;
+    return { active_watches: total, active_watches_for_symbol: perSymbol };
+  } catch {
+    return { active_watches: null, active_watches_for_symbol: null };
+  }
+}
+
 /** D-08 fencing: only the authority holder at the current epoch may submit. */
 export function fenceResult(lease, nowMs, holder = HOLDERS.PRIMARY) {
   if (holdsAuthority(lease, holder, nowMs)) return null;
@@ -63,9 +84,10 @@ export function fenceResult(lease, nowMs, holder = HOLDERS.PRIMARY) {
 
 /** The submit path. Returns the HTTP verdict the route surfaces. */
 export async function submitIntent(env, {
-  approval_id, side, qty, leverage, exchange,
+  approval_id, side, qty, leverage, stop_loss, exchange,
   lease, kill, limits, limits_version,
   nowMs = Date.now(), actor = "submit", holder = HOLDERS.PRIMARY,
+  active_watches, active_watches_for_symbol,
 }) {
   const at = new Date(nowMs).toISOString();
   const approval = await readApproval(env, approval_id);
@@ -74,10 +96,23 @@ export async function submitIntent(env, {
   const exposure = watch ? { open_notional_usd: await openExposure(env, watch.symbol) } : null;
   const live = await hasLiveIntent(env, approval_id);
 
-  const intent = { approval_id, side, qty, leverage };
+  const intent = { approval_id, side, qty, leverage, ...(stop_loss !== undefined ? { stop_loss } : {}) };
+  // R-SLOT evidence: the caller may supply the counts; otherwise they are read
+  // from our own D1 state. Unknown stays unknown → the gate fails closed.
+  // The read is skipped when the active config has no slot cap (no invented
+  // limit, and no needless query on the hot submit path).
+  const slotCapConfigured = (limits?.max_active_watches !== undefined && limits?.max_active_watches !== null)
+    || (limits?.max_active_watches_per_symbol !== undefined && limits?.max_active_watches_per_symbol !== null);
+  const slots = slotCapConfigured
+    ? (active_watches === undefined || active_watches_for_symbol === undefined
+        ? await activeWatchCounts(env, watch?.symbol ?? null)
+        : { active_watches, active_watches_for_symbol })
+    : { active_watches: undefined, active_watches_for_symbol: undefined };
   const ctx = {
     now_ms: nowMs, limits, limits_version, kill, approval, watch, price,
     exposure, live_intent_for_approval: live,
+    active_watches: slots.active_watches,
+    active_watches_for_symbol: slots.active_watches_for_symbol,
   };
 
   // 1) lease fence BEFORE any write — a fenced caller must not leave a trace
@@ -115,8 +150,9 @@ export async function submitIntent(env, {
   const client_order_id = intent_id;
   await env.DB.batch([
     env.DB.prepare(
-      "INSERT INTO order_intents(id,watch_id,approval_id,side,qty,leverage,client_order_id,status,at) VALUES(?,?,?,?,?,?,?,'RISK_PASSED',?)",
-    ).bind(intent_id, watch.id, approval_id, side, qty, leverage, client_order_id, at),
+      "INSERT INTO order_intents(id,watch_id,approval_id,side,qty,leverage,stop_loss,client_order_id,status,at) " +
+      "VALUES(?,?,?,?,?,?,?,?,?,?)",
+    ).bind(intent_id, watch.id, approval_id, side, qty, leverage, stop_loss ?? null, client_order_id, "RISK_PASSED", at),
     env.DB.prepare(
       "INSERT INTO events(id,type,entity_id,payload_json,dedupe_key,at) VALUES(?,?,?,?,?,?)",
     ).bind(uid("evt"), "order.intent_v1", watch.id,
@@ -129,7 +165,7 @@ export async function submitIntent(env, {
   // 5) submit. A definitive answer is a state; a lost ack is SUBMIT_UNKNOWN.
   let status, exchange_order_id = null, fills = [];
   try {
-    const res = await exchange.submit({ client_order_id, symbol: watch.symbol, side, qty, price: price.px });
+    const res = await exchange.submit({ client_order_id, symbol: watch.symbol, side, qty, price: price.px, ...(stop_loss !== undefined ? { stop_loss } : {}) });
     status = mapVenueStatus(res.venue_status) ?? "SUBMITTED";
     exchange_order_id = res.exchange_order_id ?? null;
     fills = res.fills ?? [];

@@ -10,7 +10,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql"]
+const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0008_stop_loss.sql"]
   .map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
 let dbFile;
 function sql(q) {
@@ -49,6 +49,7 @@ const NOW = 1_800_000_000_000;
 const LIMITS = {
   max_leverage: 5, max_notional_usd: "1000", max_exposure_usd: "5000",
   allowlist: ["BTCUSDT", "ETHUSDT", "SOLUSDT"], stale_s_seconds: 5,
+  max_active_watches: 10, max_active_watches_per_symbol: 3,
 };
 /** A DB ready to submit: ACTIVE watch, granted approval, held lease, fresh price. */
 function readyEnv({ nowMs = NOW, lease = true, price = "100", priceAgeMs = 1000, approvalExpiresMs = 600_000, exchange = null } = {}) {
@@ -72,7 +73,9 @@ function readyEnv({ nowMs = NOW, lease = true, price = "100", priceAgeMs = 1000,
 const deps = (env, extra = {}) => ({
   approval_id: "ap_1", side: "BUY", qty: "1", leverage: 5,
   exchange: env.EXCHANGE ?? undefined, lease: undefined, kill: { engaged: false },
-  limits: LIMITS, limits_version: "v1-paper", nowMs: NOW, ...extra,
+  limits: LIMITS, limits_version: "v1-paper", nowMs: NOW,
+  active_watches: 0, active_watches_for_symbol: 0,
+  ...extra,
 });
 
 let submitIntent, createPaperExchange, exchangeResolver, reconcile;
@@ -154,6 +157,20 @@ describe("E09-T01-S1/S2 happy path, ack-loss reconcile, idempotency", () => {
     assert.equal(scalar("SELECT COUNT(*) FROM events WHERE type='position.snapshot_v1';"), "1");
   });
 
+  it("the intent row is well-formed: client_order_id and status are not swapped", async () => {
+    // REGRESSION: the INSERT used to carry the literal 'RISK_PASSED' in the
+    // client_order_id position, so the row stored client_order_id='RISK_PASSED'
+    // and status=NULL — the intent could never be reconciled by client id.
+    const ex = createPaperExchange({ fill: true });
+    const env = readyEnv({ exchange: ex });
+    const { readLease } = await import("./health-route.mjs");
+    const out = await submitIntent(env, { ...deps(env, { exchange: ex }), lease: await readLease(env) });
+    assert.equal(out.status, 201);
+    assert.equal(scalar("SELECT client_order_id FROM order_intents;"), out.intent_id);
+    assert.equal(scalar("SELECT status FROM order_intents;"), "FILLED");
+    assert.notEqual(scalar("SELECT client_order_id FROM order_intents;"), "RISK_PASSED");
+  });
+
   it("ACCEPTANCE: lost ack → SUBMIT_UNKNOWN → reconcile by client id → exactly ONE order", async () => {
     const ex = createPaperExchange({ loseAck: true, fill: true });
     const env = readyEnv({ exchange: ex });
@@ -200,5 +217,87 @@ describe("E09-T01-S1/S2 happy path, ack-loss reconcile, idempotency", () => {
     assert.equal(r.resolved, 0);
     assert.equal(r.remaining, 1);
     assert.equal(scalar("SELECT status FROM order_intents;"), "ACKED");
+  });
+});
+
+describe("E09-T01c portfolio slot cap + protective stop (docs/19 §19.7 gap 1)", () => {
+  it("R-SLOT: too many ACTIVE watches → 422, nothing written", async () => {
+    const env = readyEnv();
+    // The submit path reads the counts from D1 when the caller omits them.
+    for (let i = 0; i < 3; i++) {
+      sql(`INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,created_at,updated_at) ` +
+        `VALUES('w_x${i}','BTCUSDT','LONG','{}','{}','ACTIVE',1,'t','${new Date(NOW).toISOString()}','${new Date(NOW).toISOString()}');`);
+    }
+    const { readLease } = await import("./health-route.mjs");
+    const out = await submitIntent(env, {
+      ...deps(env, { active_watches: undefined, active_watches_for_symbol: undefined }),
+      exchange: createPaperExchange({ fill: true }), lease: await readLease(env),
+    });
+    assert.equal(out.risk_code, "R-SLOT");
+    assert.equal(out.status, 422);
+    assert.equal(scalar("SELECT COUNT(*) FROM order_intents;"), "0");
+    assert.equal(scalar("SELECT used_at FROM approvals WHERE id='ap_1';"), "");
+  });
+
+  it("R-SLOT: a per-symbol cap is counted per symbol, not globally", async () => {
+    const env = readyEnv();
+    // 3 ACTIVE watches on ETHUSDT only — the BTCUSDT per-symbol slot is free.
+    for (let i = 0; i < 3; i++) {
+      sql(`INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,created_at,updated_at) ` +
+        `VALUES('w_e${i}','ETHUSDT','LONG','{}','{}','ACTIVE',1,'t','${new Date(NOW).toISOString()}','${new Date(NOW).toISOString()}');`);
+    }
+    const { readLease } = await import("./health-route.mjs");
+    const out = await submitIntent(env, {
+      ...deps(env, { active_watches: undefined, active_watches_for_symbol: undefined }),
+      exchange: createPaperExchange({ fill: true }), lease: await readLease(env),
+    });
+    assert.equal(out.status, 201);
+    assert.equal(scalar("SELECT status FROM order_intents;"), "FILLED");
+  });
+
+  it("R-SLOT: a DRAFT watch does not consume a slot (only ACTIVE counts)", async () => {
+    const env = readyEnv();
+    for (let i = 0; i < 3; i++) {
+      sql(`INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,created_at,updated_at) ` +
+        `VALUES('w_d${i}','BTCUSDT','LONG','{}','{}','DRAFT',1,'t','${new Date(NOW).toISOString()}','${new Date(NOW).toISOString()}');`);
+    }
+    const { readLease } = await import("./health-route.mjs");
+    const out = await submitIntent(env, {
+      ...deps(env, { active_watches: undefined, active_watches_for_symbol: undefined }),
+      exchange: createPaperExchange({ fill: true }), lease: await readLease(env),
+    });
+    assert.equal(out.status, 201);
+  });
+
+  it("stop_loss is persisted on the intent and carried to the venue", async () => {
+    const ex = createPaperExchange({ fill: true });
+    const env = readyEnv({ exchange: ex });
+    const { readLease } = await import("./health-route.mjs");
+    const out = await submitIntent(env, {
+      ...deps(env, { exchange: ex, stop_loss: "90" }), lease: await readLease(env),
+    });
+    assert.equal(out.status, 201);
+    assert.equal(scalar("SELECT stop_loss FROM order_intents;"), "90");
+    assert.equal(ex.orders.get(out.client_order_id).stop_loss, "90");
+  });
+
+  it("a stop_loss on the wrong side of the entry is rejected (R-NOT)", async () => {
+    const env = readyEnv({ exchange: createPaperExchange({ fill: true }) });
+    const { readLease } = await import("./health-route.mjs");
+    const out = await submitIntent(env, {
+      ...deps(env, { stop_loss: "110" }), lease: await readLease(env), // LONG entry 100 → stop must be BELOW
+    });
+    assert.equal(out.risk_code, "R-NOT");
+    assert.equal(out.status, 422);
+    assert.equal(scalar("SELECT COUNT(*) FROM order_intents;"), "0");
+  });
+
+  it("no stop_loss → the column stays NULL (advisory, never invented)", async () => {
+    const ex = createPaperExchange({ fill: true });
+    const env = readyEnv({ exchange: ex });
+    const { readLease } = await import("./health-route.mjs");
+    const out = await submitIntent(env, { ...deps(env, { exchange: ex }), lease: await readLease(env) });
+    assert.equal(out.status, 201);
+    assert.equal(scalar("SELECT stop_loss IS NULL FROM order_intents;"), "1");
   });
 });

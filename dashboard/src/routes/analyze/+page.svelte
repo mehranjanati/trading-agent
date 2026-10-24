@@ -12,6 +12,7 @@
   let direction: "LONG" | "SHORT" | "" = "";
   let timeframes = ["5m", "15m", "1h"];
   let usePosition = false;
+  let regimeFilter = false;
   let position = { entry: "", size: "", leverage: 1 };
   let strategies = [{ id: "sma-cross", version: "0.1.0", config: {} }];
   let loading = false;
@@ -141,6 +142,14 @@
     {/if}
 
     <div class="field">
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={regimeFilter} />
+        regime filter (ETHBTC · USDT.D · BTC.D · TOTAL3)
+      </label>
+      <p style="font-size:0.75rem;color:#6e7783;margin-top:4px;">when enabled, a hostile regime forces FLAT / reduces confidence</p>
+    </div>
+
+    <div class="field">
       <label>strategies</label>
       {#each strategies as s, i}
         <div class="strategy-row">
@@ -201,7 +210,7 @@
         <div>inval LONG: {result.suggest_zones.inval_long}</div>
         <div>trigger SHORT: {result.suggest_zones.trigger_short}</div>
         <div>inval SHORT: {result.suggest_zones.inval_short}</div>
-        <StalkSetup proposal={stalkProposal} contextLabel="from deep analysis {result.id}" />
+        <StalkSetup proposal={stalkProposal} contextLabel="from deep analysis {result.id}" regimeFilter={regimeFilter} />
       </div>
 
       <h2>per-strategy verdicts</h2>

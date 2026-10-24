@@ -25,6 +25,7 @@
   let pickStrategy = "";
   let tradeable: boolean | null = null;
   let direction: "LONG" | "SHORT" | "" = "";
+  let regimeFilter = false;
   let analyzing = false;
   let analyzeErr: string | null = null;
   let result: AnalyzeResponse | null = null;
@@ -145,6 +146,12 @@
           </select>
           <button on:click={runAnalyze} disabled={analyzing} class="primary">{analyzing ? "analyzing..." : "analyze"}</button>
         </div>
+        <div class="row-btns">
+          <label class="checkbox mini">
+            <input type="checkbox" bind:checked={regimeFilter} />
+            regime filter
+          </label>
+        </div>
         <div class="meta">
           strategy: {pin.id}@{pin.version} ·
           {pinSource === "registry" ? "live registry (Go plane)" : "OFFLINE MIRROR (go-watcher unreachable)"}
@@ -158,7 +165,7 @@
               zones from {result.suggest_zones.source}{#if result.suggest_zones.bars} · {result.suggest_zones.bars} bars{/if}{#if result.suggest_zones.last} · last {result.suggest_zones.last}{/if}
             </div>
           {/if}
-          <StalkSetup proposal={stalkProposal} contextLabel="from {result.id}" />
+          <StalkSetup proposal={stalkProposal} contextLabel="from {result.id}" regimeFilter={regimeFilter} />
         {/if}
       </section>
     </div>

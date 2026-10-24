@@ -8,10 +8,11 @@
   export let invalidReason: string | null = null;
   export let contextLabel: string | null = null;
 
+  export let regimeFilter = false;
+
   let busy = false;
   let error: string | null = null;
   let watchId: string | null = null;
-  let regimeFilter = false;
 
   // How far the two armed prices sit from the close they were measured on. A
   // band a fraction of a percent wide is decided by the next tick, so the watch

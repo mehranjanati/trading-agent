@@ -19,6 +19,7 @@
   $: rows = (result?.ok ? result.data.watches : []).map((w: any) => ({
     id: w.id, symbol: w.symbol, direction: w.direction, status: w.status, version: w.version,
     created_by: w.created_by,
+    regime_filter: w.regime_filter === 1,
   }));
   $: freshness = badgeFor(result);
   void badge;
@@ -26,5 +27,6 @@
 
 <DataPage title="watches (ACTIVE)" result={result} badge={freshness} columns={[
   { key: "id", label: "id" }, { key: "symbol", label: "symbol" }, { key: "direction", label: "dir" },
-  { key: "status", label: "status" }, { key: "version", label: "v" }, { key: "created_by", label: "by" },
+  { key: "status", label: "status" }, { key: "version", label: "v" }, { key: "regime_filter", label: "regime" },
+  { key: "created_by", label: "by" },
 ]} rows={rows} />

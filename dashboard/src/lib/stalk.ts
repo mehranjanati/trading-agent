@@ -24,6 +24,9 @@ export interface SetupProposal {
   chat_session?: string;
   message_id?: string;
   analyze_id?: string;
+  // When true, the market-regime veto (ETHBTC / USDT.D / BTC.D / TOTAL3) is
+  // applied before this watch can reach an order. Absent/false = no regime filter.
+  regime_filter?: boolean;
 }
 
 const SYM_RE = /^[A-Z]{2,12}USDT$/;
@@ -176,6 +179,7 @@ export function normalizeProposal(p: SetupProposal): SetupProposal {
     chat_session: p.chat_session,
     message_id: p.message_id,
     analyze_id: p.analyze_id,
+    regime_filter: p.regime_filter === true,
   };
 }
 
@@ -185,12 +189,21 @@ export function stalkBody(p: SetupProposal): {
   direction: "LONG" | "SHORT";
   trigger: { op: string; price: string };
   invalidation: { op: string; price: string };
+  regime_filter?: boolean;
 } {
   const n = normalizeProposal(p);
-  return {
+  const body: {
+    symbol: string;
+    direction: "LONG" | "SHORT";
+    trigger: { op: string; price: string };
+    invalidation: { op: string; price: string };
+    regime_filter?: boolean;
+  } = {
     symbol: n.symbol,
     direction: n.direction,
     trigger: { op: n.trigger_op!, price: n.trigger_price },
     invalidation: { op: n.inval_op!, price: n.invalidation_price },
   };
+  if (n.regime_filter === true) body.regime_filter = true;
+  return body;
 }

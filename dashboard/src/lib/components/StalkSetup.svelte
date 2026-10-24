@@ -11,6 +11,7 @@
   let busy = false;
   let error: string | null = null;
   let watchId: string | null = null;
+  let regimeFilter = false;
 
   // How far the two armed prices sit from the close they were measured on. A
   // band a fraction of a percent wide is decided by the next tick, so the watch
@@ -21,7 +22,7 @@
     if (!proposal || busy || watchId) return;
     busy = true;
     error = null;
-    const res = await postWatch(stalkBody(proposal));
+    const res = await postWatch({ ...stalkBody(proposal), regime_filter: regimeFilter });
     busy = false;
     if (res.ok) {
       watchId = (res.data as { id: string }).id;
@@ -45,6 +46,15 @@
     <div class="stalk-grid">
       <div>trigger <strong>{proposal.trigger_op} {proposal.trigger_price}</strong></div>
       <div>invalidation <strong>{proposal.inval_op} {proposal.invalidation_price}</strong></div>
+    </div>
+    <div class="stalk-row">
+      <label class="stalk-toggle">
+        <input type="checkbox" bind:checked={regimeFilter} />
+        regime filter (ETHBTC · USDT.D · BTC.D · TOTAL3)
+      </label>
+      {#if regimeFilter}
+        <span class="stalk-cap">when enabled, a hostile regime forces FLAT / reduces confidence</span>
+      {/if}
     </div>
     {#if proposal.zone_source}
       <div class="stalk-meta">
@@ -103,6 +113,10 @@
   .stalk button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .stalk-error { margin-top: 8px; color: #ef4444; font-size: 0.85rem; }
   .stalk-warn { margin-top: 6px; color: #eab308; font-size: 0.8rem; }
+  .stalk-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 0.8rem; color: #8b949e; }
+  .stalk-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  .stalk-toggle input { accent-color: #238636; }
+  .stalk-cap { font-size: 0.72rem; color: #6e7783; }
   .stalk-ok { margin-top: 8px; color: #22c55e; font-size: 0.9rem; }
   .stalk-ok a { color: #22c55e; }
 </style>

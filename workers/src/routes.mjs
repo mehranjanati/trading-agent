@@ -44,8 +44,8 @@ export function watchRoutes(store) {
       // needs its own single-use human approval (SAFE-002, D-08).
       const batch = [
         env.DB.prepare(
-          "INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,'DRAFT',1,?,?,?,?)",
-        ).bind(id, b.symbol, b.direction, JSON.stringify(b.trigger), JSON.stringify(b.invalidation ?? {}), actor, b.expires_at ?? null, now, now),
+          "INSERT INTO watches(id,symbol,direction,trigger_json,invalidation_json,status,version,created_by,expires_at,regime_filter,created_at,updated_at) VALUES(?,?,?,?,?,'DRAFT',1,?,?,?,?,?)",
+        ).bind(id, b.symbol, b.direction, JSON.stringify(b.trigger), JSON.stringify(b.invalidation ?? {}), actor, b.expires_at ?? null, b.regime_filter === true ? 1 : 0, now, now),
         ...transitionStatements(env, {
           id, from: "DRAFT", to: "ACTIVE", expectedVersion: 1,
           tid: uid("tr"), reason: "publish (stalk)", actor, at: now,

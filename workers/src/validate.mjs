@@ -19,6 +19,11 @@ export function watchBody(b) {
   need(b.trigger && typeof b.trigger.op === "string", "trigger.op required");
   need(["cross_above", "cross_below", ">=", "<="].includes(b.trigger.op), "trigger.op unknown");
   decStr(b.trigger.price, "trigger.price");
+  // regime_filter is optional: when true, the market-regime veto (ETHBTC/USDT.D/BTC.D/TOTAL3)
+  // is applied before this watch can move to an order. Absent/false = no regime filter.
+  if (b.regime_filter !== undefined && b.regime_filter !== null) {
+    need(typeof b.regime_filter === "boolean", "regime_filter must be boolean");
+  }
   return true;
 }
 export function signalBody(b) {

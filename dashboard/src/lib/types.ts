@@ -19,6 +19,7 @@ export interface Watch {
   id: string; symbol: string; direction: "LONG" | "SHORT";
   trigger_json: string; invalidation_json: string; status: string;
   version: number; expires_at: string | null; updated_at: string;
+  regime_filter?: number;
 }
 export interface Signal {
   id: string; watch_id: string | null; kind: string;

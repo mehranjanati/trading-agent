@@ -5,6 +5,8 @@ import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
 import { uid, roleOf, guard, readBody, writeErr, recordIncident, sha256Hex } from "./_shared.mjs";
 import { enqueueAlert } from "./notify.mjs";
 import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed, listVersions } from "./strategies.mjs";
+import { evaluateRegime } from "./regime.mjs";
+import { fetchRegimeIndices } from "./regime-feed.mjs";
 import { decideApproval as decideApprovalRecord, readApproval, listApprovals, ttlMsFrom } from "./approvals.mjs";
 import { limitsFrom } from "./risk.mjs";
 import { submitIntent as runSubmit } from "./execution.mjs";
@@ -47,7 +49,7 @@ async function persistSignal(env, b, { schema_version, tagged }) {
 /** readWatch — the fields every analysis/trigger decision needs. */
 async function readWatch(env, id) {
   const rows = (await env.DB.prepare(
-    "SELECT id,symbol,direction,status,version FROM watches WHERE id=?",
+    "SELECT id,symbol,direction,status,version,regime_filter FROM watches WHERE id=?",
   ).bind(id).all()).results ?? [];
   return rows[0] ?? null;
 }
@@ -72,6 +74,10 @@ function degraded(message) {
  *  @returns {Promise<{id: string, out: object}>} */
 async function analyzeWatch(env, w) {
   const base = watcherBase(env);
+  // E07-T01-S2a: pin the version active AT RUN START — old runs keep their pin.
+  const activeCfg = await activeVersion(env);
+  let regimeCfg = {};
+  try { regimeCfg = JSON.parse(activeCfg?.config_json ?? "{}"); } catch { regimeCfg = {}; }
   let pins;
   try {
     const regRes = await fetch(`${base}/strategies/registry`);
@@ -96,6 +102,34 @@ async function analyzeWatch(env, w) {
     throw degraded(`analysis engine unavailable (${e.message})`);
   }
 
+  // ---- regime pre-check (only when the watch opted in) ----
+  let regimeOut = null;
+  let regimePenalty = 0;
+  if (Number(w.regime_filter ?? 0) === 1 && regimeCfg.regime?.enabled !== false) {
+    try {
+      const prices = await fetchRegimeIndices();
+      regimeOut = evaluateRegime({ symbol: w.symbol, direction: w.direction, prices, config: regimeCfg });
+    } catch {
+      regimeOut = evaluateRegime({ symbol: w.symbol, direction: w.direction, prices: { ETHBTC: null, "USDT.D": null, "BTC.D": null, TOTAL3: null }, config: regimeCfg });
+    }
+
+    if (regimeOut.verdict === "VETO" && regimeOut.force_flat) {
+      const out = {
+        bias: "FLAT", confidence: 0, reasons: [regimeOut.reason],
+        model: "regime-filter",
+        input_hash: await sha256Hex(JSON.stringify({ symbol: w.symbol, direction: w.direction, regime: regimeOut })),
+        strategy_version: activeCfg?.version ?? null,
+        regime: regimeOut, engine: null,
+      };
+      const id = uid("an");
+      await env.DB.prepare(
+        "INSERT INTO analysis_runs(id,watch_id,model,input_hash,output_json,confidence,at) VALUES(?,?,?,?,?,?,?)",
+      ).bind(id, w.id, out.model, out.input_hash, JSON.stringify(out), out.confidence, new Date().toISOString()).run();
+      return { id, out };
+    }
+    regimePenalty = regimeOut.confidence_penalty ?? 0;
+  }
+
   const ask = { symbol: w.symbol, direction: w.direction, strategies: pins };
   let engine;
   try {
@@ -110,16 +144,17 @@ async function analyzeWatch(env, w) {
   const agg = engine?.aggregate ?? {};
   if (typeof agg.bias !== "string") throw degraded("analysis engine returned no aggregate");
 
-  // E07-T01-S2a: pin the version active AT RUN START — old runs keep their pin.
-  const active = await activeVersion(env);
   const verdicts = engine.verdicts ?? [];
+  const rawConfidence = Number(agg.confidence ?? 0);
+  const penalizedConfidence = Math.max(0, Math.min(1, rawConfidence * (1 - regimePenalty)));
   const out = {
     bias: agg.bias,
-    confidence: agg.confidence,
-    reasons: [agg.explanation ?? ""],
+    confidence: penalizedConfidence,
+    reasons: [agg.explanation ?? "", regimeOut?.reason].filter(Boolean),
     model: "wasm-engine",
     input_hash: await sha256Hex(JSON.stringify(ask)),
-    strategy_version: active?.version ?? null,
+    strategy_version: activeCfg?.version ?? null,
+    regime: regimeOut ?? null,
     engine: {
       analyze_id: engine.id ?? null,
       at: engine.at ?? null,

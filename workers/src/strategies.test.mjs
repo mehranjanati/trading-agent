@@ -13,7 +13,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql"]
+const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql", "migrations/0005_chat_attachments.sql", "migrations/0006_notify_outbox.sql", "migrations/0007_notify_prefs.sql", "migrations/0008_stop_loss.sql", "migrations/0009_slot_cap.sql", "migrations/0010_regime_filter.sql"]
   .map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
 let dbFile;
 function sql(q) {
@@ -214,7 +214,8 @@ describe("E07-T01-S2a version activation + run pinning", () => {
         { method: "POST", headers: { "content-type": "application/json", "x-role": role }, body: JSON.stringify({ version: "v2", config: V2 }) }), env);
       assert.equal(denied.status, 403, role);
     }
-    assert.equal(sql("SELECT COUNT(*) FROM strategy_configs;").trim(), "1");
+    // chain now runs 0001..0010, so seed strategy_configs holds v1-paper + v2-paper
+    assert.equal(sql("SELECT COUNT(*) FROM strategy_configs;").trim(), "2");
     const bad = await app.fetch(new Request("http://x/api/strategy:activate",
       { method: "POST", headers: { "content-type": "application/json", "x-role": "admin" }, body: JSON.stringify({ version: "v2", config: "{nope" }) }), env);
     assert.equal(bad.status, 400);

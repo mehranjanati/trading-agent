@@ -17,7 +17,7 @@ import { CORS, corsFor, BROWSER_POST_PATHS } from "./errors.mjs";
 import { TEMPLATE_MAIN } from "./strategies-template.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql", "migrations/0005_chat_attachments.sql"]
+const chain = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql", "migrations/0005_chat_attachments.sql", "migrations/0006_notify_outbox.sql", "migrations/0007_notify_prefs.sql", "migrations/0008_stop_loss.sql", "migrations/0009_slot_cap.sql", "migrations/0010_regime_filter.sql"]
   .map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
 let dbFile;
 function sql(q) {

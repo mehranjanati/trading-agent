@@ -16,6 +16,7 @@ import { tick as pollOnce, pollStatus } from "./fallback-poll.mjs";
 import { generateRoutes } from "./strategies-ai.mjs";
 import { proxyRoutes } from "./proxy.mjs";
 import { listSymbols } from "./symbols.mjs";
+import { listPrices } from "./quotes.mjs";
 import { drainNotifications } from "./notify.mjs";
 
 const store = createStore();
@@ -60,6 +61,16 @@ export default {
       if (req.method === "GET" && p === "/api/symbols") {
         try {
           return ok({ ...(await listSymbols(env)), at: new Date().toISOString() });
+        } catch (e) {
+          return writeErr(e);
+        }
+      }
+      // Live venue quotes for the dashboard rooms + the /setups grid. Read-only,
+      // fail-soft per symbol (missing[]), the ADR-004 weight window is shared
+      // with the poller so a dashboard burst can never 429 the trading plane.
+      if (req.method === "GET" && p === "/api/prices") {
+        try {
+          return ok({ ...(await listPrices(env, { url: u })), at: new Date().toISOString() });
         } catch (e) {
           return writeErr(e);
         }

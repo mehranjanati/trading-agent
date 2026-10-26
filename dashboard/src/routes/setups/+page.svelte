@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getSymbols, isTradeable, validateSymbolInput, type SymbolsData } from "$lib/symbols";
-  import { getWatchesAll, getApprovals, getPositions, badgeFor } from "$lib/api";
+  import { getWatchesAll, getApprovals, getPositions, getPrices, badgeFor, type PricesData } from "$lib/api";
   import { setups, deriveStatus, roomWatchIds, type SetupStatus } from "$lib/setups";
   import DataPage from "$lib/components/DataPage.svelte";
   import Badge from "$lib/components/Badge.svelte";
@@ -14,6 +14,10 @@
   let watches: any[] = [];
   let approvals: any[] = [];
   let positions: any[] = [];
+  // Live venue prices, one unfiltered weight-1 venue request per refresh (the
+  // Worker serves the whole map, 5s in-isolate cache). Absent key = unanswered —
+  // the card shows "—", never a stale invented number.
+  let prices: Record<string, string> = {};
   let filter = "";
   let custom = "";
 
@@ -39,10 +43,11 @@
     const r = await getSymbols();
     if (r.ok) { symbols = r.data; symErr = null; }
     else { symbols = null; symErr = r.error; }
-    const [w, a, p] = await Promise.all([getWatchesAll(), getApprovals(), getPositions()]);
+    const [w, a, p, px] = await Promise.all([getWatchesAll(), getApprovals(), getPositions(), getPrices()]);
     if (w.ok) watches = (w.data as { watches: any[] }).watches;
     if (a.ok) approvals = (a.data as { approvals: any[] }).approvals;
     if (p.ok) positions = (p.data as { positions: any[] }).positions;
+    if (px.ok) prices = (px.data as PricesData).prices;
   }
 
   onMount(() => {
@@ -78,6 +83,7 @@
         {@const tradeable = isTradeable(symbols, s)}
         <button class="room" on:click={() => open(s)}>
           <div class="room-sym">{s}</div>
+          <div class="room-px">{prices[s] ?? "—"}</div>
           <div class="room-badges">
             <span class="pill {st === 'OPEN' ? 'open' : st === 'STALKING' ? 'stalk' : st === 'AWAITING-APPROVAL' ? 'await' : 'idle'}">{st}</span>
             <span class="pill {tradeable ? 'trade' : 'venue'}" title={tradeable ? "in the active risk allowlist" : "venue-only: risk gate R-SYM would reject"}>{tradeable ? "tradeable" : "venue-only"}</span>
@@ -110,7 +116,8 @@
     padding: 12px 14px; cursor: pointer; text-align: left; color: #e6e9ef;
   }
   .room:hover { border-color: #30363d; background: #161b22; }
-  .room-sym { font-weight: 700; font-family: monospace; margin-bottom: 8px; }
+  .room-sym { font-weight: 700; font-family: monospace; margin-bottom: 4px; }
+  .room-px { font-family: monospace; font-size: 0.85rem; color: #c9d1d9; margin-bottom: 8px; }
   .room-badges { display: flex; flex-wrap: wrap; gap: 4px; }
   .pill { font-size: 0.7rem; padding: 2px 8px; border-radius: 20px; border: 1px solid #30363d; color: #8b949e; }
   .pill.open { color: #22c55e; border-color: #22c55e; }

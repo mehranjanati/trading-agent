@@ -408,6 +408,13 @@ export async function downscaleImage(
   }
 }
 
+/** Live venue quote(s) — GET /api/prices. Read-only, fail-soft per symbol:
+ *  `missing` names what the venue did not answer (a price is never invented),
+ *  `stale` marks a cached answer served while the venue was unreachable. */
+export type PricesData = { prices: Record<string, string>; missing: string[]; stale?: boolean };
+export const getPrices = (symbols?: string[]) =>
+  getJson<PricesData>(`/api/prices${symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(","))}` : ""}`);
+
 export const getHealth = () => getJson<Health>("/api/health");
 export const getWatches = () => getJson<{ watches: Watch[] }>("/api/watches?status=ACTIVE");
 /** EVERY watch, newest first (no status filter — the Worker's list route with no

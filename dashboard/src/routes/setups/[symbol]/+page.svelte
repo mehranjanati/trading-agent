@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { getWatchesAll, getApprovals, getIntents, getPositions, postAnalyze, getRegistry, getAnalysis } from "$lib/api";
+  import { getWatchesAll, getApprovals, getIntents, getPositions, postAnalyze, getRegistry, getAnalysis, getPrices, type PricesData } from "$lib/api";
   import type { AnalyzeRequest, AnalyzeResponse } from "$lib/types";
   import { getSymbols } from "$lib/symbols";
   import { setups, touchSetup, deriveStatus, roomWatches, roomWatchIds, linkStrategyTo, unlinkStrategyFrom, toggleGroupLink } from "$lib/setups";
@@ -16,6 +16,11 @@
   let intents: any[] = [];
   let positions: any[] = [];
   let runs: any[] = [];
+  // Live venue quote for this room's symbol (GET /api/prices — read-only,
+  // fail-soft). null = not answered yet; quoteErr = the venue/Worker failed —
+  // the header says "unavailable", it never invents a price.
+  let quote: { price: string; at: string } | null = null;
+  let quoteErr: string | null = null;
   // The room's own selection: which strategies / groups are "in play" here. Both
   // were append-only before — a group could be linked from /strategies and never
   // removed, and `strategies` was written by nobody, so this card was permanently
@@ -68,13 +73,21 @@
     } catch { return null; }
   }
   async function refresh() {
-    const [w, a, i, p, s, r] = await Promise.all([getWatchesAll(), getApprovals(), getIntents(), getPositions(), getSymbols(), getAnalysis()]);
+    const [w, a, i, p, s, r, q] = await Promise.all([getWatchesAll(), getApprovals(), getIntents(), getPositions(), getSymbols(), getAnalysis(), getPrices([symbol])]);
     if (w.ok) watches = (w.data as { watches: any[] }).watches;
     if (a.ok) approvals = (a.data as { approvals: any[] }).approvals;
     if (i.ok) intents = (i.data as { intents: any[] }).intents;
     if (p.ok) positions = (p.data as { positions: any[] }).positions;
     if (s.ok) tradeable = s.data.allowlist.includes(symbol);
     if (r.ok) runs = (r.data as { runs: any[] }).runs;
+    if (q.ok) {
+      const px = (q.data as PricesData).prices[symbol];
+      quote = px ? { price: px, at: q.at } : null;
+      quoteErr = px ? null : "venue did not answer";
+    } else {
+      quote = null;
+      quoteErr = q.error;
+    }
     const reg = await getRegistry();
     const { entries, source } = composeCatalog(reg.ok ? reg.data.strategies : null, []);
     catalog = entries;
@@ -104,6 +117,13 @@
           {#if tradeable === true}<span class="pill trade">tradeable</span>
           {:else if tradeable === false}<span class="pill venue">venue-only</span>{/if}
         </div>
+        {#if quote}
+          <div class="quote">last <strong>{quote.price}</strong> <span class="quote-at">toobit futures · {quote.at}</span></div>
+        {:else if quoteErr}
+          <div class="quote dim">price unavailable — {quoteErr}</div>
+        {:else}
+          <div class="quote dim">loading price…</div>
+        {/if}
       </div>
       <div class="actions">
         <button on:click={() => goto(`/chat?symbol=${symbol}`)} class="primary">open {symbol} chat</button>
@@ -219,6 +239,10 @@
   .pill.idle { color: #6b7280; }
   .pill.trade { color: #22c55e; border-color: #22c55e; }
   .pill.venue { color: #6b7280; }
+  .quote { font-family: monospace; font-size: 1rem; color: #c9d1d9; margin-top: 8px; }
+  .quote strong { font-size: 1.15rem; color: #e6e9ef; }
+  .quote-at { color: #6b7280; font-size: 0.75rem; margin-left: 8px; }
+  .quote.dim { color: #6b7280; font-size: 0.85rem; }
   .actions { display: flex; gap: 12px; align-items: center; }
   .actions a { color: #8b949e; font-size: 0.85rem; }
   button.primary { padding: 8px 16px; background: #238636; border: 1px solid #238636; border-radius: 6px; color: #e6e9ef; font-weight: 600; cursor: pointer; }

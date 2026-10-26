@@ -19,6 +19,28 @@ func TestSymbolMap(t *testing.T) {
 	}
 }
 
+// ToVenue is the inverse used by EVERY Toobit REST call: the canonical form
+// resolves to the spot book, so a futures read must send the dash form
+// (docs/ops/TOOBIT-API-FACTS.md S4).
+func TestToVenue(t *testing.T) {
+	for in, want := range map[string]string{
+		"BTCUSDT":       "BTC-SWAP-USDT",
+		"ETHUSDT":       "ETH-SWAP-USDT",
+		"EDUUSDT":       "EDU-SWAP-USDT",
+		"btc-usdt":      "BTC-SWAP-USDT",
+		"BTC-SWAP-USDT": "BTC-SWAP-USDT",
+		// Non-USDT pairs have no USDT-M contract: pass through (asking 400s).
+		"ETHBTC": "ETHBTC",
+	} {
+		if got := normalize.ToVenue(in); got != want {
+			t.Errorf("ToVenue(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := normalize.ToCanonical(normalize.ToVenue("EDUUSDT")); got != "EDUUSDT" {
+		t.Fatalf("round trip failed: %s", got)
+	}
+}
+
 func TestParseTrade(t *testing.T) {
 	// S2 acceptance: verified example message → 2 canonical ticks + tx IDs.
 	ticks, dropped := normalize.ParseTrade([]byte(tradeMsg), 1668753155000)

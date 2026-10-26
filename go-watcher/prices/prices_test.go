@@ -15,16 +15,20 @@ import (
 // venue answers 404, so every Toobit quote silently fell through to Binance (and
 // in a geo-blocked environment to nothing at all) — the chat reported "market
 // data unavailable" while the venue was perfectly reachable on /quote/v1/....
+//
+// Second regression (S4): the canonical form answers the SPOT book, so the
+// request must use the venue (dash) form and the answer must be that exact
+// instrument.
 func TestToobitTickerReadsTheVerifiedFilteredShape(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/quote/v1/contract/ticker/price" {
 			t.Errorf("wrong path requested: %s", r.URL.Path)
 		}
-		if r.URL.Query().Get("symbol") != "BTCUSDT" {
-			t.Errorf("symbol must be sent singular (symbols= is ignored by the venue): %s", r.URL.RawQuery)
+		if r.URL.Query().Get("symbol") != "BTC-SWAP-USDT" {
+			t.Errorf("symbol must be the FUTURES form (canonical answers spot): %s", r.URL.RawQuery)
 		}
 		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`[{"s":"BTCUSDT","p":"82440"}]`))
+		_, _ = w.Write([]byte(`[{"s":"BTC-SWAP-USDT","p":"82440"}]`))
 	}))
 	defer srv.Close()
 	t.Setenv("TOOBIT_BASE", srv.URL)
@@ -35,6 +39,19 @@ func TestToobitTickerReadsTheVerifiedFilteredShape(t *testing.T) {
 	}
 	if p.Px != "82440" || p.Symbol != "BTCUSDT" || p.Src != "toobit-rest" {
 		t.Fatalf("unexpected price: %+v", p)
+	}
+}
+
+// A canonical echo on the contract path is the SPOT price (80312 vs 80287 in the
+// same second, S4). It must be refused, not labelled as the venue futures quote.
+func TestToobitTickerRefusesTheSpotEcho(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"s":"BTCUSDT","p":"80312.09"}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("TOOBIT_BASE", srv.URL)
+	if _, ok := toobitTicker(context.Background(), "BTCUSDT", time.Now()); ok {
+		t.Fatal("a spot echo must not be quoted as the futures instrument")
 	}
 }
 

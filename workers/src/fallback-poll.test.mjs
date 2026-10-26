@@ -81,21 +81,31 @@ describe("E06-T02-S3c budget arithmetic + guards (pure)", () => {
     assert.equal(w.canSpend(60_000, 100), true);
   });
 
-  it("parses the price payload (both live shapes) and the documented 429", async () => {
-    const { parseQuotes, priceUrl, canonicalSymbol, isRateLimited, resetAtFrom, nextBackoffMs, MAX_BACKOFF_MS } = await import("./fallback-poll.mjs");
-    // filtered live shape: canonical symbol, no dash form
-    assert.deepEqual(parseQuotes([{ s: "BTCUSDT", p: "83838" }]), [{ symbol: "BTCUSDT", price: "83838" }]);
-    // unfiltered live shape: dash form + si
+  it("parses the futures price payload and the documented 429", async () => {
+    const { parseQuotes, priceUrl, canonicalSymbol, venueSymbol, isRateLimited, resetAtFrom, nextBackoffMs, MAX_BACKOFF_MS } = await import("./fallback-poll.mjs");
+    // unfiltered/filtered FUTURES shape: dash form (+ si on the bulk list)
     assert.deepEqual(parseQuotes([{ s: "BTC-SWAP-USDT", si: "BTC-SWAP-USDT", p: "6.6" }]), [{ symbol: "BTCUSDT", price: "6.6" }]);
-    assert.deepEqual(parseQuotes({ data: [{ symbol: "ETHUSDT", price: 2 }] }), [{ symbol: "ETHUSDT", price: "2" }]);
+    assert.deepEqual(parseQuotes({ data: [{ symbol: "ETH-SWAP-USDT", price: 2 }] }), [{ symbol: "ETHUSDT", price: "2" }]);
     assert.deepEqual(parseQuotes({ nope: true }), []);
+    // The canonical form is the SPOT book on Toobit; a futures read must reject
+    // it rather than label a spot price as the venue (TOOBIT-API-FACTS S4).
+    assert.deepEqual(parseQuotes([{ s: "BTCUSDT", p: "80312" }], ["BTCUSDT"], { venueForm: true }), []);
+    assert.deepEqual(
+      parseQuotes([{ s: "BTC-SWAP-USDT", p: "80287" }], ["BTCUSDT"], { venueForm: true }),
+      [{ symbol: "BTCUSDT", price: "80287" }],
+    );
     // the unfiltered venue answer must never leak into the poll set
     const list = [{ s: "ZEN-SWAP-USDT", p: "6.6" }, { s: "BTC-SWAP-USDT", p: "83838" }];
     assert.deepEqual(parseQuotes(list, ["BTCUSDT"]), [{ symbol: "BTCUSDT", price: "83838" }]);
     assert.deepEqual(parseQuotes(list, ["ETHUSDT"]), []);
     assert.equal(canonicalSymbol("BTC-SWAP-USDT"), "BTCUSDT");
-    // one weight-1 filtered request per symbol (the `symbols=` form is ignored live)
-    assert.match(priceUrl("https://api.toobit.com/", "BTCUSDT"), /ticker\/price\?symbol=BTCUSDT$/);
+    assert.equal(venueSymbol("BTCUSDT"), "BTC-SWAP-USDT");
+    assert.equal(venueSymbol("EDUUSDT"), "EDU-SWAP-USDT");
+    assert.equal(venueSymbol("ETHBTC"), "ETHBTC"); // crosses have no USDT-M contract
+    assert.equal(venueSymbol("BTC-SWAP-USDT"), "BTC-SWAP-USDT"); // idempotent
+    // one weight-1 filtered FUTURES request per symbol (the `symbols=` form is ignored live)
+    assert.match(priceUrl("https://api.toobit.com/", "BTCUSDT"), /ticker\/price\?symbol=BTC-SWAP-USDT$/);
+    assert.match(priceUrl("https://api.toobit.com", "EDUUSDT"), /ticker\/price\?symbol=EDU-SWAP-USDT$/);
     assert.doesNotMatch(priceUrl("https://api.toobit.com/", "BTCUSDT"), /symbols=/);
     assert.equal(isRateLimited({ status: 429 }), true);
     assert.equal(isRateLimited({ status: 200, body: { code: -1003 } }), true);
@@ -182,7 +192,7 @@ describe("E06-T02-S3c no-429 proof (stub exchange, simulated clock)", () => {
     const get = async (url) => {
       calls++;
       const sym = new URL(url).searchParams.get("symbol");
-      if (sym === "ETHUSDT" && calls === 2) throw new Error("This operation was aborted");
+      if (sym === "ETH-SWAP-USDT" && calls === 2) throw new Error("This operation was aborted");
       return { status: 200, body: [{ s: sym, p: "1" }] };
     };
     const res = await tick({}, {
@@ -278,12 +288,13 @@ describe("E06-T02-S3c no-429 proof (stub exchange, simulated clock)", () => {
 });
 
 describe("E06-T02-S3c D1 wiring + health/cron integration", () => {
-  /** Faithful price fake: echoes the requested symbol (canonical), like the live
-   *  filtered endpoint. An empty string means "this symbol is not quoted". */
+  /** Faithful price fake: echoes the requested (futures/dash) symbol, like the
+   *  live filtered endpoint. An empty body means "this symbol is not quoted". */
   const priceGet = (unquoted = []) => async (url) => {
-    const sym = new URL(url).searchParams.get("symbol") ?? "";
+    const raw = new URL(url).searchParams.get("symbol") ?? "";
+    const sym = raw.replaceAll("-", "").replaceAll("SWAP", ""); // canonical identity
     if (unquoted.includes(sym)) return { status: 200, body: [] };
-    return { status: 200, body: [{ s: sym, p: "1" }] };
+    return { status: 200, body: [{ s: raw, p: "1" }] };
   };
 
   it("the status row is a single fixed-id upsert (no table growth)", async () => {
@@ -349,7 +360,8 @@ describe("E06-T02-S3c D1 wiring + health/cron integration", () => {
     // after one poll the fallback snapshot is fresh enough to be usable
     await pollOnce(env, {
       nowMs: now, mode: "FALLBACK", store: d1Store(env), symbols: ["BTCUSDT"], jitter: () => 0,
-      get: async () => ({ status: 200, body: [{ s: "BTCUSDT", p: "1" }] }),
+      // the live futures endpoint echoes the requested (venue) form
+      get: async (url) => ({ status: 200, body: [{ s: new URL(url).searchParams.get("symbol"), p: "1" }] }),
     });
     const after = evaluate(await assembleSignals(env, now + 1_000));
     assert.equal(after.components.find((c) => c.component === "prices").status, "FRESH");
@@ -364,7 +376,8 @@ describe("E06-T02-S3c D1 wiring + health/cron integration", () => {
     await handoffLease(env, { holder: HOLDERS.PRIMARY, nowMs: now });
 
     const res = await runCron(env, {
-      nowMs: now, symbols: ["BTCUSDT"], get: async () => ({ status: 200, body: [{ s: "BTCUSDT", p: "1" }] }),
+      nowMs: now, symbols: ["BTCUSDT"],
+      get: async (url) => ({ status: 200, body: [{ s: new URL(url).searchParams.get("symbol"), p: "1" }] }),
     });
     assert.equal(res.poll.round, "ok");
     assert.equal(res.poll.drained, true);

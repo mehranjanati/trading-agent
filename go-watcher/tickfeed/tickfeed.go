@@ -21,7 +21,6 @@ package tickfeed
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"trading-agent/go-watcher/normalize"
@@ -113,12 +112,8 @@ func PublishRedis(t normalize.Tick) error {
 }
 
 // wsSymbol maps the canonical form to the venue's WS form (BTCUSDT →
-// BTC-SWAP-USDT) — the inverse of normalize.ToCanonical, which is what the
-// subscribe message needs.
+// BTC-SWAP-USDT) — one implementation with the REST call sites, so the socket
+// and the fallback poll can never disagree about which market they quote.
 func wsSymbol(symbol string) string {
-	s := strings.ToUpper(strings.TrimSpace(symbol))
-	if strings.HasSuffix(s, "USDT") && len(s) > 4 {
-		return s[:len(s)-4] + "-SWAP-USDT"
-	}
-	return s
+	return normalize.ToVenue(symbol)
 }

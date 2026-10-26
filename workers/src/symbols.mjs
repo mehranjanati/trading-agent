@@ -1,10 +1,16 @@
 // symbols.mjs — Toobit-backed tradeable symbol list (Workers proxy).
 //
 // WHY A PROXY: Toobit has no CORS allow for browser fetches and the raw
-// full-ticker answer is ~61KB / ~1022 markets in the dash form
+// full-ticker answer is ~61KB / ~1033 markets in the dash form
 // (`BTC-SWAP-USDT`). The Worker fetches once, canonicalises to the repo-wide
 // form (`BTCUSDT`, same as canonicalSymbol + normalize.ToCanonical), caches
 // 1h, and answers the dashboard with a light array.
+//
+// THIS IS THE FUTURES UNIVERSE: the path is /quote/v1/contract/ticker/price and
+// every row carries the `-SWAP-` infix (773 USDT-M + 10 USDC-M + test rows).
+// `parseSymbols` keeps only `...USDT`, so the canonical `EDUUSDT` the dashboard
+// shows is the USDT-M perpetual `EDU-SWAP-USDT`, never the spot market
+// (TOOBIT-API-FACTS S4: the canonical form resolves to spot on the ticker paths).
 //
 // Weight discipline (ADR-004): ONE venue weight-1 request per cache miss,
 // served from cache otherwise — the dashboard poll never touches the venue.

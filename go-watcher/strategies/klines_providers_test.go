@@ -4,7 +4,10 @@
 // CI; a failure means a provider moved, not that the test is flaky.
 package strategies
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // okxInst mapping: venue symbol → OKX instrument.
 func TestOkxInst(t *testing.T) {
@@ -14,6 +17,22 @@ func TestOkxInst(t *testing.T) {
 		if got := okxInst(sym); got != want {
 			t.Errorf("okxInst(%s) = %s, want %s", sym, got, want)
 		}
+	}
+}
+
+// The Toobit klines request must use the FUTURES form: the canonical form
+// returns spot candles even on /quote/v1/klines (TOOBIT-API-FACTS S4), which
+// would build ATR zones from a market we do not trade.
+func TestToobitKlinesURLUsesVenueForm(t *testing.T) {
+	u := toobitKlinesURL("BTCUSDT", "1h")
+	if !strings.Contains(u, "symbol=BTC-SWAP-USDT") {
+		t.Fatalf("toobit klines must request the venue form: %s", u)
+	}
+	if strings.Contains(u, "symbol=BTCUSDT&") {
+		t.Fatalf("canonical form would return spot candles: %s", u)
+	}
+	if !strings.Contains(u, "interval=1h") || !strings.Contains(u, "limit=120") {
+		t.Fatalf("unexpected query: %s", u)
 	}
 }
 

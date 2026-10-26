@@ -13,7 +13,7 @@ export const DEFAULT_WINDOW_MS = 60_000;
 
 export function createStubExchange({
   budgetPerMin = 3000, windowMs = DEFAULT_WINDOW_MS, now = () => Date.now(),
-  fullList = false, ignoreFilter = false, markets = 1022,
+  fullList = false, ignoreFilter = false, markets = 1033,
 } = {}) {
   const hits = [];
   const stats = { requests: 0, weight: 0, limited: 0, symbols_served: 0, peak_usage: 0, limited_at: [] };
@@ -22,8 +22,10 @@ export function createStubExchange({
 
   const server = http.createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://127.0.0.1");
-    // Mirrors the live endpoint (TOOBIT-API-FACTS S2a): `?symbol=X` filters (weight 1),
-    // `?symbols=` is ignored and answers the whole venue (weight = market count).
+    // Mirrors the live endpoint (TOOBIT-API-FACTS S2a + S4): `?symbol=X` filters
+    // (weight 1), `?symbols=` is ignored and answers the whole venue (weight =
+    // market count). The symbol FORM selects the book, so the filtered answer
+    // echoes exactly what was asked — the poller sends `-SWAP-` (futures).
     const single = u.searchParams.get("symbol");
     const symbols = single ? [single] : (u.searchParams.get("symbols") ?? "").split(",").filter(Boolean);
     const filtered = !!single && !ignoreFilter;
@@ -45,9 +47,9 @@ export function createStubExchange({
     stats.weight += weight;
     res.writeHead(200, { "content-type": "application/json" });
     if (filtered) {
-      // filtered answer: canonical symbol form, one item
+      // filtered answer: the venue echoes the requested (futures/dash) symbol
       stats.symbols_served += 1;
-      res.end(JSON.stringify([{ s: single.replaceAll("-", "").toUpperCase(), p: String(1000) }]));
+      res.end(JSON.stringify([{ s: single.toUpperCase(), p: String(1000) }]));
       return;
     }
     if (fullList || ignoreFilter) {

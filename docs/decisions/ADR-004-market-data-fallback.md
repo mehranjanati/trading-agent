@@ -7,7 +7,7 @@ When the primary WS dies we still need bounded, honest quotes to supervise open 
 
 ## Verified inputs (E02-T01, source `https://api-docs.toobit.com`, accessed 2026-10-10)
 - REST base `https://api.toobit.com`; `REQUEST_WEIGHT` **3000/min** (=50/s); `ORDERS` 60/2s (separate limiter, untouched by polling).
-- Poll endpoint: `GET /quote/v1/contract/ticker/price` weight **1** (per-symbol or all-symbols array).
+- Poll endpoint: `GET /quote/v1/contract/ticker/price` weight **1** (per-symbol or all-symbols array). **Symbol form selects the market** (S4, 2026-10-26): request `BTC-SWAP-USDT`; `BTCUSDT` answers the spot book even on this path.
 - WS base `wss://stream.toobit.com` + `/quote/ws/v1`; topics `trade/markPrice/bookTicker/...`; ping required or disconnect ≤5min; WS symbol form `BTC-SWAP-USDT`.
 
 ## Decision

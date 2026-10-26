@@ -4,8 +4,11 @@
 // => regime.mjs fail-closes (VETO for altcoins, SAFE-001).
 //
 // Index map:
-//   ETHBTC   -> exchange pair (Toobit, then OKX, then Binance klines), with a
-//               CoinGecko ETH/BTC ratio as the last-resort fallback
+//   ETHBTC   -> cross pair from OKX (instId=ETH-BTC), then Binance (ETHBTC), with
+//               a CoinGecko ETH/BTC ratio as the last-resort fallback.
+//               NOT Toobit: our venue lists USDT-M perpetuals only — both
+//               `ETHBTC` and `ETH-SWAP-BTC` return 400 Invalid Symbols
+//               (verified 2026-10-26), so a Toobit attempt is a guaranteed miss.
 //   USDT.D   -> USDT dominance estimate (CoinGecko markets: supply-weighted)
 //   BTC.D    -> BTC dominance estimate (CoinGecko markets: supply-weighted)
 //   TOTAL3   -> altcoin market cap estimate (CoinGecko markets: total − BTC − ETH)
@@ -33,12 +36,16 @@ const json = (url, headers = {}) =>
   withTimeout(fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }), FETCH_TIMEOUT_MS)
     .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
 
-// ---- ETHBTC from exchange klines (Toobit -> OKX -> Binance) ----
-const toobitKlines = (sym) => json(`https://api.toobit.com/quote/v1/klines?symbol=${sym}&interval=1h&limit=120`)
-  .then((arr) => Array.isArray(arr) ? arr.map((c) => String(c[4] ?? c.close ?? c)).filter(Boolean) : null);
-
+// ---- ETHBTC from exchange klines (OKX -> Binance) ----
+// Toobit is deliberately NOT in this chain: its futures venue has no ETHBTC
+// contract (verified 400 for both symbol forms, TOOBIT-API-FACTS S4).
 const okxKlines = (sym) => {
-  const inst = sym.replace("USDT", "-USDT"); // ETHBTC -> ETH-BTC (OKX uses - for alts)
+  // OKX instruments use a dash: ETHBTC -> ETH-BTC, ETHUSDT -> ETH-USDT.
+  const s = String(sym).toUpperCase();
+  const inst = s.endsWith("USDT") ? `${s.slice(0, -4)}-USDT`
+    : s.endsWith("BTC") ? `${s.slice(0, -3)}-BTC`
+      : s.endsWith("ETH") ? `${s.slice(0, -3)}-ETH`
+        : s;
   return json(`https://www.okx.com/api/v5/market/candles?instId=${inst}&bar=1H&limit=120`)
     .then((r) => {
       const data = r.data ?? r;
@@ -46,12 +53,14 @@ const okxKlines = (sym) => {
     });
 };
 
+// Binance is the second leg; it can answer 451 from datacenter IPs, so the
+// caller treats any failure as "try the next source" (never a fabricated bar).
 const binanceKlines = (sym) =>
   json(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=120`)
     .then((arr) => Array.isArray(arr) ? arr.map((c) => String(c[4])).filter(Boolean) : null);
 
 const fetchEthbtcCloses = async () => {
-  for (const fn of [toobitKlines, okxKlines, binanceKlines]) {
+  for (const fn of [okxKlines, binanceKlines]) {
     try { const c = await fn("ETHBTC"); if (c && c.length >= MIN_BARS) return c; } catch { /* try next */ }
   }
   return null;

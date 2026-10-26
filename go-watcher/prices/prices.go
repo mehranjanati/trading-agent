@@ -176,20 +176,28 @@ func fromREST(ctx context.Context, symbol string, now time.Time) (Price, bool) {
 
 // toobitTicker: GET {TOOBIT_BASE|https://api.toobit.com}/quote/v1/contract/ticker/price?symbol=
 //
-// Verified live 2026-10-16 (docs/ops/TOOBIT-API-FACTS.md S2a): the filtered form
-// answers [{"s":"BTCUSDT","p":"82440"}] in the CANONICAL symbol form, while
-// `?symbols=` is IGNORED and answers the whole venue in the dash form. The path
-// used to be /api/v1/... — a 404 — so every Toobit quote silently fell through to
-// Binance and the chat reported "market data unavailable" instead of a price.
+// Verified live 2026-10-16 (docs/ops/TOOBIT-API-FACTS.md S2a): the singular
+// `?symbol=` filter works while `?symbols=` is IGNORED and answers the whole
+// venue in the dash form. The path used to be /api/v1/... — a 404 — so every
+// Toobit quote silently fell through to Binance and the chat reported "market
+// data unavailable" instead of a price.
+//
+// 2026-10-26 correction (S4): the symbol form selects the market. `symbol=BTCUSDT`
+// answers the SPOT book even on this /contract/ path (80312.09), while
+// `symbol=BTC-SWAP-USDT` is the USDT-M perpetual the watcher evaluates
+// (80287.40). We therefore ASK in the venue form and REFUSE an answer that is
+// not exactly that instrument — a spot quote must never be labelled
+// "toobit-rest" (the venue) or drive a trigger.
 func toobitTicker(ctx context.Context, symbol string, now time.Time) (Price, bool) {
 	base := os.Getenv("TOOBIT_BASE")
 	if base == "" {
 		base = "https://api.toobit.com"
 	}
 	base = strings.TrimRight(base, "/")
-	u := base + "/quote/v1/contract/ticker/price?symbol=" + symbol
+	want := normalize.ToVenue(symbol)
+	u := base + "/quote/v1/contract/ticker/price?symbol=" + want
 	var rows []struct {
-		S      string          `json:"s"` // canonical filtered form
+		S      string          `json:"s"` // venue (futures) form
 		P      json.RawMessage `json:"p"`
 		Symbol string          `json:"symbol"` // tolerate the object form too
 		Price  json.RawMessage `json:"price"`
@@ -206,9 +214,13 @@ func toobitTicker(ctx context.Context, symbol string, now time.Time) (Price, boo
 	if !ok || px == "" {
 		return Price{}, false
 	}
-	// The filtered endpoint answers the canonical symbol; if the venue ever
-	// answers a different market, it must NOT be quoted as this one.
-	if row.S != "" && normalize.ToCanonical(row.S) != normalize.ToCanonical(symbol) {
+	got := row.S
+	if got == "" {
+		got = row.Symbol
+	}
+	// Exact instrument match, not canonical equivalence: canonical equivalence
+	// would accept the spot echo (BTCUSDT), which is the bug this guard closes.
+	if got != want {
 		return Price{}, false
 	}
 	return Price{Symbol: symbol, Px: px, Ts: now.UnixMilli(), Src: "toobit-rest"}, true

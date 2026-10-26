@@ -39,7 +39,7 @@ Limits live in versioned `strategy_configs`; changes need the **admin** role + a
 
 | Index | Feed | Trend rule |
 |---|---|---|
-| ETHBTC | Toobit → OKX → Binance 1h klines; CoinGecko ETH/BTC ratio as last resort | close vs EMA-50 |
+| ETHBTC | OKX `ETH-BTC` → Binance `ETHBTC`; CoinGecko ETH/BTC ratio fallback (Toobit futures lists no ETHBTC contract) | close vs EMA-50 |
 | BTC.D · USDT.D · TOTAL3 | CoinGecko top-250 markets, supply-weighted 7-day hourly sparkline (labelled estimate) | close vs EMA-50 |
 
 The run records which provider answered each index in `regime.detail.sources` (`exchange-klines` for the venue pair, `coingecko-estimate` for the supply-weighted approximation), so a measured series is never confused with an estimate.

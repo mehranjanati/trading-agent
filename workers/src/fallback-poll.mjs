@@ -77,20 +77,38 @@ export function canonicalSymbol(raw) {
   return String(raw ?? "").toUpperCase().trim().replaceAll("-", "").replaceAll("SWAP", "");
 }
 
-/** Request URL for one symbol. Live-verified 2026-10-11 (TOOBIT-API-FACTS S2a):
- *  `?symbol=BTCUSDT` (singular) filters and answers in the canonical form, while
- *  `?symbols=...` is IGNORED and returns all ~1022 markets (61KB, dash form). The poller
- *  therefore issues one weight-1 request per symbol — the ADR-004 math as written. */
-export function priceUrl(baseUrl, symbol) {
-  return `${String(baseUrl).replace(/\/$/, "")}${PRICE_PATH}?symbol=${encodeURIComponent(symbol)}`;
+/** Venue (futures) form: `BTCUSDT` → `BTC-SWAP-USDT`. THE SYMBOL FORM SELECTS THE
+ *  MARKET: Toobit answers `?symbol=BTCUSDT` from its SPOT book even on the
+ *  /quote/v1/contract/... path, while `BTC-SWAP-USDT` is the USDT-M perpetual
+ *  (verified 2026-10-26, TOOBIT-API-FACTS S4: BTCUSDT 80312.09 vs
+ *  BTC-SWAP-USDT 80287.40 in the same second). Every futures REST read must send
+ *  this form. Mirrors go-watcher/normalize.ToVenue. */
+export function venueSymbol(symbol) {
+  // Idempotent: canonicalise first, so an already-venue form cannot double-append.
+  const s = canonicalSymbol(symbol);
+  return /^[A-Z0-9]{2,12}USDT$/.test(s) ? `${s.slice(0, -4)}-SWAP-USDT` : s;
 }
 
-/** Parse the price endpoint. Accepted shapes: the filtered canonical form
- *  `{"s":"BTCUSDT","p":"83838"}` and the full-list dash form `{"s":"BTC-SWAP-USDT",
- *  "si":...,"p":...}` (live-verified 2026-10-11). Symbols are canonicalised and, when
- *  `wanted` is given, anything outside the poll set is dropped — the venue's unfiltered
- *  answer must never leak into our quote snapshot. */
-export function parseQuotes(body, wanted = null) {
+/** Request URL for one symbol. Live-verified 2026-10-11 (TOOBIT-API-FACTS S2a):
+ *  `?symbol=` (singular) filters the answer, while `?symbols=...` is IGNORED and
+ *  returns the whole venue (~1033 markets, 61KB, dash form). The poller therefore
+ *  issues one weight-1 request per symbol — the ADR-004 math as written.
+ *  2026-10-26 correction: the symbol is sent in the venue (dash) form so the
+ *  answer is the FUTURES book, not spot (TOOBIT-API-FACTS S4). */
+export function priceUrl(baseUrl, symbol) {
+  return `${String(baseUrl).replace(/\/$/, "")}${PRICE_PATH}?symbol=${encodeURIComponent(venueSymbol(symbol))}`;
+}
+
+/** Parse the price endpoint. Accepted shapes: the futures filtered form
+ *  `{"s":"BTC-SWAP-USDT","p":"83838"}` and the full-list dash form
+ *  `{"s":"BTC-SWAP-USDT","si":...,"p":...}`. Symbols are canonicalised and, when
+ *  `wanted` is given, anything outside the poll set is dropped — the venue's
+ *  unfiltered answer must never leak into our quote snapshot.
+ *
+ *  `venueForm` is the fail-closed guard for the futures poll: a row WITHOUT the
+ *  `-SWAP-` infix is the spot book (Toobit resolves the canonical form to spot,
+ *  see venueSymbol) and must never be quoted as a futures price. */
+export function parseQuotes(body, wanted = null, { venueForm = false } = {}) {
   const list = Array.isArray(body) ? body : (body?.data ?? []);
   const allow = wanted ? new Set(wanted.map(canonicalSymbol)) : null;
   const out = [];
@@ -98,6 +116,7 @@ export function parseQuotes(body, wanted = null) {
     const raw = r?.s ?? r?.symbol;
     const price = r?.p ?? r?.price;
     if (!raw || price === undefined || price === null) continue;
+    if (venueForm && !String(raw).toUpperCase().includes("-SWAP-")) continue;
     const symbol = canonicalSymbol(raw);
     if (allow && !allow.has(symbol)) continue;
     out.push({ symbol, price: String(price) });
@@ -257,7 +276,7 @@ export async function tick(env, opts = {}) {
     if (!res) { failure = { reason: "transport-error", error: lastError ?? "unknown" }; break; }
     if (isRateLimited(res)) { rateLimited = res; break; }
     if (res.status !== 200) { failure = { reason: `http-${res.status}`, status: res.status }; break; }
-    quotes.push(...parseQuotes(res.body, [symbol]));
+    quotes.push(...parseQuotes(res.body, [symbol], { venueForm: true }));
   }
 
   if (rateLimited) {

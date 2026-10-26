@@ -1,9 +1,12 @@
 // Klines: public REST fetch for deep analysis (paper-safe — no keys, GET
-// only). Primary is Toobit public klines (D-06 venue); Binance public klines
-// is the fallback (same BTCUSDT/ETHUSDT/SOLUSDT spot symbols, universal
-// millisecond close-time format). Both return oldest-first closes that the
-// template's priceWindow consumes. Any failure returns an error — an analysis
-// with unknown market data is NO data, never interpolated data.
+// only). Primary is Toobit public klines (D-06 venue); OKX then Binance are the
+// fallbacks for symbols the venue does not list. Any failure returns an error —
+// an analysis with unknown market data is NO data, never interpolated data.
+//
+// VENUE FORM MATTERS: Toobit's canonical form (BTCUSDT) resolves to its SPOT
+// market even on /quote/v1/klines; only BTC-SWAP-USDT is the USDT-M perpetual we
+// actually trade (verified 2026-10-26, docs/ops/TOOBIT-API-FACTS.md S4). Every
+// Toobit request therefore goes through normalize.ToVenue.
 package strategies
 
 import (
@@ -13,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"trading-agent/go-watcher/normalize"
 )
 
 // klinesTimeout bounds one provider call; two providers is the failover
@@ -97,13 +102,20 @@ func numToStr(v any) (string, bool) {
 	}
 }
 
+// toobitKlinesURL builds the futures klines request. The symbol is sent in the
+// venue (dash) form: the canonical form returns SPOT candles (S4), which would
+// make ATR zones and strategy windows describe a market we do not trade.
+func toobitKlinesURL(symbol, interval string) string {
+	return fmt.Sprintf("https://api.toobit.com/quote/v1/klines?symbol=%s&interval=%s&limit=%d",
+		normalize.ToVenue(symbol), interval, klinesLimit)
+}
+
 // toobitKlines: GET https://api.toobit.com/quote/v1/klines
-// (symbol=BTCUSDT, interval=5m|15m|1h|4h, limit). Rows are arrays
+// (symbol=BTC-SWAP-USDT, interval=5m|15m|1h|4h, limit). Rows are arrays
 // [open_time_ms, open, high, low, close, volume, ...], oldest first.
 func toobitKlines(symbol, interval string) ([]CandleWire, error) {
 	var rows [][]any
-	u := fmt.Sprintf("https://api.toobit.com/quote/v1/klines?symbol=%s&interval=%s&limit=%d", symbol, interval, klinesLimit)
-	if err := getJSON(u, &rows); err != nil {
+	if err := getJSON(toobitKlinesURL(symbol, interval), &rows); err != nil {
 		return nil, err
 	}
 	return rowsToWire(rows)

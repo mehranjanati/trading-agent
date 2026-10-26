@@ -32,6 +32,27 @@ func ToCanonical(wsSymbol string) string {
 	return s
 }
 
+// ToVenue maps the canonical form to the venue's FUTURES form
+// (BTCUSDT → BTC-SWAP-USDT) — the inverse of ToCanonical.
+//
+// Required by the WS subscribe message AND every Toobit REST market-data call:
+// the symbol form selects the market. Toobit answers `?symbol=BTCUSDT` from its
+// SPOT book even on /quote/v1/contract/..., while `BTC-SWAP-USDT` is the USDT-M
+// perpetual (verified 2026-10-26, docs/ops/TOOBIT-API-FACTS.md S4:
+// BTCUSDT 80312.09 vs BTC-SWAP-USDT 80287.40 in the same second).
+//
+// Non-USDT symbols pass through: our venue lists USDT-M perpetuals only, so a
+// cross like ETHBTC has no venue form (and 400s if asked).
+func ToVenue(canonical string) string {
+	// Idempotent: accept either identity (BTCUSDT) or an already-venue form
+	// (BTC-SWAP-USDT / btc-usdt) so call sites cannot double-append the infix.
+	s := ToCanonical(canonical)
+	if strings.HasSuffix(s, "USDT") && len(s) > 4 {
+		return s[:len(s)-4] + "-SWAP-USDT"
+	}
+	return s
+}
+
 // wireTrade mirrors the trade topic envelope.
 type wireTrade struct {
 	Symbol string `json:"symbol"`

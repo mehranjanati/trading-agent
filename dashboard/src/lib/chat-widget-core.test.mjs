@@ -81,6 +81,25 @@ describe("buildOutbound", () => {
     assert.equal(e.image.detail, "low");
     assert.equal(e.image.mediaType, "image/png");
   });
+  it("multi-chart turn carries the images array AND the legacy first image", () => {
+    const e = buildOutbound({
+      id: "t1",
+      content: "compare",
+      images: [
+        { mediaType: "image/png", dataUrl: "data:a" },
+        { mediaType: "image/jpeg", dataUrl: "data:b" },
+      ],
+    });
+    assert.equal(e.images.length, 2);
+    assert.equal(e.images[0].detail, "low");
+    assert.equal(e.images[1].mediaType, "image/jpeg");
+    assert.equal(e.image.dataUrl, "data:a"); // back-compat with the pre-multi server
+  });
+  it("an empty images list degrades to the legacy single-image envelope", () => {
+    const e = buildOutbound({ id: "t1", content: "look", images: [null, undefined].filter(Boolean), image: { mediaType: "image/png", dataUrl: "data:.." } });
+    assert.ok(!("images" in e));
+    assert.equal(e.image.dataUrl, "data:..");
+  });
   it("carries the page/room context only when non-empty", () => {
     assert.ok(!("context" in buildOutbound({ id: "t1", content: "hi", context: "   " })));
     const e = buildOutbound({ id: "t1", content: "hi", context: '{"route":"/chat"}' });
@@ -132,6 +151,21 @@ describe("buildRestOutbound", () => {
     assert.ok(Array.isArray(out[1].content));
     assert.equal(out[1].content[1].type, "image_url");
     assert.equal(typeof out[2].content, "string");
+  });
+  it("multi charts become one image_url part each, in order", () => {
+    const msgs = [{ id: "b", role: "user", content: "compare" }];
+    const out = buildRestOutbound(msgs, "b", null, [
+      { dataUrl: "data:a" },
+      { dataUrl: "data:b" },
+      { dataUrl: "" }, // junk is dropped, not sent as a broken part
+    ]);
+    assert.equal(out[0].content.length, 3); // text + 2 real charts
+    assert.equal(out[0].content[1].image_url.url, "data:a");
+    assert.equal(out[0].content[2].image_url.url, "data:b");
+  });
+  it("a text-only turn keeps the string content shape", () => {
+    const out = buildRestOutbound([{ id: "b", role: "user", content: "hi" }], "b", null, []);
+    assert.equal(typeof out[0].content, "string");
   });
 });
 

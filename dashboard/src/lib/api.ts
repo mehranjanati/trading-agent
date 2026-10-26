@@ -373,6 +373,11 @@ export function chatSocket(id: string): WebSocket {
 /** MAX_IMAGE_EDGE is the longest-edge cap applied before upload. */
 export const MAX_IMAGE_EDGE = 1568;
 
+/** MAX_IMAGES_PER_TURN caps how many charts one chat message may carry
+ *  (mirrors go-watcher/chat maxImagesPerTurn — each is ~1400 prompt tokens
+ *  at detail:"low" and the WS frame + window budget must hold them all). */
+export const MAX_IMAGES_PER_TURN = 4;
+
 /** One downscaled chart ready for a turn (data URL + decoded size). */
 export type ChartAttachment = { mediaType: string; dataUrl: string; bytes: number };
 

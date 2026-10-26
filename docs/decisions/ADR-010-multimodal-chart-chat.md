@@ -25,10 +25,12 @@ column value.
 
 ## Decision
 - **Wire.** The dashboard downscales client-side to a 1568px longest edge, JPEG q0.85,
-  and sends `{type:"message", id, content, image:{mediaType,dataUrl,detail}}` over the
-  existing chat WebSocket. Go validates the media-type allow-list (png/jpeg/webp), the
-  dataUrl↔mediaType match and the size cap, and raises the WS read limit 64 KiB → 4 MiB
-  for one chart frame.
+  and sends `{type:"message", id, content, images:[{mediaType,dataUrl,detail}], image}` over
+  the existing chat WebSocket — a turn carries up to `maxImagesPerTurn` (4) charts, one
+  `image_url` part each; the legacy singular `image` still carries the first chart so an
+  older server analyzes at least one. Go validates every entry against the media-type
+  allow-list (png/jpeg/webp), the dataUrl↔mediaType match and the size cap, and raises the
+  WS read limit 64 KiB → 10 MiB for a multi-chart frame.
 - **Model routing.** A turn carrying an image part routes to `AI_VISION_MODEL`
   (`@cf/qwen/qwen3.8-27b`); text-only turns stay on the cheap `AI_MODEL`. The Worker
   reports the choice on `x-ai-model` / `x-ai-vision`.

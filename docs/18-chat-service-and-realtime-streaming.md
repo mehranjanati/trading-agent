@@ -26,9 +26,10 @@ HTTP:
 
 WebSocket `/ws/chat/{id}` — the socket stays open for the next turn:
 
-- client → `{"type":"message","id","content","image?":{"mediaType","dataUrl","detail?"},"context?"}`
-  where `id` is a client-minted turn id (`crypto.randomUUID()`), `image` is a
-  downscaled base64 data URL (ADR-010), and `context` is the dashboard's
+- client → `{"type":"message","id","content","images?":[{"mediaType","dataUrl","detail?"}],"image?":{"mediaType","dataUrl","detail?"},"context?"}`
+  where `id` is a client-minted turn id (`crypto.randomUUID()`), `images` is the
+  per-turn chart batch (≤4, ADR-010) and the singular `image` mirrors its first
+  entry for servers that predate the batch, and `context` is the dashboard's
   ROOM/SETUP block for this room (see 18.3a) — data, capped at 4000 bytes.
 - client → `{"type":"principles","content"}`
 - server → `{"type":"chunk","text"}`* then
@@ -136,15 +137,19 @@ origins so the socket rejects foreign `Origin` headers.
 
 ## 18.7 Chart attachments (ADR-010)
 
-A user turn may carry one chart screenshot. The pipeline:
+A user turn may carry up to four chart screenshots (`maxImagesPerTurn`); each one
+becomes its own `image_url` part, so "compare these two timeframes" is a single
+turn. The pipeline:
 
-1. **Client** downscales to a 1568px longest edge, JPEG q0.85 (`downscaleImage` in
-   `dashboard/src/lib/api.ts`), and sends it inline over the WS. A 1600x900 chart is
-   ~1432 prompt tokens at `detail:"low"` and cost scales with resolution, so the
-   downscale is mandatory, not cosmetic.
-2. **Go** validates the media type (png/jpeg/webp), the dataUrl↔mediaType match and
-   the size cap, stores the turn (with the inline data URL) in Redis, and sends the
-   window to the Worker as OpenAI content parts.
+1. **Client** downscales each to a 1568px longest edge, JPEG q0.85 (`downscaleImage` in
+   `dashboard/src/lib/api.ts`), appends it to the pending batch (paste, file picker
+   or drop — the 4-chart cap is enforced client-side too) and sends the batch inline
+   over the WS. A 1600x900 chart is ~1432 prompt tokens at `detail:"low"` and cost
+   scales with resolution, so the downscale is mandatory, not cosmetic.
+2. **Go** validates every entry against the media type (png/jpeg/webp), the
+   dataUrl↔mediaType match and the size cap, drops the overflow past the cap, stores
+   the turn (with the inline data URLs) in Redis, and sends the window to the Worker
+   as OpenAI content parts.
 3. **Worker** routes the turn to `AI_VISION_MODEL`, persists the decoded bytes to R2
    (`CHAT_MEDIA`) and a metadata row to D1 `chat_attachments`, then streams as usual.
    A missing binding or a storage error is swallowed — chat is advisory.

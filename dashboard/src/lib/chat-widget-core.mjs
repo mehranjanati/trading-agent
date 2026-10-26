@@ -48,13 +48,23 @@ export function applyWsEvent(state, msg) {
 }
 
 /** Build the WS outbound envelope for a user turn (mirrors /chat).
- *  @param {{id: string, content: string, image?: {mediaType: string, dataUrl: string} | null, context?: string}} turn
- *  @returns {{type: string, id: string, content: string, image?: {mediaType: string, dataUrl: string, detail: string}, context?: string}}
+ *  `images` is the multi-chart form (up to MAX_IMAGES_PER_TURN); the legacy
+ *  single `image` field is still emitted for the FIRST chart so an in-flight
+ *  server that predates the multi envelope loses nothing during rollout.
+ *  @param {{id: string, content: string, image?: {mediaType: string, dataUrl: string} | null, images?: {mediaType: string, dataUrl: string}[] | null, context?: string}} turn
+ *  @returns {{type: string, id: string, content: string, image?: {mediaType: string, dataUrl: string, detail: string}, images?: {mediaType: string, dataUrl: string, detail: string}[], context?: string}}
  */
-export function buildOutbound({ id, content, image, context }) {
-  /** @type {{type: string, id: string, content: string, image?: {mediaType: string, dataUrl: string, detail: string}, context?: string}} */
+export function buildOutbound({ id, content, image, images, context }) {
+  /** @type {{type: string, id: string, content: string, image?: {mediaType: string, dataUrl: string, detail: string}, images?: {mediaType: string, dataUrl: string, detail: string}[], context?: string}} */
   const env = { type: "message", id, content };
-  if (image) env.image = { mediaType: image.mediaType, dataUrl: image.dataUrl, detail: "low" };
+  /** @type {{mediaType: string, dataUrl: string}[]} */
+  const list = (images ?? []).filter((i) => i && i.dataUrl);
+  if (list.length) {
+    env.images = list.map((i) => ({ mediaType: i.mediaType, dataUrl: i.dataUrl, detail: "low" }));
+    env.image = env.images[0]; // back-compat with the pre-multi server
+  } else if (image) {
+    env.image = { mediaType: image.mediaType, dataUrl: image.dataUrl, detail: "low" };
+  }
   // The dashboard's page/room block: the Go service injects it as a labelled
   // DATA system turn (capped by maxClientContext). Omitted when empty so a
   // turn with nothing to declare does not grow the prompt.
@@ -101,20 +111,24 @@ export function pageContext({ route = "", setups = null, max = WIDGET_CONTEXT_MA
 }
 
 /** Build the REST outbound history (Worker :chat shape): the newest turn
- *  carries the chart as an image_url content part. */
-export function buildRestOutbound(messages, turnId, image) {
-  return messages.map((m) =>
-    m.id === turnId && image
-      ? {
-          id: m.id,
-          role: m.role,
-          content: [
-            { type: "text", text: m.content },
-            { type: "image_url", image_url: { url: image.dataUrl, detail: "low" } },
-          ],
-        }
-      : { id: m.id, role: m.role, content: m.content },
-  );
+ *  carries every attached chart as its own image_url content part.
+ *  @param {Array<{id?: string, role: string, content: string}>} messages
+ *  @param {string} turnId
+ *  @param {{dataUrl: string} | null} image legacy single-chart form
+ *  @param {Array<{dataUrl: string}> | null} images multi-chart form
+ */
+export function buildRestOutbound(messages, turnId, image, images) {
+  const list = (images ?? []).filter((i) => i && i.dataUrl);
+  return messages.map((m) => {
+    if (m.id !== turnId || (list.length === 0 && !image)) return { id: m.id, role: m.role, content: m.content };
+    /** @type {Array<{type: "text", text: string} | {type: "image_url", image_url: {url: string, detail: string}}>} */
+    const parts = [{ type: "text", text: m.content }];
+    const charts = list.length ? list : image ? [image] : [];
+    for (const img of charts) {
+      parts.push({ type: "image_url", image_url: { url: img.dataUrl, detail: "low" } });
+    }
+    return { id: m.id, role: m.role, content: parts };
+  });
 }
 
 /** parseChatStreamFrame extracts the delta text from ONE SSE `data:` line of

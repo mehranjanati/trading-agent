@@ -15,6 +15,7 @@
     chatSocket,
     downscaleImage,
     MAX_IMAGE_EDGE,
+    MAX_IMAGES_PER_TURN,
     type ChartAttachment,
     type ChatOutboundMessage,
   } from "$lib/api";
@@ -26,7 +27,7 @@
   import StalkSetup from "$lib/components/StalkSetup.svelte";
   import { extractSetupProposals } from "$lib/stalk";
 
-  type Message = { id?: string; role: "user" | "assistant"; content: string; timestamp: string; image?: string };
+  type Message = { id?: string; role: "user" | "assistant"; content: string; timestamp: string; images?: string[] };
   type CodeBlock = { language: string; code: string };
   type WsEvent = { type: string; text?: string; error?: string; codeBlocks?: CodeBlock[]; messageId?: string };
 
@@ -36,9 +37,10 @@
   let error: string | null = null;
   let principles = "";
   let principlesOpen = false;
-  // Chart attachment for the next turn (ADR-010): downscaled client-side, then
-  // carried as an image_url content part.
-  let attachment: ChartAttachment | null = null;
+  // Chart attachments for the next turn (ADR-010, multi): downscaled
+  // client-side, then carried as one image_url content part each. The per-turn
+  // cap mirrors the Go boundary (maxImagesPerTurn).
+  let attachments: ChartAttachment[] = [];
   let attachBusy = false;
   let fileInput: HTMLInputElement | undefined;
   // The turn id whose reply is on screen — saved with a draft so the code can
@@ -77,7 +79,7 @@
             role: m.role as "user" | "assistant",
             content: m.content,
             timestamp: m.timestamp,
-            image: m.attachments?.[0]?.dataUrl,
+            images: (m.attachments ?? []).map((a) => a.dataUrl).filter((u): u is string => !!u),
           }));
           if (res.data.principles) principles = res.data.principles;
         } else {
@@ -185,26 +187,50 @@
     );
   }
 
-  /** Downscale a pasted/dropped chart before it becomes the pending attachment. */
-  async function attachFile(file: File | Blob | null | undefined) {
-    if (!file) return;
+  /** Downscale pasted/dropped charts and APPEND them to the pending batch.
+   *  The cap is client-enforced with the same number the Go boundary enforces,
+   *  so the trader sees the limit before the wire rejects the turn. */
+  async function attachFiles(files: (File | Blob | null | undefined)[]) {
+    const usable = files.filter(Boolean) as (File | Blob)[];
+    if (!usable.length) return;
     attachBusy = true;
     error = null;
-    const img = await downscaleImage(file);
+    const imgs: ChartAttachment[] = [];
+    for (const file of usable) {
+      if (attachments.length + imgs.length >= MAX_IMAGES_PER_TURN) break;
+      const img = await downscaleImage(file);
+      if (img) imgs.push(img);
+    }
     attachBusy = false;
-    if (!img) {
+    if (!imgs.length) {
       error = "Could not read that image (try a PNG or JPEG screenshot).";
       return;
     }
-    attachment = img;
+    attachments = [...attachments, ...imgs];
+    if (usable.length > imgs.length) {
+      error = `max ${MAX_IMAGES_PER_TURN} images per message — the rest were dropped`;
+    }
+  }
+  async function attachFile(file: File | Blob | null | undefined) {
+    return attachFiles([file]);
+  }
+
+  /** Drag & drop the same way as paste/file-picker: append, cap, downscale. */
+  function onDrop(e: DragEvent) {
+    const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    void attachFiles(files);
   }
 
   function onPaste(e: ClipboardEvent) {
-    const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
-    const file = item?.getAsFile();
-    if (file) {
+    const files = [...(e.clipboardData?.items ?? [])]
+      .filter((i) => i.type.startsWith("image/"))
+      .map((i) => i.getAsFile())
+      .filter(Boolean) as File[];
+    if (files.length) {
       e.preventDefault();
-      void attachFile(file);
+      void attachFiles(files);
     }
   }
 
@@ -224,16 +250,22 @@
   }
 
   async function handleSend() {
-    const text = input.trim() || (attachment ? "Analyze the attached chart." : "");
-    if ((!text && !attachment) || loading) return;
+    const imgs = attachments;
+    const text = input.trim() || (imgs.length ? (imgs.length === 1 ? "Analyze the attached chart." : `Analyze the ${imgs.length} attached charts.`) : "");
+    if ((!text && !imgs.length) || loading) return;
     loading = true;
     error = null;
     const turnId = newTurnId();
-    const img = attachment;
-    const userMsg: Message = { id: turnId, role: "user", content: text, timestamp: new Date().toISOString(), image: img?.dataUrl };
+    const userMsg: Message = {
+      id: turnId,
+      role: "user",
+      content: text,
+      timestamp: new Date().toISOString(),
+      images: imgs.map((i) => i.dataUrl),
+    };
     messages = [...messages, userMsg];
     input = "";
-    attachment = null;
+    attachments = [];
 
     if (mode === "ws" && ws && ws.readyState === WebSocket.OPEN) {
       live = "";
@@ -242,7 +274,14 @@
           type: "message",
           id: turnId,
           content: text,
-          ...(img ? { image: { mediaType: img.mediaType, dataUrl: img.dataUrl, detail: "low" } } : {}),
+          ...(imgs.length
+            ? {
+                images: imgs.map((i) => ({ mediaType: i.mediaType, dataUrl: i.dataUrl, detail: "low" })),
+                // back-compat: a server that predates the multi envelope still
+                // sees (and analyzes) the FIRST chart of the batch
+                image: { mediaType: imgs[0].mediaType, dataUrl: imgs[0].dataUrl, detail: "low" },
+              }
+            : {}),
           ...(roomContext() ? { context: roomContext() } : {}),
         }),
       );
@@ -254,19 +293,20 @@
       return;
     }
 
-    // REST path (Worker fallback). The chart rides the newest user turn as an
-    // image_url content part — and the turn MUST stream (chat:stream): a
-    // vision generation runs ~60s, past the single-shot response wall-clock,
-    // so the non-stream POST dies mid-request (the browser saw an opaque 400).
-    // Deltas render into `live` exactly like the WS path, then commit on end.
+    // REST path (Worker fallback). Every attached chart rides the newest user
+    // turn as its own image_url content part — and the turn MUST stream
+    // (chat:stream): a vision generation runs ~60s, past the single-shot
+    // response wall-clock, so the non-stream POST dies mid-request (the browser
+    // saw an opaque 400). Deltas render into `live` exactly like the WS path,
+    // then commit on end.
     const outbound: ChatOutboundMessage[] = messages.map((m) =>
-      m.id === turnId && img
+      m.id === turnId && imgs.length
         ? {
             id: m.id,
             role: m.role,
             content: [
               { type: "text", text: m.content },
-              { type: "image_url", image_url: { url: img.dataUrl, detail: "low" } },
+              ...imgs.map((i) => ({ type: "image_url" as const, image_url: { url: i.dataUrl, detail: "low" } })),
             ],
           }
         : { id: m.id, role: m.role, content: m.content },
@@ -391,8 +431,12 @@
           {#each messages as msg}
             <div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
               <div class="max-w-[80%] {msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'} rounded-lg p-3">
-                {#if msg.image}
-                  <img src={msg.image} alt="attached chart" class="mb-2 max-h-48 rounded border border-black/10" />
+                {#if (msg.images ?? []).length}
+                  <div class="mb-2 flex flex-wrap gap-2">
+                    {#each msg.images as im}
+                      <img src={im} alt="attached chart" class="max-h-48 rounded border border-black/10" />
+                    {/each}
+                  </div>
                 {/if}
                 <div class="text-sm whitespace-pre-wrap">{msg.content}</div>
                 {#if msg.role === "assistant"}
@@ -443,14 +487,29 @@
   </div>
 
   <Card class="mt-6">
-    <CardContent class="p-4">
-      {#if attachment}
-        <div class="mb-2 flex items-center gap-3">
-          <img src={attachment.dataUrl} alt="chart to send" class="h-16 rounded border border-border" />
+    <CardContent
+      class="p-4"
+      role="region"
+      aria-label="composer - drop charts here"
+      ondragover={(e) => e.preventDefault()}
+      ondrop={onDrop}
+    >
+      {#if attachments.length}
+        <div class="mb-2 flex flex-wrap items-center gap-3">
+          {#each attachments as a, i}
+            <div class="flex items-center gap-2">
+              <img src={a.dataUrl} alt="chart {i + 1} to send" class="h-16 rounded border border-border" />
+              <button
+                type="button"
+                class="text-xs text-muted-foreground hover:text-destructive"
+                onclick={() => (attachments = attachments.filter((_, j) => j !== i))}
+                title="remove this chart"
+              >×</button>
+            </div>
+          {/each}
           <span class="text-xs text-muted-foreground">
-            {attachment.mediaType} · {(attachment.bytes / 1024).toFixed(0)} KB · downscaled to ≤{MAX_IMAGE_EDGE}px
+            {attachments.length}/{MAX_IMAGES_PER_TURN} charts · {attachments[0]?.mediaType} · downscaled to ≤{MAX_IMAGE_EDGE}px
           </span>
-          <Button variant="outline" size="sm" onclick={() => (attachment = null)}>Remove</Button>
         </div>
       {/if}
       <div class="flex gap-2">
@@ -458,18 +517,19 @@
           bind:this={fileInput}
           type="file"
           accept="image/png,image/jpeg,image/webp"
+          multiple
           class="hidden"
           onchange={(e) => {
             const el = e.currentTarget as HTMLInputElement;
-            void attachFile(el.files?.[0]);
+            void attachFiles([...(el.files ?? [])]);
             el.value = "";
           }}
         />
-        <Button variant="outline" onclick={() => fileInput?.click()} disabled={attachBusy || loading} class="self-end" title="Attach a chart screenshot (or paste one into the box)">
-          {attachBusy ? "..." : "Chart"}
+        <Button variant="outline" onclick={() => fileInput?.click()} disabled={attachBusy || loading || attachments.length >= MAX_IMAGES_PER_TURN} class="self-end" title="Attach chart screenshots — you can pick several (or paste into the box)">
+          {attachBusy ? "..." : `Chart${attachments.length ? ` (${attachments.length}/${MAX_IMAGES_PER_TURN})` : ""}`}
         </Button>
         <Textarea bind:value={input} placeholder="Describe your strategy... or paste: setup BTCUSDT LONG @ trigger / invalidation (I'll shape it into a stalkable proposal)" rows={3} onpaste={onPaste} onkeydown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())} />
-        <Button onclick={handleSend} disabled={loading || (!input.trim() && !attachment)} class="self-end">{loading ? "Sending..." : "Send"}</Button>
+        <Button onclick={handleSend} disabled={loading || (!input.trim() && !attachments.length)} class="self-end">{loading ? "Sending..." : "Send"}</Button>
       </div>
       {#if error}<div class="mt-2 p-2 bg-destructive/10 border border-destructive rounded text-destructive text-sm">{error}</div>{/if}
     </CardContent>

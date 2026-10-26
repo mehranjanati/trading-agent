@@ -86,7 +86,11 @@ type wsIn struct {
 	Type    string   `json:"type"`
 	ID      string   `json:"id,omitempty"` // client-generated turn id (crypto.randomUUID)
 	Content string   `json:"content"`
-	Image   *wsImage `json:"image,omitempty"`
+	Image   *wsImage `json:"image,omitempty"` // legacy single-chart form (still accepted)
+	// Images is the multi-chart form (up to maxImagesPerTurn per turn). The AI
+	// assembly already renders every attachment as its own image_url part; the
+	// cap keeps a turn inside the WS frame cap and the prompt budget.
+	Images []wsImage `json:"images,omitempty"`
 	// Context is the dashboard's ROOM/SETUP block for this turn (its per-symbol
 	// setup rooms live in localStorage, so only the client can declare them).
 	// Data, not instructions; capped at maxClientContext.
@@ -105,12 +109,37 @@ type wsImage struct {
 }
 
 const (
-	// maxWSReadBytes is the inbound frame cap: one downscaled chart (≤1.5 MB
-	// decoded) plus base64 overhead and the JSON envelope.
-	maxWSReadBytes = 4 << 20
+	// maxWSReadBytes is the inbound frame cap: maxImagesPerTurn downscaled charts
+	// (≤1.5 MB decoded each, ≤2 MB data URL each) plus base64 overhead and the
+	// JSON envelope — 4 × 2 MB ≈ 8 MB worst case, so 10 MB is the honest bound.
+	maxWSReadBytes = 10 << 20
 	// maxImageDataURL bounds the inline data URL before it is decoded.
 	maxImageDataURL = 2 << 20
+	// maxImagesPerTurn bounds the multi-chart form: each image is ~1400 prompt
+	// tokens at detail:"low" and the window budget charges imageTokens per
+	// attachment, so a runaway client must not eat the 32K budget whole.
+	maxImagesPerTurn = 4
 )
+
+// validateImage applies the per-image boundary checks (media type, data URL
+// shape, size) and returns the normalised detail. A non-empty verr rejects.
+func validateImage(img wsImage) (mediaType, detail, verr string) {
+	mediaType = strings.ToLower(strings.TrimSpace(img.MediaType))
+	if !imageTypes[mediaType] {
+		return "", "", "unsupported image type (want png/jpeg/webp)"
+	}
+	if !strings.HasPrefix(img.DataURL, "data:"+mediaType+";base64,") {
+		return "", "", "image dataUrl does not match its mediaType"
+	}
+	if len(img.DataURL) > maxImageDataURL {
+		return "", "", "image too large - downscale before upload"
+	}
+	detail = img.Detail
+	if detail != "low" && detail != "high" && detail != "auto" {
+		detail = "low"
+	}
+	return mediaType, detail, ""
+}
 
 // imageTypes is the media-type allow-list, mirrored by the Worker.
 var imageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true}
@@ -118,33 +147,38 @@ var imageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/w
 // buildUserMessage validates an inbound turn and assembles the stored message.
 // The second return value is a non-empty error string when the turn is rejected
 // (the message is still returned so the client can correlate the error).
+// Images arrive either as the legacy single `image` field or the `images`
+// array; both land in m.Attachments (order preserved, cap enforced).
 func buildUserMessage(in wsIn) (Message, string) {
 	m := Message{ID: strings.TrimSpace(in.ID), Role: "user", Content: strings.TrimSpace(in.Content), Timestamp: nowUTC()}
 	if m.ID == "" {
 		m.ID = newMessageID()
 	}
-	if in.Image == nil {
+	images := in.Images
+	if len(images) == 0 && in.Image != nil {
+		images = []wsImage{*in.Image} // legacy single-chart envelope
+	}
+	if len(images) == 0 {
 		return m, ""
 	}
-	img := in.Image
-	mediaType := strings.ToLower(strings.TrimSpace(img.MediaType))
-	if !imageTypes[mediaType] {
-		return m, "unsupported image type (want png/jpeg/webp)"
+	if len(images) > maxImagesPerTurn {
+		return m, fmt.Sprintf("too many images (%d) - max %d per message", len(images), maxImagesPerTurn)
 	}
-	if !strings.HasPrefix(img.DataURL, "data:"+mediaType+";base64,") {
-		return m, "image dataUrl does not match its mediaType"
-	}
-	if len(img.DataURL) > maxImageDataURL {
-		return m, "image too large - downscale before upload"
-	}
-	detail := img.Detail
-	if detail != "low" && detail != "high" && detail != "auto" {
-		detail = "low"
+	m.Attachments = make([]Attachment, 0, len(images))
+	for _, img := range images {
+		mediaType, detail, verr := validateImage(img)
+		if verr != "" {
+			return m, verr
+		}
+		m.Attachments = append(m.Attachments, Attachment{MediaType: mediaType, DataURL: img.DataURL, Detail: detail})
 	}
 	if m.Content == "" {
-		m.Content = "Analyze the attached chart."
+		if len(m.Attachments) == 1 {
+			m.Content = "Analyze the attached chart."
+		} else {
+			m.Content = fmt.Sprintf("Analyze the %d attached charts.", len(m.Attachments))
+		}
 	}
-	m.Attachments = []Attachment{{MediaType: mediaType, DataURL: img.DataURL, Detail: detail}}
 	return m, ""
 }
 
@@ -278,7 +312,7 @@ func (s *Service) handleWS(w http.ResponseWriter, r *http.Request) {
 				_ = send(ChatEvent{Type: "error", Error: err.Error()})
 			}
 		case "message":
-			if strings.TrimSpace(in.Content) == "" && in.Image == nil {
+			if strings.TrimSpace(in.Content) == "" && in.Image == nil && len(in.Images) == 0 {
 				_ = send(ChatEvent{Type: "error", Error: "empty message"})
 				continue
 			}

@@ -185,7 +185,7 @@
     // page: a long generation (a chart analysis runs ~60s) outlives the
     // single-shot response wall-clock — the non-stream POST dies mid-request.
     // Deltas render into `live` like the WS path, then commit.
-    const outbound: ChatOutboundMessage[] = buildRestOutbound(messages, turnId, null);
+    const outbound: ChatOutboundMessage[] = buildRestOutbound(messages, turnId, null, null);
     live = "";
     const res = await streamChat(
       { session_id: sessionId || undefined, messages: outbound, context: currentContext() },

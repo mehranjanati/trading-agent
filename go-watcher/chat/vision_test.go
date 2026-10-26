@@ -51,12 +51,97 @@ func TestBuildUserMessageRejectsBadImages(t *testing.T) {
 		{"unsupported type", wsIn{Image: &wsImage{MediaType: "image/gif", DataURL: "data:image/gif;base64,R0lGOD"}}},
 		{"type/url mismatch", wsIn{Image: &wsImage{MediaType: "image/png", DataURL: "data:image/jpeg;base64,AAAA"}}},
 		{"oversized", wsIn{Image: &wsImage{MediaType: "image/png", DataURL: "data:image/png;base64," + strings.Repeat("A", maxImageDataURL)}}},
+		{"bad image inside the array", wsIn{Images: []wsImage{
+			{MediaType: "image/png", DataURL: tinyPNG},
+			{MediaType: "image/gif", DataURL: "data:image/gif;base64,R0lGOD"},
+		}}},
+		{"over the per-turn cap", wsIn{Images: []wsImage(
+			func() []wsImage {
+				out := make([]wsImage, maxImagesPerTurn+1)
+				for i := range out {
+					out[i] = wsImage{MediaType: "image/png", DataURL: tinyPNG}
+				}
+				return out
+			}(),
+		)}},
 	}
 	for _, tc := range cases {
 		tc.in.Type = "message"
 		if _, verr := buildUserMessage(tc.in); verr == "" {
 			t.Fatalf("%s must be rejected", tc.name)
 		}
+	}
+}
+
+func TestBuildUserMessageAcceptsMultipleImages(t *testing.T) {
+	in := wsIn{Type: "message", ID: "u1", Content: "compare these two",
+		Images: []wsImage{
+			{MediaType: "image/png", DataURL: tinyPNG},
+			{MediaType: "image/jpeg", DataURL: "data:image/jpeg;base64,AAAA", Detail: "high"},
+		}}
+	m, verr := buildUserMessage(in)
+	if verr != "" {
+		t.Fatalf("multi-chart turn rejected: %s", verr)
+	}
+	if len(m.Attachments) != 2 {
+		t.Fatalf("want 2 attachments, got %+v", m.Attachments)
+	}
+	if m.Attachments[0].DataURL != tinyPNG || m.Attachments[0].Detail != "low" {
+		t.Fatalf("first attachment wrong: %+v", m.Attachments[0])
+	}
+	if m.Attachments[1].MediaType != "image/jpeg" || m.Attachments[1].Detail != "high" {
+		t.Fatalf("second attachment wrong: %+v", m.Attachments[1])
+	}
+}
+
+func TestBuildUserMessageLegacyImageStaysAccepted(t *testing.T) {
+	// The pre-multi deploy sends `image`; both envelopes must land identically.
+	legacy, verr := buildUserMessage(wsIn{Type: "message", Content: "look",
+		Image: &wsImage{MediaType: "image/png", DataURL: tinyPNG}})
+	if verr != "" {
+		t.Fatalf("legacy envelope rejected: %s", verr)
+	}
+	multi, verr := buildUserMessage(wsIn{Type: "message", Content: "look",
+		Images: []wsImage{{MediaType: "image/png", DataURL: tinyPNG}}})
+	if verr != "" {
+		t.Fatalf("multi envelope rejected: %s", verr)
+	}
+	if len(legacy.Attachments) != 1 || len(multi.Attachments) != 1 ||
+		legacy.Attachments[0].DataURL != multi.Attachments[0].DataURL {
+		t.Fatalf("envelopes must agree: %+v vs %+v", legacy.Attachments, multi.Attachments)
+	}
+}
+
+func TestBuildUserMessageMultiDefaultText(t *testing.T) {
+	m, verr := buildUserMessage(wsIn{Type: "message", Images: []wsImage{
+		{MediaType: "image/png", DataURL: tinyPNG},
+		{MediaType: "image/png", DataURL: tinyPNG},
+	}})
+	if verr != "" {
+		t.Fatalf("rejected: %s", verr)
+	}
+	if !strings.Contains(m.Content, "2 attached charts") {
+		t.Fatalf("multi-chart default prompt wrong: %q", m.Content)
+	}
+}
+
+func TestAssembleAIMessagesInlinesEveryAttachmentOfOneTurn(t *testing.T) {
+	m := Message{ID: "u1", Role: "user", Content: "two charts", Attachments: []Attachment{
+		{MediaType: "image/png", DataURL: tinyPNG, Detail: "low"},
+		{MediaType: "image/png", DataURL: tinyPNG, Detail: "low"},
+	}}
+	parts, ok := assembleAIMessages([]Message{m})[0].Content.([]aiPart)
+	if !ok {
+		t.Fatal("charted turn must become parts")
+	}
+	images := 0
+	for _, p := range parts {
+		if p.Type == "image_url" {
+			images++
+		}
+	}
+	if images != 2 {
+		t.Fatalf("every attachment must become its own image_url part, got %d", images)
 	}
 }
 

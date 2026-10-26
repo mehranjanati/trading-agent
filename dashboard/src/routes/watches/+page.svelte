@@ -19,7 +19,7 @@
   $: rows = (result?.ok ? result.data.watches : []).map((w: any) => ({
     id: w.id, symbol: w.symbol, direction: w.direction, status: w.status, version: w.version,
     created_by: w.created_by,
-    regime_filter: w.regime_filter === 1,
+    regime_filter: w.regime_filter === 1 ? "on" : "off",
   }));
   $: freshness = badgeFor(result);
   void badge;

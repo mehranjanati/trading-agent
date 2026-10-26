@@ -6,6 +6,10 @@ CREATE TABLE watches(id TEXT PRIMARY KEY, symbol TEXT NOT NULL, direction TEXT N
  trigger_json TEXT NOT NULL, invalidation_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'DRAFT',
  version INTEGER NOT NULL DEFAULT 1, created_by TEXT NOT NULL, expires_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX idx_watches_sym_status ON watches(symbol,status);
+-- 0010_regime_filter.sql (forward-only ALTER): per-watch opt-in for the
+-- pre-analysis market-regime veto (docs/08 §8.2a). 1 = the Worker evaluates
+-- ETHBTC/USDT.D/BTC.D/TOTAL3 before analysis; 0 = no regime gate for this watch.
+-- ALTER TABLE watches ADD COLUMN regime_filter INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE watch_transitions(id TEXT PRIMARY KEY, watch_id TEXT NOT NULL REFERENCES watches(id),
  from_s TEXT, to_s TEXT NOT NULL, reason TEXT, actor TEXT, at TEXT NOT NULL);
 CREATE INDEX idx_trans_watch_at ON watch_transitions(watch_id,at);

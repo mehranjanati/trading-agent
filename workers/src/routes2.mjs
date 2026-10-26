@@ -5,7 +5,7 @@ import { validateSignal, SCHEMA_VERSION } from "./signals.mjs";
 import { uid, roleOf, guard, readBody, writeErr, recordIncident, sha256Hex } from "./_shared.mjs";
 import { enqueueAlert } from "./notify.mjs";
 import { activeVersion, activateVersion, verifyWebhook, allowlistFor, sourceAllowed, listVersions } from "./strategies.mjs";
-import { evaluateRegime } from "./regime.mjs";
+import { evaluateRegime, resolveRegimeConfig } from "./regime.mjs";
 import { fetchRegimeIndices } from "./regime-feed.mjs";
 import { decideApproval as decideApprovalRecord, readApproval, listApprovals, ttlMsFrom } from "./approvals.mjs";
 import { limitsFrom } from "./risk.mjs";
@@ -71,6 +71,10 @@ function degraded(message) {
  *  invented row would be mock data in the canonical DB. Every failure path
  *  throws DEGRADED and writes nothing.
  *
+ *  The ONE policy-written run is a regime veto (the watch opted in and the
+ *  pre-analysis gate returned VETO+BLOCK): it is stored as FLAT @ 0 before the
+ *  engine is called, with its index trend in `regime` (docs/08 §8.2a).
+ *
  *  @returns {Promise<{id: string, out: object}>} */
 async function analyzeWatch(env, w) {
   const base = watcherBase(env);
@@ -78,6 +82,57 @@ async function analyzeWatch(env, w) {
   const activeCfg = await activeVersion(env);
   let regimeCfg = {};
   try { regimeCfg = JSON.parse(activeCfg?.config_json ?? "{}"); } catch { regimeCfg = {}; }
+
+  // ---- regime pre-check (only when the watch opted in) ----
+  //
+  // ORDER IS THE POINT: the veto is computed from our own reference-index feed
+  // and evaluated BEFORE the engine is asked anything. A hostile regime must be
+  // able to force FLAT even while the Go engine is unreachable — otherwise the
+  // one gate meant to stop bad trades would be the first thing to disappear in
+  // a DEGRADED window. `env.REGIME_FEED` is the same injectable seam tests use
+  // for `env.EXCHANGE`; production leaves it unset and reads the live indices.
+  let regimeOut = null;
+  let regimePenalty = 0;
+  if (Number(w.regime_filter ?? 0) === 1) {
+    const resolved = resolveRegimeConfig(regimeCfg);
+    const empty = { ETHBTC: null, "USDT.D": null, "BTC.D": null, TOTAL3: null };
+    let prices = empty;
+    // A globally disabled regime block needs no outbound call; it is still
+    // recorded on the run (verdict PASS, reason "disabled") so the audit shows
+    // the watch opted in while the operator had the gate off.
+    if (resolved.enabled) {
+      const feed = env.REGIME_FEED ?? fetchRegimeIndices;
+      try {
+        prices = await feed(env);
+      } catch {
+        // A feed that throws is UNKNOWN, not a pass: evaluateRegime fail-closes.
+        prices = empty;
+      }
+    }
+    regimeOut = evaluateRegime({ symbol: w.symbol, direction: w.direction, prices, config: regimeCfg });
+
+    if (regimeOut.verdict === "VETO" && regimeOut.force_flat) {
+      // VETO + BLOCK: store the advisory run as FLAT @ confidence 0 and do not
+      // ask the engine at all. The row is what a human would approve against,
+      // so the veto is recorded in the same place a normal bias would be.
+      const out = {
+        bias: "FLAT", confidence: 0, reasons: [regimeOut.reason],
+        model: "regime-filter",
+        input_hash: await sha256Hex(JSON.stringify({ symbol: w.symbol, direction: w.direction, regime: regimeOut })),
+        strategy_version: activeCfg?.version ?? null,
+        regime: regimeOut, engine: null,
+      };
+      const id = uid("an");
+      await env.DB.prepare(
+        "INSERT INTO analysis_runs(id,watch_id,model,input_hash,output_json,confidence,at) VALUES(?,?,?,?,?,?,?)",
+      ).bind(id, w.id, out.model, out.input_hash, JSON.stringify(out), out.confidence, new Date().toISOString()).run();
+      return { id, out };
+    }
+    // WARN (CHOP/UNKNOWN) or VETO-with-action=WARN: the run proceeds, but the
+    // engine's confidence is reduced below. Never a full-confidence trade.
+    regimePenalty = regimeOut.confidence_penalty ?? 0;
+  }
+
   let pins;
   try {
     const regRes = await fetch(`${base}/strategies/registry`);
@@ -100,34 +155,6 @@ async function analyzeWatch(env, w) {
     }
   } catch (e) {
     throw degraded(`analysis engine unavailable (${e.message})`);
-  }
-
-  // ---- regime pre-check (only when the watch opted in) ----
-  let regimeOut = null;
-  let regimePenalty = 0;
-  if (Number(w.regime_filter ?? 0) === 1 && regimeCfg.regime?.enabled !== false) {
-    try {
-      const prices = await fetchRegimeIndices();
-      regimeOut = evaluateRegime({ symbol: w.symbol, direction: w.direction, prices, config: regimeCfg });
-    } catch {
-      regimeOut = evaluateRegime({ symbol: w.symbol, direction: w.direction, prices: { ETHBTC: null, "USDT.D": null, "BTC.D": null, TOTAL3: null }, config: regimeCfg });
-    }
-
-    if (regimeOut.verdict === "VETO" && regimeOut.force_flat) {
-      const out = {
-        bias: "FLAT", confidence: 0, reasons: [regimeOut.reason],
-        model: "regime-filter",
-        input_hash: await sha256Hex(JSON.stringify({ symbol: w.symbol, direction: w.direction, regime: regimeOut })),
-        strategy_version: activeCfg?.version ?? null,
-        regime: regimeOut, engine: null,
-      };
-      const id = uid("an");
-      await env.DB.prepare(
-        "INSERT INTO analysis_runs(id,watch_id,model,input_hash,output_json,confidence,at) VALUES(?,?,?,?,?,?,?)",
-      ).bind(id, w.id, out.model, out.input_hash, JSON.stringify(out), out.confidence, new Date().toISOString()).run();
-      return { id, out };
-    }
-    regimePenalty = regimeOut.confidence_penalty ?? 0;
   }
 
   const ask = { symbol: w.symbol, direction: w.direction, strategies: pins };

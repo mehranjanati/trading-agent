@@ -84,6 +84,9 @@
         watch armed: <a href="/watches">{watchId}</a> — status <strong>ACTIVE</strong> (published DRAFT→ACTIVE), so the trigger loop evaluates it now.
         A price touch fires a trigger → analysis; <strong>no order is placed without a separate single-use human approval</strong> (D-08: the dashboard deliberately cannot issue one).
       </div>
+      {#if regimeFilter}
+        <div class="stalk-meta">regime filter armed on this watch — the Worker checks ETHBTC · USDT.D · BTC.D · TOTAL3 at analysis time: a hostile regime stores FLAT @ confidence 0, CHOP/UNKNOWN reduces confidence.</div>
+      {/if}
     {:else}
       <button on:click={stalk} disabled={busy} class="primary">
         {busy ? "stalking..." : "Stalk this zone — تایید و ساخت"}

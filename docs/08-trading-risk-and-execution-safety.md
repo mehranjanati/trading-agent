@@ -34,6 +34,33 @@ Limits live in versioned `strategy_configs`; changes need the **admin** role + a
 5. Gate carries: `R-LEV`/`R-NOT`/`R-EXP` include `limit` + `asked` (J3); `R-SYM` includes the permitted set; `R-STALE` includes `action: "HOLD"`; `R-SLOT` includes `limit` + `active` (+ `symbol` for the per-symbol bound).
 6. Rejections surface as `422 RISK_REJECT {risk_code}` (docs/10); the E09 submit path must call this validator — no other gate implementation is allowed.
 
+### 8.2a Market-regime veto (pre-analysis, per-watch opt-in)
+`watches.regime_filter` (migration 0010) makes the regime gate a per-position choice: a BTC scalp may sit out of it while an alt swing opts in. When the flag is `1`, `analyzeWatch` evaluates the four reference indices **before** it asks the Go engine, so a hostile regime cannot be bypassed by an engine outage (it is the one gate that must survive a DEGRADED window).
+
+| Index | Feed | Trend rule |
+|---|---|---|
+| ETHBTC | Toobit → OKX → Binance 1h klines; CoinGecko ETH/BTC ratio as last resort | close vs EMA-50 |
+| BTC.D · USDT.D · TOTAL3 | CoinGecko top-250 markets, supply-weighted 7-day hourly sparkline (labelled estimate) | close vs EMA-50 |
+
+The run records which provider answered each index in `regime.detail.sources` (`exchange-klines` for the venue pair, `coingecko-estimate` for the supply-weighted approximation), so a measured series is never confused with an estimate.
+
+The regime is the majority trend of the available indices; every index missing is `UNKNOWN`. Each index is classified independently and the majority rule is applied over the indices that answered. A short/missing series is `UNKNOWN` — never interpolated.
+
+**Default veto table** (`DEFAULT_REGIME_CONFIG`; a missing or partial `regime` block in the active `strategy_configs` resolves to this table, never to an empty one — opting in must not fail open):
+
+| Direction | Vetoed regimes |
+|---|---|
+| altcoin LONG | `BEARISH`, `UNKNOWN` |
+| altcoin SHORT | `BULLISH`, `UNKNOWN` |
+| BTC LONG / SHORT | `UNKNOWN` |
+
+**Actions (normative):**
+1. `VETO` + `action_on_veto=BLOCK` (default): the analysis run is stored as `bias=FLAT, confidence=0, model="regime-filter", engine=null` and the engine is **not** called. This is the only fabricated-by-policy run: the reason is explicit and the index trend is stored in `output_json.regime`.
+2. `WARN` (regime `CHOP` or `UNKNOWN`), or `VETO` with `action_on_veto=WARN`: the engine bias is kept and confidence is multiplied by `(1 − confidence_penalty)` (default `0.3`). A veto downgraded to WARN still costs confidence — never a full-confidence trade.
+3. Any feed failure (timeout, non-2xx, unusable/short series) becomes `UNKNOWN` → `VETO` for altcoins (SAFE-001). There is no local price invention.
+4. An explicit empty list (`veto_altcoin_long: []`) disables that edge; the operator's config version is pinned on the run (`strategy_version`), so the override is auditable.
+5. The veto is advisory to execution: it shapes the analysis a human approves against and never submits/cancels an order (SAFE-002, D-08).
+
 ## 8.3 Approval workflow (states)
 `requested → notified → granted|rejected → consumed|expired` — the request/notify phase **is** the analysis run (no separate row); the approval row appears at the human decision. **Grant** writes the row plus its `approval.granted_v1|rejected_v1` audit event in one batch and returns the token `{approval_id, watch_id, expires_at}`; the TTL is the active `strategy_configs.approval_ttl_s` (10m default, Q-05). **Consume** (invoked by the E09 submit path) is single-flight by construction: the UNIQUE `approval.consumed_v1:<approval_id>` event is the first statement of the batch, so exactly one caller wins and the loser hits the UNIQUE constraint → surfaced `409`; `used_at` is set only for the winner, and a confirm-read fails closed if the row was already consumed. Verdicts carry HTTP status: `200 consumed · 403 not-granted/rejected · 409 already-consumed · 410 expired` — an unreadable `expires_at` counts as expired (fail closed, SAFE-001). State is **derived** from the row (`used_at`, `decision`, `expires_at`), never stored separately, so a stale row cannot disagree with itself; a separate nonce column was deliberately not added because the PK-guarded single-use event already provides that guarantee (docs/04 keeps stamps additive). The 60s sweeper emits `approval.expired_v1:<id>` at most once per approval (idempotent).
 

@@ -40,6 +40,17 @@ describe("watchBody / approvalBody stay strict", () => {
     assert.throws(() => watchBody({ symbol: "BTCUSDT", direction: "LONG", trigger: { op: "??", price: "1" } }), (e) => e.code === "VALIDATION");
   });
 
+  it("watchBody accepts the optional regime_filter boolean and rejects other types", () => {
+    const base = { symbol: "ETHUSDT", direction: "LONG", trigger: { op: ">=", price: "1" } };
+    assert.equal(watchBody({ ...base }), true, "absent == opt out");
+    assert.equal(watchBody({ ...base, regime_filter: true }), true);
+    assert.equal(watchBody({ ...base, regime_filter: false }), true);
+    assert.equal(watchBody({ ...base, regime_filter: null }), true, "null == absent");
+    for (const regime_filter of ["true", 1, {}, []]) {
+      assert.throws(() => watchBody({ ...base, regime_filter }), (e) => e.code === "VALIDATION", String(regime_filter));
+    }
+  });
+
   it("approvalBody accepts only approve|reject", () => {
     assert.equal(approvalBody({ watch_id: "w1", analysis_id: "a1", decision: "approve" }), true);
     assert.throws(() => approvalBody({ watch_id: "w1", analysis_id: "a1", decision: "maybe" }), (e) => e.code === "VALIDATION");

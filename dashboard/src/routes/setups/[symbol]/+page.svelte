@@ -57,6 +57,16 @@
   function biasOf(r: any): string {
     try { return JSON.parse(r.output_json)?.bias ?? "-"; } catch { return "-"; }
   }
+  // The regime verdict the Worker recorded on the run (null when the watch did
+  // not opt in). Shown beside the bias so a FLAT caused by a veto is readable
+  // as a VETO, not as the engine's own opinion.
+  function regimeOf(r: any): string | null {
+    try {
+      const g = JSON.parse(r.output_json)?.regime;
+      if (!g?.verdict) return null;
+      return `${g.verdict}${g.regime ? ` (${g.regime})` : ""}`;
+    } catch { return null; }
+  }
   async function refresh() {
     const [w, a, i, p, s, r] = await Promise.all([getWatchesAll(), getApprovals(), getIntents(), getPositions(), getSymbols(), getAnalysis()]);
     if (w.ok) watches = (w.data as { watches: any[] }).watches;
@@ -165,7 +175,7 @@
               zones from {result.suggest_zones.source}{#if result.suggest_zones.bars} · {result.suggest_zones.bars} bars{/if}{#if result.suggest_zones.last} · last {result.suggest_zones.last}{/if}
             </div>
           {/if}
-          <StalkSetup proposal={stalkProposal} contextLabel="from {result.id}" regimeFilter={regimeFilter} />
+          <StalkSetup proposal={stalkProposal} contextLabel="from {result.id}" bind:regimeFilter />
         {/if}
       </section>
     </div>
@@ -181,7 +191,7 @@
     </section>
     <section class="card">
       <h2>analysis runs ({symRuns.length})</h2>
-      {#each symRuns as r}<div class="row">{r.id} - <span class="wstatus {biasOf(r).toLowerCase()}">{biasOf(r)}</span> @ {r.confidence ?? "-"} - {r.model} - {r.at}</div>{/each}
+      {#each symRuns as r}<div class="row">{r.id} - <span class="wstatus {biasOf(r).toLowerCase()}">{biasOf(r)}</span> @ {r.confidence ?? "-"} - {r.model} - {r.at}{#if regimeOf(r)}<span class="row-note">regime {regimeOf(r)}</span>{/if}</div>{/each}
       {#if symRuns.length === 0}<p class="empty">no analysis runs for {symbol} yet — a triggered watch writes one</p>{/if}
     </section>
     <section class="card">

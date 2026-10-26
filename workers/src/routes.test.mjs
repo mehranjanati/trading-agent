@@ -125,6 +125,26 @@ describe("E05-T01 control API contracts", () => {
     const snap = await (await app.fetch(req("GET", "/api/watches/active-snapshot"), env())).json();
     assert.ok(snap.watches.some((w) => w.id === j.id && w.status === "ACTIVE"));
   });
+  it("S1: regime_filter is persisted per watch, defaults off, and reaches the list", async () => {
+    const mk = async (symbol, extra = {}) => {
+      const b = {
+        symbol, direction: "LONG",
+        trigger: { op: ">=", price: "100" }, invalidation: { op: "<=", price: "90" },
+        ...extra,
+      };
+      const r = await app.fetch(req("POST", "/api/watches", b), env());
+      assert.equal(r.status, 201);
+      return (await r.json()).id;
+    };
+    const on = await mk("SOLUSDT", { regime_filter: true });
+    const off = await mk("ADAUSDT");
+    assert.equal(sql(`SELECT regime_filter FROM watches WHERE id='${on}';`).trim(), "1");
+    assert.equal(sql(`SELECT regime_filter FROM watches WHERE id='${off}';`).trim(), "0");
+    // The dashboard's regime column reads this list.
+    const list = await (await app.fetch(req("GET", "/api/watches?status=ACTIVE"), env())).json();
+    assert.equal(list.watches.find((w) => w.id === on).regime_filter, 1);
+    assert.equal(list.watches.find((w) => w.id === off).regime_filter, 0);
+  });
   it("S2: signal ingest validates kind; bad kind 400", async () => {
     const e = env({ SIGNAL_HMAC_SECRET: "route-test-secret" });
     // E07-T01: /api/signals:ingest is the authenticated webhook (FR-005 "signed

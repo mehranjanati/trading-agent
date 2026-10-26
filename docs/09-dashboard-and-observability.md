@@ -27,6 +27,15 @@ The Stalk card also shows the trigger/invalidation distances from the close the
 zone was measured on (`bandStats` in `lib/stalk.ts`): a band a fraction of a
 percent wide is decided by the next tick, so the card says so before the click.
 
+**Regime filter is a per-watch opt-in, visible before the click.** The Stalk
+card carries a `regime filter` checkbox (also on `/analyze` and the setup room's
+quick-analysis panel) which is POSTed as `regime_filter` and stored on the watch
+row. The form and the card are bound to the same value (`bind:regimeFilter`), so
+toggling one never leaves the other disagreeing with what gets armed. `/watches`
+renders the flag as its `regime` column, and the setup room labels each analysis
+run with the recorded verdict (`regime VETO (BEARISH)`), so a FLAT caused by a
+veto is distinguishable from the engine's own FLAT.
+
 **What is editable, and where (UX pass on `/strategies` + `/setups/{symbol}`).**
 The screen used to be mostly inert: a pinned artifact looked editable, a saved
 group could only be deleted (no rename, no job change, no member change, and the

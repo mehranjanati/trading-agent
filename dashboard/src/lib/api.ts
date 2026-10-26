@@ -64,8 +64,10 @@ export async function postAnalyze(body: AnalyzeRequest): Promise<Result<AnalyzeR
 /** POST /api/watches — the ONLY write the dashboard performs (D-08: orders
  *  and approvals are never submitted from the dashboard). Body shape matches
  *  the backend validator (workers/src/validate.mjs:watchBody): trigger and
- *  invalidation are OBJECTS {op, price}, never pre-stringified JSON. */
-export async function postWatch(body: { symbol: string; direction: "LONG" | "SHORT"; trigger: { op: string; price: string }; invalidation?: { op: string; price: string } }): Promise<Result<{ id: string }>> {
+ *  invalidation are OBJECTS {op, price}, never pre-stringified JSON.
+ *  `regime_filter` is the per-watch opt-in for the market-regime veto — it is
+ *  persisted on the watch row and applied by the Worker at analysis time. */
+export async function postWatch(body: { symbol: string; direction: "LONG" | "SHORT"; trigger: { op: string; price: string }; invalidation?: { op: string; price: string }; regime_filter?: boolean }): Promise<Result<{ id: string }>> {
   try {
     const res = await fetch(`${API_BASE}/api/watches`, {
       method: "POST",

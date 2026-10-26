@@ -146,7 +146,7 @@
         <input type="checkbox" bind:checked={regimeFilter} />
         regime filter (ETHBTC · USDT.D · BTC.D · TOTAL3)
       </label>
-      <p style="font-size:0.75rem;color:#6e7783;margin-top:4px;">when enabled, a hostile regime forces FLAT / reduces confidence</p>
+      <p style="font-size:0.75rem;color:#6e7783;margin-top:4px;">applies to the watch you arm below: a hostile regime forces FLAT at confidence 0, CHOP/UNKNOWN reduces confidence</p>
     </div>
 
     <div class="field">
@@ -210,7 +210,7 @@
         <div>inval LONG: {result.suggest_zones.inval_long}</div>
         <div>trigger SHORT: {result.suggest_zones.trigger_short}</div>
         <div>inval SHORT: {result.suggest_zones.inval_short}</div>
-        <StalkSetup proposal={stalkProposal} contextLabel="from deep analysis {result.id}" regimeFilter={regimeFilter} />
+        <StalkSetup proposal={stalkProposal} contextLabel="from deep analysis {result.id}" bind:regimeFilter />
       </div>
 
       <h2>per-strategy verdicts</h2>

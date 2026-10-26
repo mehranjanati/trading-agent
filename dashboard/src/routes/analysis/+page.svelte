@@ -14,9 +14,15 @@
 
   $: rows = (result?.ok ? result.data.runs : []).map((r: any) => {
     const out = JSON.parse(r.output_json ?? "{}");
+    // A regime-filtered run records the verdict; show it next to the bias so a
+    // FLAT caused by a veto is distinguishable from the engine's own FLAT.
+    const regime = out.regime?.verdict
+      ? `${out.regime.verdict}${out.regime.regime ? `/${out.regime.regime}` : ""}`
+      : "—";
     return {
       id: r.id, watch_id: r.watch_id, bias: out.bias, confidence: out.confidence, model: r.model,
       strategy_version: out.strategy_version ?? "—",
+      regime,
       // Which provider answered the engine (toobit-rest = the trading venue).
       // A run with no source is a row we cannot explain — say so, don't guess.
       source: Array.isArray(out.engine?.data_sources) && out.engine.data_sources.length ? out.engine.data_sources.join(",") : "unknown",
@@ -27,6 +33,7 @@
 
 <DataPage title="analysis runs (advisory only)" result={result} badge={badgeFor(result)} columns={[
   { key: "id", label: "run" }, { key: "watch_id", label: "watch" }, { key: "bias", label: "bias" },
-  { key: "confidence", label: "conf" }, { key: "model", label: "model" }, { key: "strategy_version", label: "version" },
+  { key: "confidence", label: "conf" }, { key: "model", label: "model" }, { key: "regime", label: "regime" },
+  { key: "strategy_version", label: "version" },
   { key: "source", label: "data" }, { key: "input_hash", label: "input" },
 ]} rows={rows} />

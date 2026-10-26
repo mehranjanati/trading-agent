@@ -23,15 +23,19 @@ describe("symbols", () => {
     assert.equal(canonicalSymbol("BTCUSDT"), "BTCUSDT");
   });
 
-  it("parses + dedupes the raw venue list", () => {
+  it("parses + dedupes the raw venue list, and rejects a spot (canonical) echo", () => {
     const body = [
       { s: "BTC-SWAP-USDT", p: "67000" },
-      { s: "BTCUSDT", p: "67001" },
+      { s: "BTCUSDT", p: "67001" }, // spot echo: dropped, not a futures market
       { s: "ETH-SWAP-USDT", p: "3500" },
       { s: "nope", p: "1" },
       { p: "2" },
     ];
     assert.deepEqual(parseSymbols(body), ["BTCUSDT", "ETHUSDT"]);
+    // A list that only carries canonical (spot) rows is not a futures universe.
+    assert.deepEqual(parseSymbols([{ s: "EDUUSDT", p: "0.0586" }]), []);
+    // USDC-margined contracts are out of scope (USDT-M only).
+    assert.deepEqual(parseSymbols([{ s: "DOGE-SWAP-USDC", p: "0.2" }]), []);
   });
 
   it("fetches once then serves cache within TTL", async () => {

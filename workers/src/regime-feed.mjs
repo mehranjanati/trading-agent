@@ -4,11 +4,11 @@
 // => regime.mjs fail-closes (VETO for altcoins, SAFE-001).
 //
 // Index map:
-//   ETHBTC   -> cross pair from OKX (instId=ETH-BTC), then Binance (ETHBTC), with
-//               a CoinGecko ETH/BTC ratio as the last-resort fallback.
-//               NOT Toobit: our venue lists USDT-M perpetuals only — both
-//               `ETHBTC` and `ETH-SWAP-BTC` return 400 Invalid Symbols
-//               (verified 2026-10-26), so a Toobit attempt is a guaranteed miss.
+//   ETHBTC   -> Toobit FUTURES ETHUSDT/BTCUSDT ratio (both requested in the
+//               `-SWAP-` form), then OKX ETH-BTC → Binance ETHBTC as optional
+//               fallbacks, then a CoinGecko ETH/BTC ratio. Toobit has no ETHBTC
+//               contract (both `ETHBTC` and `ETH-SWAP-BTC` are 400), so the
+//               ratio is computed from the venue's own perpetuals.
 //   USDT.D   -> USDT dominance estimate (CoinGecko markets: supply-weighted)
 //   BTC.D    -> BTC dominance estimate (CoinGecko markets: supply-weighted)
 //   TOTAL3   -> altcoin market cap estimate (CoinGecko markets: total − BTC − ETH)
@@ -36,9 +36,39 @@ const json = (url, headers = {}) =>
   withTimeout(fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }), FETCH_TIMEOUT_MS)
     .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
 
-// ---- ETHBTC from exchange klines (OKX -> Binance) ----
-// Toobit is deliberately NOT in this chain: its futures venue has no ETHBTC
-// contract (verified 400 for both symbol forms, TOOBIT-API-FACTS S4).
+// ---- ETHBTC from exchange klines (Toobit futures ratio first) ----
+// Toobit has no ETHBTC contract, but it DOES list ETHUSDT and BTCUSDT
+// perpetuals. Dividing their 1h closes bar-by-bar gives an ETH/BTC series on
+// the venue we actually trade, with the same SWAP (futures) symbol form as every
+// other Toobit read. Other exchanges are only a last-resort fallback.
+const TOOBIT_BASE = "https://api.toobit.com";
+/** Toobit futures form (mirrors workers/src/fallback-poll.mjs venueSymbol and
+ *  go-watcher/normalize.ToVenue): BTCUSDT → BTC-SWAP-USDT. */
+const venueSymbol = (sym) => {
+  const s = String(sym ?? "").toUpperCase().trim();
+  return /^[A-Z0-9]{2,12}USDT$/.test(s) ? `${s.slice(0, -4)}-SWAP-USDT` : s;
+};
+const toobitKlines = (sym) =>
+  json(`${TOOBIT_BASE}/quote/v1/klines?symbol=${venueSymbol(sym)}&interval=1h&limit=120`)
+    .then((arr) => Array.isArray(arr) ? arr.map((c) => String(c[4])).filter(Boolean) : null);
+
+/** ethbtcRatio — pure: ETH closes / BTC closes, aligned on the NEWEST n bars
+ *  (n = the shorter series). Any non-positive/non-numeric bar fails closed (null)
+ *  rather than emitting Infinity as a "close". */
+export function ethbtcRatio(ethCloses, btcCloses) {
+  if (!Array.isArray(ethCloses) || !Array.isArray(btcCloses)) return null;
+  const n = Math.min(ethCloses.length, btcCloses.length);
+  if (n < MIN_BARS) return null;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const e = Number(ethCloses[ethCloses.length - n + i]);
+    const b = Number(btcCloses[btcCloses.length - n + i]);
+    if (!(e > 0) || !(b > 0) || !Number.isFinite(e) || !Number.isFinite(b)) return null;
+    out.push(String(e / b));
+  }
+  return out;
+}
+
 const okxKlines = (sym) => {
   // OKX instruments use a dash: ETHBTC -> ETH-BTC, ETHUSDT -> ETH-USDT.
   const s = String(sym).toUpperCase();
@@ -59,9 +89,20 @@ const binanceKlines = (sym) =>
   json(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=120`)
     .then((arr) => Array.isArray(arr) ? arr.map((c) => String(c[4])).filter(Boolean) : null);
 
+/** @returns {Promise<{series: string[], source: string}|null>} */
 const fetchEthbtcCloses = async () => {
-  for (const fn of [okxKlines, binanceKlines]) {
-    try { const c = await fn("ETHBTC"); if (c && c.length >= MIN_BARS) return c; } catch { /* try next */ }
+  // 1) The venue itself: ETHUSDT/BTCUSDT futures closes → ETH/BTC ratio.
+  try {
+    const [eth, btc] = await Promise.all([toobitKlines("ETHUSDT"), toobitKlines("BTCUSDT")]);
+    const series = ethbtcRatio(eth, btc);
+    if (series) return { series, source: "toobit-futures-ratio" };
+  } catch { /* fall through */ }
+  // 2) Optional cross-provider fallbacks (used only when the venue is down).
+  for (const [fn, source] of [[okxKlines, "okx-rest"], [binanceKlines, "binance-rest"]]) {
+    try {
+      const series = await fn("ETHBTC");
+      if (series && series.length >= MIN_BARS) return { series, source };
+    } catch { /* try next */ }
   }
   return null;
 };
@@ -156,17 +197,18 @@ export const fetchRegimeIndices = async () => {
   ]);
   const cg = buildIndexSeries(rows ?? []);
   return {
-    // The exchange pair is the trading-venue truth; the CG ratio is a labelled
-    // fallback so a venue outage degrades to "still measurable", not UNKNOWN.
-    ETHBTC: ethbtc ?? cg.ETHBTC,
+    // The venue ratio is primary; the CG ratio is a labelled last resort so a
+    // venue outage degrades to "still measurable", not UNKNOWN.
+    ETHBTC: ethbtc?.series ?? cg.ETHBTC,
     "USDT.D": cg["USDT.D"],
     "BTC.D": cg["BTC.D"],
     TOTAL3: cg.TOTAL3,
     // Provenance travels with the series into the analysis run (docs/08 §8.2a):
-    // "exchange-klines" is the venue pair, "coingecko-estimate" is the
+    // "toobit-futures-ratio" is the venue's own ETHUSDT/BTCUSDT perpetual ratio,
+    // the other labels are cross-provider fallbacks, "coingecko-estimate" is the
     // supply-weighted top-250 approximation.
     sources: {
-      ETHBTC: ethbtc ? "exchange-klines" : cg.ETHBTC ? "coingecko-estimate" : null,
+      ETHBTC: ethbtc?.source ?? (cg.ETHBTC ? "coingecko-estimate" : null),
       "USDT.D": cg["USDT.D"] ? "coingecko-estimate" : null,
       "BTC.D": cg["BTC.D"] ? "coingecko-estimate" : null,
       TOTAL3: cg.TOTAL3 ? "coingecko-estimate" : null,

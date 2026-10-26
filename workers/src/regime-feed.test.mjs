@@ -3,7 +3,7 @@
 // ratio). Network access is not exercised here; the fail-soft paths are.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildIndexSeries, latestClose } from "./regime-feed.mjs";
+import { buildIndexSeries, ethbtcRatio, latestClose } from "./regime-feed.mjs";
 
 const bars = (n, f) => Array.from({ length: n }, (_, i) => f(i));
 const row = (symbol, supply, prices) => ({ symbol, circulating_supply: supply, sparkline_in_7d: { price: prices } });
@@ -72,5 +72,32 @@ describe("buildIndexSeries", () => {
   it("empty/unreachable payload => all null (UNKNOWN downstream)", () => {
     assert.deepEqual(buildIndexSeries(null), { ETHBTC: null, "USDT.D": null, "BTC.D": null, TOTAL3: null });
     assert.deepEqual(buildIndexSeries([]), { ETHBTC: null, "USDT.D": null, "BTC.D": null, TOTAL3: null });
+  });
+});
+
+describe("ethbtcRatio (Toobit futures ETHUSDT / BTCUSDT)", () => {
+  it("divides the venue's own perpetual closes bar-by-bar", () => {
+    const eth = bars(60, () => 30_000);
+    const btc = bars(60, () => 60_000);
+    const s = ethbtcRatio(eth, btc);
+    assert.equal(s.length, 60);
+    assert.equal(s.at(-1), "0.5");
+  });
+
+  it("aligns on the NEWEST bars when one series is longer", () => {
+    // ETH has 10 stale bars at the front (1-dollar artefacts); they must be dropped.
+    const eth = [...bars(10, () => 1), ...bars(60, () => 30_000)];
+    const btc = bars(60, () => 60_000);
+    const s = ethbtcRatio(eth, btc);
+    assert.equal(s.length, 60);
+    assert.equal(s.at(-1), "0.5");
+    assert.ok(s.every((v) => v === "0.5"));
+  });
+
+  it("fails closed on a short, non-positive or non-numeric bar", () => {
+    assert.equal(ethbtcRatio(bars(20, () => 1), bars(60, () => 1)), null);
+    assert.equal(ethbtcRatio(bars(60, (i) => (i === 3 ? 0 : 30_000)), bars(60, () => 60_000)), null);
+    assert.equal(ethbtcRatio(bars(60, (i) => (i === 4 ? "n/a" : 30_000)), bars(60, () => 60_000)), null);
+    assert.equal(ethbtcRatio(null, bars(60, () => 1)), null);
   });
 });

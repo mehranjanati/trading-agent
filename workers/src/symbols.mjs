@@ -39,6 +39,10 @@ export function parseSymbols(body) {
   for (const r of list) {
     const raw = r?.s ?? r?.symbol;
     if (!raw) continue;
+    // Futures rows carry the `-SWAP-` infix. A dash-free (canonical) row from a
+    // Toobit ticker is the SPOT book (TOOBIT-API-FACTS S4), so it must never
+    // enter the tradeable universe — even if the endpoint ever changes shape.
+    if (!String(raw).toUpperCase().includes("-SWAP-")) continue;
     const symbol = canonicalSymbol(raw);
     if (!SYMBOL_RE.test(symbol) || seen.has(symbol)) continue;
     seen.add(symbol);

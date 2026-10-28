@@ -21,6 +21,7 @@ import (
 	"trading-agent/go-watcher/opstate"
 	"trading-agent/go-watcher/prices"
 	"trading-agent/go-watcher/redisx"
+	"trading-agent/go-watcher/skills"
 	"trading-agent/go-watcher/snapshot"
 	"trading-agent/go-watcher/stream"
 )
@@ -86,11 +87,19 @@ func main() {
 	// readiness (the heartbeat stays the safety-critical plane).
 	initTriggerLoop(base)
 
+	// Skill engine (advisory): native Go skills registered once at startup.
+	skillReg := skills.NewRegistry()
+	skills.RegisterBuiltins(skillReg)
+	skillRouter := skills.NewRouter(skillReg)
+	fmt.Fprintf(os.Stderr, "skills: engine ready (%d builtins)\\n", len(skillReg.List()))
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("/analyze", serveAnalyze)
 	// Pinned-WASM catalog for the dashboard library tab (advisory, read-only).
 	mux.HandleFunc("/strategies/registry", serveRegistry)
+	// Skill facade: POST /skills/{name} → native Go skill engine.
+	mux.HandleFunc("/skills/{name}", skills.HandleRoute(skillRouter))
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if !ready.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)

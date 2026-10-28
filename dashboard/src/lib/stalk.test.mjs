@@ -7,11 +7,14 @@
 // The rule now: the provider, the bar count and the newest close travel with the
 // prices, and `isVenueSourced` is what the card keys its warning off.
 //
-// Imports the real module (stalk.ts) — Node strips the types, so the tested code
-// is the shipped code, not a mirror.
+// Imports the real implementation (stalk-core.mjs) — NOT a hand-copied mirror
+// and not the .ts wrapper: CI pins Node 20, which cannot load a .ts specifier,
+// so a test importing `./stalk.ts` failed with ERR_UNKNOWN_FILE_EXTENSION
+// before a single assertion ran. stalk.ts stays the typed surface the Svelte
+// components import (the setups-core.mjs / groups-core.mjs pattern).
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { proposalFromAnalyze, isVenueSourced, stalkBody, bandStats, fmtPct, IN_PLAY_PCT } from "./stalk.ts";
+import { proposalFromAnalyze, isVenueSourced, stalkBody, bandStats, fmtPct, IN_PLAY_PCT } from "./stalk-core.mjs";
 
 const ANALYZE = (zones) => ({ id: "an_20261016T121746_2", symbol: "CELRUSDT", suggest_zones: zones });
 

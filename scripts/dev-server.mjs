@@ -15,13 +15,25 @@
 // host.docker.internal (E12-T01 local proof: go-watcher runs in Docker).
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, rmSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, rmSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const MIGRATIONS = ["migrations/0001_init.sql", "migrations/0002_schema.sql", "migrations/0003_seed.sql", "migrations/0004_strategy_drafts.sql", "migrations/0007_notify_prefs.sql", "migrations/0008_stop_loss.sql", "migrations/0009_slot_cap.sql", "migrations/0010_regime_filter.sql"];
+
+/** The migration chain, DISCOVERED from ./migrations instead of hardcoded.
+ *  A hardcoded list silently drifted: it had left out 0005 (chat_attachments) and
+ *  0006 (notification_outbox), so a fresh local DB had no notify_prefs at all and
+ *  0007's CREATE ran unguarded — surfacing as "table notify_prefs has more than
+ *  one primary key" at boot. Sorted by filename = the documented forward order. */
+export function migrationFiles(root = ROOT) {
+  return readdirSync(join(root, "migrations"))
+    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
+    .sort()
+    .map((f) => `migrations/${f}`);
+}
+const MIGRATIONS = migrationFiles();
 
 export function parseFlags(argv) {
   const flags = { port: 8787, host: "127.0.0.1", cronMs: 10_000, db: join(tmpdir(), "e06-drill.sqlite"), seed: true, verbose: false };

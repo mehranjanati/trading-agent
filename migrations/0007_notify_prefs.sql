@@ -2,12 +2,17 @@
 -- Advisory-only: toggles which events push to Telegram, never triggers an order/approval.
 -- RBAC: trader+ may toggle (browser POST allow-list). 400 on unknown topic.
 -- Schema: store one row per topic; absent rows = enabled.
+-- NOTE: 0006 already creates this table (enabled INTEGER / updated_at TEXT), so in
+-- the normal chain this file is a no-op (IF NOT EXISTS). The definition here must
+-- still be VALID on its own: the primary key is declared exactly ONCE. A second
+-- `PRIMARY KEY (topic)` clause made this file fail with "table notify_prefs has
+-- more than one primary key" on any DB where 0006 had not run first (fresh local
+-- stacks), while IF NOT EXISTS silently hid that failure for the deployed chain.
 
 CREATE TABLE IF NOT EXISTS notify_prefs (
   topic TEXT PRIMARY KEY,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-  PRIMARY KEY (topic)
+  updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)
 );
 
 -- Seed all seven topics enabled.  The user then toggles via /api/notify:prefs.

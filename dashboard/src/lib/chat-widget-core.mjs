@@ -17,7 +17,15 @@ export const WIDGET_OPEN_KEY = "chat_widget_open";
  *  in the session (Redis / /chat shows them); the widget shows the tail. */
 export const WIDGET_VISIBLE_TURNS = 30;
 
-/** Return the last N turns for the floating panel. */
+/** One chat turn as the widget renders it; WsState/WsNext are the WS reducer's in/out. */
+/** @typedef {{ role?: string, content?: string, id?: string, [k: string]: any }} ChatTurn */
+/** @typedef {{ live?: string, loading?: boolean }} WsState */
+/** @typedef {{ live: string, error: string|null, commit: string|null, loading: boolean }} WsNext */
+
+/** Return the last N turns for the floating panel.
+ *  @param {ChatTurn[]|null|undefined} messages
+ *  @param {number} [limit]
+ *  @returns {ChatTurn[]} */
 export function visibleMessages(messages, limit = WIDGET_VISIBLE_TURNS) {
   if (!Array.isArray(messages)) return [];
   if (messages.length <= limit) return messages;
@@ -25,8 +33,12 @@ export function visibleMessages(messages, limit = WIDGET_VISIBLE_TURNS) {
 }
 
 /** Minimal WS-event router shared with the /chat page semantics:
- *  chunk -> append to live, done -> commit assistant turn, error -> surface. */
+ *  chunk -> append to live, done -> commit assistant turn, error -> surface.
+ *  @param {WsState} state
+ *  @param {{ type?: string, text?: string, error?: string }|null|undefined} msg
+ *  @returns {WsNext} */
 export function applyWsEvent(state, msg) {
+  /** @type {WsNext} */
   const next = { live: state.live ?? "", error: null, commit: null, loading: state.loading ?? false };
   if (msg?.type === "chunk") {
     next.live = (state.live ?? "") + (msg.text ?? "");

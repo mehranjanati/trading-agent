@@ -59,3 +59,10 @@ binding = "AI"
 [[r2_buckets]]
 binding = "CHAT_MEDIA"
 bucket_name = "trading-chat-media"
+
+# E12-T01: ExecutionAuthority Durable Object — durable lease holder with
+# alarm-based self-renewal so a missed cron tick cannot cause permanent
+# lease_expired. One singleton per environment.
+[[durable_objects.bindings]]
+name = "EXECUTION_AUTHORITY"
+class_name = "ExecutionAuthority"

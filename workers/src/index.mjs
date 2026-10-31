@@ -19,6 +19,13 @@ import { listSymbols } from "./symbols.mjs";
 import { listPrices } from "./quotes.mjs";
 import { drainNotifications } from "./notify.mjs";
 
+// E12-T01: Durable Object classes MUST be exported from the ENTRYPOINT — the
+// binding in wrangler.toml ([durable_objects.bindings] class_name=...) resolves
+// against this file's exports, and `wrangler deploy` fails with "Your Worker
+// depends on the following Durable Objects, which are not exported in your
+// entrypoint file" otherwise (the 2026-10-31 git-build failure).
+export { ExecutionAuthority, WatchCoordinator, DashboardFanout } from "./do.mjs";
+
 const store = createStore();
 const watches = watchRoutes(store);
 const misc = miscRoutes();

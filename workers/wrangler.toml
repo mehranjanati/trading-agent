@@ -59,3 +59,10 @@ bucket_name = "trading-chat-media"
 name = "EXECUTION_AUTHORITY"
 class_name = "ExecutionAuthority"
 
+# E12-T01: mandatory migration for a NEW DO class; new_sqlite_classes also
+# selects the SQLite storage backend (available on every plan). Without this
+# section `wrangler deploy` fails to create the class namespace.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ExecutionAuthority"]
+

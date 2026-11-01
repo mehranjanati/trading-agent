@@ -198,4 +198,42 @@ describe("E06-T02-S3b authority row (D1) + cron renewal", () => {
     assert.equal((await allowed.json()).epoch, 1);
     assert.match(scalars("SELECT incident FROM recovery_log;"), /lease\.handoff/);
   });
+
+  it("the cron renews THROUGH the DO when the binding exists (alarm arming path)", async () => {
+    const env = freshEnv();
+    const now = Date.now();
+    const { handoffLease, readLease, recordHeartbeat } = await import("./health-route.mjs");
+    const { runCron } = await import("./index.mjs");
+
+    const granted = await handoffLease(env, { holder: HOLDERS.PRIMARY, nowMs: now });
+    await recordHeartbeat(env, { go_heartbeat_ms: now, stream_lag_ms: 0, redis_reachable: true });
+
+    // Mock DO namespace: records the path it was called with; the /renew call
+    // performs the D1 write-back exactly like the real DO's syncToD1.
+    const calls = [];
+    const real = await import("./health-route.mjs");
+    env.EXECUTION_AUTHORITY = {
+      idFromName: (n) => ({ n }),
+      get: () => ({
+        fetch: async (url, init) => {
+          const path = new URL(url).pathname;
+          const body = JSON.parse(init.body);
+          calls.push(path);
+          if (path === "/renew") {
+            // mirror the real DO: renew its own copy AND sync D1
+            const out = await real.renewLease(env, { holder: body.holder, epoch: body.epoch, nowMs: Date.now() });
+            return Response.json(out);
+          }
+          return Response.json({ ok: false, reason: "not-implemented" });
+        },
+      }),
+    };
+
+    const tick = await runCron(env, { nowMs: now + 5000 });
+    assert.deepEqual(calls, ["/renew"], "cron talked to the DO once");
+    assert.equal(tick.rejoin.lease_ours, true);
+    const renewed = await readLease(env);
+    assert.ok(renewed.expires_ms > granted.expires_ms, "D1 row renewed via the DO write-back");
+    assert.equal(renewed.epoch, granted.epoch, "renew through the DO never bumps the epoch");
+  });
 });

@@ -158,4 +158,45 @@ describe("E12-T01 ExecutionAuthority DO — durable + alarm self-renewal", () =>
     assert.equal(body.ok, true, "expired lease can be acquired by another holder");
     assert.equal(body.epoch, 4, "epoch bumps on recovery acquire");
   });
+
+  it("/handoff reuses the holder's own unexpired lease (idempotent operator retry)", async () => {
+    const st = storage();
+    const doa = makeDo(st);
+    const first = await (await doa.fetch(new Request("http://x/handoff", {
+      method: "POST", body: JSON.stringify({ holder: HOLDERS.PRIMARY }),
+    }))).json();
+    assert.equal(first.ok, true);
+    assert.equal(first.epoch, 1);
+
+    const second = await (await doa.fetch(new Request("http://x/handoff", {
+      method: "POST", body: JSON.stringify({ holder: HOLDERS.PRIMARY }),
+    }))).json();
+    assert.equal(second.ok, true);
+    assert.equal(second.reused, true, "same holder → reuse, no epoch bump");
+    assert.equal(second.epoch, first.epoch, "epoch unchanged on reuse");
+  });
+
+  it("/handoff releases an unexpired other holder and bumps the epoch (zombie fenced)", async () => {
+    const st = storage();
+    const doa = makeDo(st);
+    const fb = await (await doa.fetch(new Request("http://x/handoff", {
+      method: "POST", body: JSON.stringify({ holder: HOLDERS.FALLBACK }),
+    }))).json();
+    assert.equal(fb.ok, true);
+    assert.equal(fb.epoch, 1);
+
+    const primary = await (await doa.fetch(new Request("http://x/handoff", {
+      method: "POST", body: JSON.stringify({ holder: HOLDERS.PRIMARY }),
+    }))).json();
+    assert.equal(primary.ok, true);
+    assert.equal(primary.epoch, 2, "release + acquire → strictly greater epoch");
+    assert.equal(primary.holder, HOLDERS.PRIMARY);
+
+    // the zombie fallback can no longer renew its old epoch
+    const stale = await (await doa.fetch(new Request("http://x/renew", {
+      method: "POST", body: JSON.stringify({ holder: HOLDERS.FALLBACK, epoch: fb.epoch }),
+    }))).json();
+    assert.equal(stale.ok, false);
+    assert.equal(stale.reason, "stale-epoch");
+  });
 });

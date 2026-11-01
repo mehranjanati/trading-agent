@@ -83,7 +83,11 @@ export function healthRoutes() {
       if (g) return g;
       const body = await readBody(req).catch(() => ({}));
       const holder = body?.holder === HOLDERS.FALLBACK ? HOLDERS.FALLBACK : HOLDERS.PRIMARY;
-      const lease = await handoffLease(env, { holder, nowMs: Date.now() });
+      // E12-T01: when the DO binding exists the DO is the live authority —
+      // handoff through it (release-then-acquire, epoch bump, D1 synced back).
+      // Without the binding (tests/dev-server) the D1 seam stays the path.
+      const lease = (await handoffLeaseViaDO(env, { holder }))
+        ?? await handoffLease(env, { holder, nowMs: Date.now() });
       await recordIncident(env, "lease.handoff", `epoch=${lease.epoch} holder=${lease.holder}`, roleOf(req));
       return ok({ ...lease });
     }),
@@ -209,6 +213,45 @@ export async function handoffLease(env, { holder = HOLDERS.PRIMARY, nowMs = Date
  *  `stale-epoch` — the fencing check of §6.3 / the `lease.fenced` alert path. */
 export async function renewLease(env, { holder, epoch, nowMs = Date.now() } = {}) {
   return withAuthority(env, nowMs, (auth) => auth.renew(holder, epoch, nowMs));
+}
+
+// E12-T01: when the ExecutionAuthority DO binding exists, the DO is the live
+// lease holder — it persists its own copy, arms the mid-TTL self-renewal
+// alarm (survives cron gaps), and syncs the D1 row on every state change, so
+// readLease()/fenceResult() keep reading D1 unchanged. Helpers below post to
+// the DO singleton; callers fall back to the D1 seam when the binding is
+// absent (tests/dev-server).
+
+/** Singleton DO id — one authority per environment. */
+export function authorityStub(env) {
+  if (!env.EXECUTION_AUTHORITY) return null;
+  const stub = env.EXECUTION_AUTHORITY.get(env.EXECUTION_AUTHORITY.idFromName("execution-authority"));
+  return stub;
+}
+
+async function postAuthority(stub, path, body) {
+  const res = await stub.fetch(`https://execution-authority${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+/** Renew through the DO. Same renew-only-while-held semantics as renewLease:
+ *  the epoch comes from the D1 row (kept in sync by the DO), a mismatch is
+ *  reported as stale-epoch and the cron records the `lease.fenced` incident. */
+export async function renewLeaseViaDO(env, { holder, epoch }) {
+  const stub = authorityStub(env);
+  if (!stub) return null; // no binding → caller falls back to D1
+  return postAuthority(stub, "/renew", { holder, epoch });
+}
+
+/** §6.3 step-4 handoff through the DO (release-then-acquire, epoch bump). */
+export async function handoffLeaseViaDO(env, { holder = HOLDERS.PRIMARY }) {
+  const stub = authorityStub(env);
+  if (!stub) return null;
+  return postAuthority(stub, "/handoff", { holder });
 }
 
 /** Fencing token check — every submit MUST pass this (ADR-003). */

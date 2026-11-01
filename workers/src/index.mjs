@@ -8,7 +8,7 @@ import { createStore } from "./idempotency.mjs";
 import { writeErr, recordIncident } from "./_shared.mjs";
 import { watchRoutes } from "./routes.mjs";
 import { miscRoutes } from "./routes2.mjs";
-import { healthRoutes, runTick, lastModeRow, readLease, renewLease } from "./health-route.mjs";
+import { healthRoutes, runTick, lastModeRow, readLease, renewLease, renewLeaseViaDO } from "./health-route.mjs";
 import { sweep, readCursor, shouldSweep } from "./reconcile.mjs";
 import { sweepApprovals, readCursor as readApprovalCursor, shouldSweep as shouldSweepApprovals } from "./approvals.mjs";
 import { HOLDERS, holdsAuthority } from "./lease.mjs";
@@ -126,11 +126,17 @@ export async function runCron(env, opts = {}) {
   }
 
   // §6.3 condition 4 — the holder renews; a stale epoch is the `lease.fenced` alert.
+  // E12-T01: when the ExecutionAuthority DO binding exists the renew goes through
+  // the DO — it persists its own copy, ARMS the mid-TTL self-renewal alarm, and
+  // syncs the D1 row, so the lease survives cron gaps (the root cause of the
+  // permanent lease_expired wedge). Identical renew-only-while-held semantics;
+  // no binding (tests/dev-server) → the D1 seam as before.
   let leaseOurs = false;
   try {
     const lease = await readLease(env);
     if (holdsAuthority(lease, HOLDERS.PRIMARY, nowMs)) {
-      const renew = await renewLease(env, { holder: HOLDERS.PRIMARY, epoch: lease.epoch, nowMs });
+      const renew = (await renewLeaseViaDO(env, { holder: HOLDERS.PRIMARY, epoch: lease.epoch }))
+        ?? await renewLease(env, { holder: HOLDERS.PRIMARY, epoch: lease.epoch, nowMs });
       leaseOurs = renew.ok === true;
       if (renew.reason === "stale-epoch") {
         await recordIncident(env, "lease.fenced", `epoch=${lease.epoch} holder=${HOLDERS.PRIMARY}`, "health-cron");

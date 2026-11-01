@@ -80,6 +80,19 @@ export class ExecutionAuthority {
     else if (u.pathname === "/renew") result = this.impl.renew(b.holder, b.epoch, now);
     else if (u.pathname === "/verify") result = this.impl.verify(b.holder, b.epoch, now);
     else if (u.pathname === "/release") result = this.impl.release(b.holder, b.epoch);
+    else if (u.pathname === "/handoff") {
+      // §6.3 step 4 — mirrors health-route.handoffLease exactly: reusing own
+      // unexpired lease is a no-op; an unexpired lease held by someone else is
+      // released first (single global holder), so the winner always gets a
+      // strictly greater epoch and the previous holder is fenced from then on.
+      const cur = this.impl.load();
+      if (cur && cur.holder === b.holder && cur.expires_ms > now) {
+        result = { ok: true, ...cur, reused: true };
+      } else {
+        if (cur && cur.expires_ms > now) this.impl.release(cur.holder, cur.epoch);
+        result = this.impl.acquire(b.holder, now);
+      }
+    }
     else return new Response(JSON.stringify({ code: "NOT_IMPLEMENTED" }), { status: 501, headers: { "content-type": "application/json" } });
     if (result.ok) {
       await syncToD1(this.impl, this.env);

@@ -6,14 +6,17 @@ import assert from "node:assert/strict";
 import { ExecutionAuthority } from "./do.mjs";
 import { HOLDERS, TTL_MS } from "./lease.mjs";
 
+// In-memory DO state.storage mock. ASYNC on purpose: the real
+// DurableObjectStorage returns Promises for get/put, and a synchronous mock
+// hid that fact once (JSON.parse on a Promise → "[object Promise]" in prod).
 const storage = () => {
   const m = new Map();
   let alarmTime = null;
   return {
     storage: {
-      get: (k) => m.get(k),
-      put: (k, v) => m.set(k, v),
-      setAlarm: (t) => { alarmTime = t; },
+      get: async (k) => m.get(k),
+      put: async (k, v) => { m.set(k, v); },
+      setAlarm: async (t) => { alarmTime = t; },
     },
     alarm: () => alarmTime,
   };
@@ -35,7 +38,7 @@ describe("E12-T01 ExecutionAuthority DO — durable + alarm self-renewal", () =>
     assert.equal(body.ok, true);
     assert.equal(body.holder, HOLDERS.PRIMARY);
     assert.ok(body.expires_ms > now, "lease gets a TTL");
-    assert.equal(JSON.parse(st.storage.get("lease")).holder, HOLDERS.PRIMARY, "persisted to DO storage");
+    assert.equal(JSON.parse(await st.storage.get("lease")).holder, HOLDERS.PRIMARY, "persisted to DO storage");
     assert.ok(st.alarm() > now, "alarm set after acquire");
   });
 
@@ -110,7 +113,7 @@ describe("E12-T01 ExecutionAuthority DO — durable + alarm self-renewal", () =>
     await doa.fetch(new Request("http://x/acquire", {
       method: "POST", body: JSON.stringify({ holder: HOLDERS.PRIMARY }),
     }));
-    const before = JSON.parse(st.storage.get("lease"));
+    const before = JSON.parse(await st.storage.get("lease"));
     const beforeExpires = before.expires_ms;
 
     // Small delay so Date.now() advances past the acquire timestamp,
@@ -118,7 +121,7 @@ describe("E12-T01 ExecutionAuthority DO — durable + alarm self-renewal", () =>
     await new Promise((r) => setTimeout(r, 10));
 
     await doa.alarm();
-    const after = JSON.parse(st.storage.get("lease"));
+    const after = JSON.parse(await st.storage.get("lease"));
     assert.ok(after.expires_ms > beforeExpires, "alarm renewed the lease");
     assert.equal(after.epoch, before.epoch, "alarm renew does not bump epoch");
     assert.ok(st.alarm() > now, "alarm sets next alarm");
@@ -132,7 +135,7 @@ describe("E12-T01 ExecutionAuthority DO — durable + alarm self-renewal", () =>
       holder: HOLDERS.PRIMARY, epoch: 1, expires_ms: now - TTL_MS,
     }));
     await doa.alarm();
-    const cur = JSON.parse(st.storage.get("lease"));
+    const cur = JSON.parse(await st.storage.get("lease"));
     assert.equal(cur.expires_ms, now - TTL_MS, "expired lease not touched by alarm");
     assert.equal(cur.holder, HOLDERS.PRIMARY, "holder not cleared by alarm (explicit handoff required)");
   });
@@ -141,7 +144,7 @@ describe("E12-T01 ExecutionAuthority DO — durable + alarm self-renewal", () =>
     const st = storage();
     const doa = makeDo(st);
     await doa.alarm();
-    assert.equal(st.storage.get("lease"), undefined, "no lease created by alarm");
+    assert.equal(await st.storage.get("lease"), undefined, "no lease created by alarm");
   });
 
   it("acquire after expiry succeeds (recovery path)", async () => {

@@ -12,11 +12,12 @@ const mem = () => {
   return { get: (k) => m.get(k) ?? null, set: (k, v) => m.set(k, v), put: (k, v) => m.set(k, v) };
 };
 
-// Adapter: DO state.storage has get/put; lease.mjs expects get/set.
-const doStorage = (state) => ({
-  get: (k) => k === "lease" ? state.storage.get("lease") : null,
-  set: (k, v) => k === "lease" ? state.storage.put("lease", v) : null,
-});
+// NOTE: DO state.storage is ASYNC (get/put return Promises), while the pure
+// state machine in lease.mjs is synchronous — so every request hydrates a
+// memory map from an awaited read, runs the operation, then flushes any change
+// back (the same pattern health-route.withAuthority uses over the D1 row).
+// Getting this wrong is silent in a sync mock and fatal in production:
+// JSON.parse(String(promise)) throws `Unexpected token 'o', "[object Promise]"`.
 
 /** Write the in-memory lease back to the D1 health_snapshots row so readLease()
  *  (D1-backed) and the DO stay in sync. No-op when env.DB is unavailable
@@ -37,69 +38,71 @@ export class ExecutionAuthority {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.impl = null;
   }
 
-  /** Lazily bind the pure state machine to DO durable storage. */
-  async ensure() {
-    if (this.impl) return;
-    this.impl = createAuthority(doStorage(this.state));
+  /** Hydrate → run → flush. `fn` receives the sync state machine; a changed
+   *  lease is persisted to DO storage, mirrored to D1 and the mid-TTL
+   *  self-renewal alarm is re-armed. Returns whatever `fn` returned. */
+  async apply(fn) {
+    const stored = (await this.state.storage.get("lease")) ?? null; // JSON string
+    const mem = { lease: stored };
+    const impl = createAuthority({ get: (k) => mem[k] ?? null, set: (k, v) => { mem[k] = v; } });
+    const out = fn(impl);
+    if (mem.lease !== stored) {
+      await this.state.storage.put("lease", mem.lease);
+      await syncToD1(impl, this.env);
+      const cur = impl.load();
+      if (cur && cur.holder) {
+        // Next alarm at mid-TTL so the lease survives a missed cron tick.
+        await this.state.storage.setAlarm(cur.expires_ms - Math.floor(TTL_MS / 2));
+      }
+    }
+    return out;
   }
 
   /** Alarm handler — self-renewal before TTL expires. Fired by the DO runtime
    *  after setAlarm(); keeps the lease alive even if the Workers cron misses a
-   *  tick (the root cause of permanent lease_expired). */
+   *  tick (the root cause of permanent lease_expired). A successful renew re-arms
+   *  the next alarm inside apply() (mid-TTL); a failed renew retries soon; with
+   *  no lease the DO just wakes up later — recovery stays an explicit operator
+   *  handoff, never an automatic grab. */
   async alarm() {
-    await this.ensure();
-    const cur = this.impl.load();
     const now = Date.now();
-    if (cur && cur.holder && cur.expires_ms > now) {
-      const renewed = this.impl.renew(cur.holder, cur.epoch, now);
-      if (renewed.ok) {
-        await syncToD1(this.impl, this.env);
-        // Next alarm at mid-TTL of the renewed lease.
-        await this.state.storage.setAlarm(renewed.expires_ms - Math.floor(TTL_MS / 2));
-      } else {
-        // Renewal failed (shouldn't happen while we hold it); retry soon.
-        await this.state.storage.setAlarm(now + Math.floor(TTL_MS / 4));
-      }
-    } else {
-      // No active holder or already expired: nothing to auto-renew. An explicit
-      // handoff/acquire via fetch() is required to restart authority.
-      await this.state.storage.setAlarm(now + TTL_MS);
-    }
+    const out = await this.apply((impl) => {
+      const cur = impl.load();
+      if (cur && cur.holder && cur.expires_ms > now) return impl.renew(cur.holder, cur.epoch, now);
+      return null;
+    });
+    if (out && out.ok === false) await this.state.storage.setAlarm(now + Math.floor(TTL_MS / 4));
+    else if (!out) await this.state.storage.setAlarm(now + TTL_MS);
   }
 
   async fetch(req) {
-    await this.ensure();
     const u = new URL(req.url);
     const b = await req.json().catch(() => ({}));
     const now = Date.now();
-    let result;
-    if (u.pathname === "/acquire") result = this.impl.acquire(b.holder, now);
-    else if (u.pathname === "/renew") result = this.impl.renew(b.holder, b.epoch, now);
-    else if (u.pathname === "/verify") result = this.impl.verify(b.holder, b.epoch, now);
-    else if (u.pathname === "/release") result = this.impl.release(b.holder, b.epoch);
-    else if (u.pathname === "/handoff") {
-      // §6.3 step 4 — mirrors health-route.handoffLease exactly: reusing own
-      // unexpired lease is a no-op; an unexpired lease held by someone else is
-      // released first (single global holder), so the winner always gets a
-      // strictly greater epoch and the previous holder is fenced from then on.
-      const cur = this.impl.load();
-      if (cur && cur.holder === b.holder && cur.expires_ms > now) {
-        result = { ok: true, ...cur, reused: true };
-      } else {
-        if (cur && cur.expires_ms > now) this.impl.release(cur.holder, cur.epoch);
-        result = this.impl.acquire(b.holder, now);
+    const result = await this.apply((impl) => {
+      if (u.pathname === "/acquire") return impl.acquire(b.holder, now);
+      if (u.pathname === "/renew") return impl.renew(b.holder, b.epoch, now);
+      if (u.pathname === "/verify") return impl.verify(b.holder, b.epoch, now);
+      if (u.pathname === "/release") return impl.release(b.holder, b.epoch);
+      if (u.pathname === "/handoff") {
+        // §6.3 step 4 — mirrors health-route.handoffLease exactly: reusing the
+        // holder's own unexpired lease is a no-op; an unexpired lease held by
+        // someone else is released first (single global holder), so the winner
+        // always gets a strictly greater epoch and the previous holder is
+        // fenced from then on.
+        const cur = impl.load();
+        if (cur && cur.holder === b.holder && cur.expires_ms > now) {
+          return { ok: true, ...cur, reused: true };
+        }
+        if (cur && cur.expires_ms > now) impl.release(cur.holder, cur.epoch);
+        return impl.acquire(b.holder, now);
       }
-    }
-    else return new Response(JSON.stringify({ code: "NOT_IMPLEMENTED" }), { status: 501, headers: { "content-type": "application/json" } });
-    if (result.ok) {
-      await syncToD1(this.impl, this.env);
-      // Schedule the next self-renewal alarm at mid-TTL so the lease stays
-      // alive even if the Workers cron misses a tick.
-      const cur = this.impl.load();
-      await this.state.storage.setAlarm(cur.expires_ms - Math.floor(TTL_MS / 2));
+      return null;
+    });
+    if (!result) {
+      return new Response(JSON.stringify({ code: "NOT_IMPLEMENTED" }), { status: 501, headers: { "content-type": "application/json" } });
     }
     return Response.json(result);
   }

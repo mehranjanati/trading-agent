@@ -25,7 +25,8 @@ export const SESSION_SYMBOL_RE = /^[A-Z]{2,12}USDT$/;
  *  `sym_OPENUSDT`, or "" for "not a venue symbol" (then the caller falls back
  *  to the legacy random session). Deriving it client-side is what makes the
  *  cockpit show the same conversation on every device, without trusting
- *  localStorage to remember anything. */
+ *  localStorage to remember anything.
+ *  @param {string|null|undefined} symbol @returns {string} */
 export function roomSessionId(symbol) {
   const s = String(symbol ?? "").trim().toUpperCase();
   return SESSION_SYMBOL_RE.test(s) ? `sym_${s}` : "";
@@ -36,7 +37,8 @@ export function roomSessionId(symbol) {
  *  WHY IT EXISTS: switching symbol destroys and re-creates the panel (the
  *  `{#key symbol}` fix), which would otherwise throw away whatever the trader
  *  had typed. The draft is stored per THREAD, so openusdt's half-written
- *  question never reappears on btcusdt. */
+ *  question never reappears on btcusdt.
+ *  @param {string|null|undefined} sessionId @returns {string} */
 export function chatDraftKey(sessionId) {
   const id = String(sessionId ?? "").trim();
   return id ? `chat_draft_${id}` : "chat_draft_global";

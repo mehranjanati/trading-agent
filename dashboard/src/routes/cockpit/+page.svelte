@@ -437,7 +437,17 @@
         {/if}
       </section>
 
-      <RoomChat {symbol} />
+      <!-- One assistant per symbol (docs/20 §20.3, ADR-014): `{#key}` DESTROYS and
+       *  re-creates the panel when the symbol changes, so `onDestroy` closes the
+       *  previous symbol's socket and `onMount` boots the new thread
+       *  (`sym_<SYMBOL>`). Without the key the component is reused by SvelteKit
+       *  on a same-route query change, and the transcript/socket stayed on the
+       *  FIRST symbol — two threads could even mix. -->
+      {#if symbol}
+        {#key symbol}
+          <RoomChat {symbol} />
+        {/key}
+      {/if}
     </main>
   </div>
 </div>

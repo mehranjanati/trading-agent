@@ -12,6 +12,7 @@ import {
   buildRestOutbound,
   roomSessionId,
   SESSION_SYMBOL_RE,
+  chatDraftKey,
   parseChatStreamFrame,
   pageContext,
   SETUPS_KEY,
@@ -236,5 +237,17 @@ describe("ADR-014 roomSessionId — one permanent thread per symbol", () => {
   it("the session regex matches the shared shape", () => {
     assert.equal(SESSION_SYMBOL_RE.test("OPENUSDT"), true);
     assert.equal(SESSION_SYMBOL_RE.test("openusdt"), false);
+  });
+});
+
+describe("ADR-014 chatDraftKey — the unsent input is per thread", () => {
+  it("keys the draft by thread, so switching symbol cannot mix drafts", () => {
+    assert.equal(chatDraftKey("sym_OPENUSDT"), "chat_draft_sym_OPENUSDT");
+    assert.equal(chatDraftKey("sym_BTCUSDT"), "chat_draft_sym_BTCUSDT");
+    assert.notEqual(chatDraftKey("sym_OPENUSDT"), chatDraftKey("sym_BTCUSDT"));
+  });
+  it("falls back to one global draft when there is no thread", () => {
+    assert.equal(chatDraftKey(""), "chat_draft_global");
+    assert.equal(chatDraftKey(null), "chat_draft_global");
   });
 });

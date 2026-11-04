@@ -29,6 +29,7 @@
     buildRestOutbound,
     pageContext,
     roomSessionId,
+    chatDraftKey,
     SETUPS_KEY,
   } from "$lib/chat-widget-core.mjs";
   import { chatSessionKey } from "$lib/setups";
@@ -57,6 +58,11 @@
   $: persistentId = roomSessionId(symbol);
   $: sessionKey = symbol ? chatSessionKey(symbol) : "chat_session_id";
   $: messagesKey = symbol ? `chat_messages_${symbol}` : "chat_messages";
+  // Unsent input belongs to the THREAD: switching symbol remounts this panel
+  // (`{#key symbol}` in the cockpit), so the draft must survive the remount —
+  // and must never leak from one symbol's thread into another's.
+  $: draftKey = chatDraftKey(persistentId);
+  let mounted = false;
 
   function newTurnId(): string {
     try {
@@ -67,12 +73,31 @@
   }
 
   onMount(() => {
+    // Restore this thread's unsent draft before the first render of the input.
+    try {
+      const saved = localStorage.getItem(draftKey);
+      if (saved) input = saved;
+    } catch {
+      /* storage blocked — the panel still works, only the draft is not kept */
+    }
+    mounted = true;
     void boot();
     return () => {
       intentionalClose = true;
       ws?.close();
     };
   });
+
+  // Persist the draft on every keystroke (tiny strings; storage failures are
+  // ignored — the panel must never break because localStorage is blocked).
+  $: if (mounted) {
+    try {
+      if (input) localStorage.setItem(draftKey, input);
+      else localStorage.removeItem(draftKey);
+    } catch {
+      /* ignore */
+    }
+  }
 
   async function boot() {
     if (!(await chatServiceUp())) {
@@ -259,6 +284,7 @@
 <section class="roomchat" aria-label="advisory assistant {symbol ? 'for ' + symbol : '(all symbols)'}">
   <header>
     <span>💬 assistant{symbol ? ` · ${symbol}` : ""}</span>
+    <code class="thread" title="durable thread id — this panel only ever shows this thread (ADR-014)">{persistentId || "global"}</code>
     <span class="mode" class:ws={mode === "ws"}>{mode === "ws" ? (wsState === "open" ? "live" : wsState) : "rest"}</span>
     <a class="full" href={symbol ? `/chat?symbol=${symbol}` : "/chat"} title="charts, drafts and principles live here">full chat ↗</a>
   </header>
@@ -315,6 +341,11 @@
     border: 1px solid #30363d;
     border-radius: 6px;
     padding: 1px 6px;
+  }
+  .thread {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.62rem;
+    color: #6b7280;
   }
   .mode.ws {
     color: #3fb950;

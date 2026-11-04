@@ -31,6 +31,17 @@ export function roomSessionId(symbol) {
   return SESSION_SYMBOL_RE.test(s) ? `sym_${s}` : "";
 }
 
+/** chatDraftKey — where this thread keeps its unsent input.
+ *
+ *  WHY IT EXISTS: switching symbol destroys and re-creates the panel (the
+ *  `{#key symbol}` fix), which would otherwise throw away whatever the trader
+ *  had typed. The draft is stored per THREAD, so openusdt's half-written
+ *  question never reappears on btcusdt. */
+export function chatDraftKey(sessionId) {
+  const id = String(sessionId ?? "").trim();
+  return id ? `chat_draft_${id}` : "chat_draft_global";
+}
+
 /** One chat turn as the widget renders it; WsState/WsNext are the WS reducer's in/out. */
 /** @typedef {{ role?: string, content?: string, id?: string, [k: string]: any }} ChatTurn */
 /** @typedef {{ live?: string, loading?: boolean }} WsState */

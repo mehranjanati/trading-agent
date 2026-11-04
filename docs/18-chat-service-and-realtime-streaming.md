@@ -233,6 +233,15 @@ inline panel header still shows `live` (WS) vs `rest` (Worker REST), and both
 modes are now durable. `MAX_CONTENT` caps one turn at 32k chars, ≤4 attachments
 are recorded, and a read returns at most 500 rows.
 
+**Switching symbol switches the thread.** The cockpit renders the panel inside
+`{#key symbol}`, so a same-route query change (`?symbol=…`) destroys the old
+panel — closing its socket in `onDestroy` — and boots the new `sym_<SYMBOL>`
+thread in `onMount`. The unsent input is stored per thread (`chatDraftKey`), so
+the remount never loses a half-written question and never moves a draft from one
+symbol's thread into another's. The panel header prints the thread id
+(`sym_OPENUSDT`) next to the `live`/`rest` badge, which makes a mismatch visible
+instead of silent.
+
 **Tests.** `workers/src/chat-store.test.mjs` (ids, metadata-only, validation and
 an append → history → delete flow against an in-memory D1 fake),
 `go-watcher/chat/persist_test.go` (persister against an `httptest` Worker,

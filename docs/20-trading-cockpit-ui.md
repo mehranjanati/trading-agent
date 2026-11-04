@@ -60,6 +60,13 @@ Rules that the cockpit must keep (they are the reason the old split existed):
 3. **Explicit UNAVAILABLE** — a failed read never renders as an empty table.
 4. **Gap-explicit timelines** — `/activity` uses the same `timeline()` from `lib/freshness.mjs`.
 5. **Execution venue notice** — the paper-sim banner in `+layout.svelte` stays.
+6. **One assistant per symbol** — the inline panel is keyed on the symbol
+   (`{#key symbol}`): switching symbol DESTROYS and re-creates it, so the old
+   socket closes (`onDestroy`) and the new thread (`sym_<SYMBOL>`, ADR-014) is
+   booted (`onMount`). Without the key SvelteKit reuses the component on a
+   same-route query change, which left the transcript and the socket on the
+   FIRST symbol (and could mix two threads). The unsent input is kept per thread
+   (`chatDraftKey`), and the panel header prints the durable thread id.
 
 ## 20.4 Read-only is preserved (D-08)
 

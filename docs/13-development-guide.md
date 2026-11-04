@@ -11,7 +11,7 @@ Prereqs: Go 1.23+, Node 20+, wrangler, redis-stack. `cp .env.example .env` (pape
 ## 13.3 Quality gates
 - Go: `gofmt -l`, `go vet`, unit cov ≥80% on `watcher/`, `risk/`-adjacent code (none in Go, but trigger logic counts).
 - TS: `eslint`, `tsc --noEmit`, no `any` in approval/risk/execution paths, zod/io-ts validation at API boundary.
-- Every PR: `make check` green, task ID in title, risk label, docs refs, tests or explicit N/A justification.
+- Every PR: `make check` green (Redis-free — the Go drills live in `make drills`, server-only), task ID in title, risk label, docs refs, tests or explicit N/A justification.
 
 ## 13.4 Migrations & schema
 Forward-only `NNNN_desc.sql`; each migration has up-only SQL + rollback *plan* in comments. `events.dedupe_key` UNIQUE is load-bearing — never drop. Schema change → update §04 + JSON-schema + contract test in same PR.

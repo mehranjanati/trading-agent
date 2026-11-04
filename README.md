@@ -48,7 +48,8 @@ in Workers, canonical state in D1, and the Go Watcher never submits orders
 
 ## Quickstart (paper mode forced)
 ```bash
-make check   # lint + JSON validate + secret scan
+make check   # lint + JSON validate + secret scan + Redis-free tests (CI-safe)
+make drills  # Go drills (replay/flap/restart) — SERVER-ONLY: they need the Redis on the Go host
 make dev     # local paper-mode stack (no live keys)
 ```
 

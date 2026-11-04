@@ -14,7 +14,7 @@ strategy-build:
 	@ls -la "go-watcher/strategies/samples/$(ID)-$(VERSION).wasm"
 	@echo "add to go-watcher/strategies/samples/registry.json: {\"id\":\"$(ID)\",\"version\":\"$(VERSION)\",\"file\":\"$(ID)-$(VERSION).wasm\",\"configuration\":{}}"
 
-.PHONY: check lint validate secrets test dev
+.PHONY: check lint validate secrets test drills dev
 check: lint validate secrets test
 lint:
 	@./scripts/check.sh
@@ -28,6 +28,11 @@ test:
 	@node --test workers/src/*.test.mjs scripts/chaos.test.mjs scripts/validate-strategy-contract.test.mjs scripts/paper-gate.test.mjs 2>&1 | tail -n 8
 	@node --test dashboard/src/lib/*.test.mjs 2>&1 | tail -n 6
 	@cd go-watcher && go test ./... 2>&1 | tail -n 8
+# drills — SERVER-ONLY (E15/E16 infra split): the Go drills talk to the Redis that
+# lives on the Go host (redisx defaults to 127.0.0.1:6379 and REDIS_URL points at the
+# server instance). They are deliberately NOT part of `make check`/CI, which runs
+# Redis-free tests only; run this on the Hetzner/Go host after deploying.
+drills:
 	@cd go-watcher && go run ./cmd/replay && go run ./cmd/flap | head -n 1 && go run ./cmd/restart-drill
 dev:
 	@echo "paper-mode dev stack (E00 skeleton — services land in E02..E05)"

@@ -1,6 +1,9 @@
 <script lang="ts">
-  // Telegram alert topics (docs/09 §9.3a): which events push to the phone.
-  // Advisory-only page — it selects pushes, never an order or approval (D-08).
+  // NotifyPrefs — the Telegram topic toggles (docs/09 §9.3a), extracted from the
+  // old `/alerts` page so the `/settings` view can host it (docs/20 S4).
+  //
+  // Advisory-only: it selects which events push to the phone. It never touches
+  // an order or an approval (D-08).
   import { onMount } from "svelte";
   import { getNotifyPrefs, setNotifyPrefs } from "$lib/api";
   import { TOPIC_LABELS, prefsToMap } from "$lib/alerts-core.mjs";
@@ -45,8 +48,8 @@
   }
 </script>
 
-<div class="page">
-  <h1>🔔 الرت‌های تلگرام</h1>
+<div class="alerts">
+  <h2>🔔 الرت‌های تلگرام</h2>
   <p class="subtitle">کدام رویدادها روی موبایل push شوند — فقط انتخابی است، روی مسیر سفارش اثری ندارد.</p>
 
   {#if loading}
@@ -79,9 +82,9 @@
 </div>
 
 <style>
-  .page { padding: 1.5rem; max-width: 640px; }
-  h1 { margin-bottom: 0.25rem; }
-  .subtitle { color: #8b949e; margin-bottom: 1.25rem; }
+  .alerts { max-width: 640px; }
+  h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
+  .subtitle { color: #8b949e; margin: 0 0 1.25rem; font-size: 0.85rem; }
   .topics { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
   .topic {
     display: flex; align-items: center; gap: 0.6rem;
@@ -93,11 +96,11 @@
   .topic code { color: #8b949e; font-size: 0.75rem; }
   .topic em { color: #f85149; font-size: 0.75rem; font-style: normal; }
   .muted { color: #8b949e; }
-  .error { color: #f85149; }
-  .saved { color: #3fb950; }
+  .error { color: #f85149; font-size: 0.85rem; }
+  .saved { color: #3fb950; font-size: 0.85rem; }
   button {
     padding: 0.5rem 1.25rem; border-radius: 8px; border: 1px solid #30363d;
-    background: #21262d; color: inherit; cursor: pointer;
+    background: #21262d; color: inherit; cursor: pointer; font-size: 0.85rem;
   }
   button:disabled { opacity: 0.5; cursor: default; }
 </style>

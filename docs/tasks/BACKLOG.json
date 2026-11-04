@@ -1781,7 +1781,7 @@
         "reviewer": "GLM-5.3-Flash"
       },
       "estimated_complexity": "L",
-      "status": "IN_PROGRESS",
+      "status": "DONE",
       "blocking_decisions": [],
       "safety_tags": [
         "read-only-ui"
@@ -1819,7 +1819,7 @@
         "S1_shell": "DONE — /cockpit + sidebar + SSR snapshot (loadCockpit)",
         "S2_panels": "DONE — watch board, execution summary, analysis + Stalk card",
         "S3_assistant": "DONE — components/RoomChat.svelte (chat_session_{symbol})",
-        "S4_redirects": "PARTIAL — 14 legacy routes 302 via lib/legacy.ts + cockpit-core.legacyRedirect; /chat kept (Q-18), /strategies + /alerts wait for /settings",
+        "S4_redirects": "DONE — /settings absorbs /strategies + /strategy + /alerts (library/groups/drafts/limits/alerts tabs); 16/17 legacy URLs redirect; /chat kept per Q-18",
         "evidence": "cockpit-core.test.mjs (13 tests), npm run check 0 errors, npm test 120 pass, build OK, node-adapter route matrix 302/200"
       }
     },

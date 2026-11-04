@@ -122,9 +122,9 @@ what shipped in E10-T01 and stays the record; §9.6 wins for new UI work.
 
 **Shipped so far (E15-T01, docs/20 §20.9):** `/cockpit` (sidebar + watch board +
 execution summary + analysis/Stalk + inline room assistant + the component strip
-inherited from `/`), `/execution`, `/activity`, and 14 legacy redirects.
-`/chat`, `/strategies` and `/alerts` still render their own pages — the
-`/settings` view that absorbs the last two is the remaining slice (Q-18 keeps
-`/chat`). Redirect behaviour is a pure, unit-tested function
+inherited from `/`), `/execution`, `/activity`, `/settings` (library · groups ·
+drafts · limits · 🔔 alerts — the strategies editor and the Telegram topics moved
+in), and **all 16 legacy redirects** except `/chat`, which Q-18 keeps as the
+full-page editor. Redirect behaviour is a pure, unit-tested function
 (`lib/cockpit-core.mjs` `legacyRedirect` → `lib/legacy.ts`), so a route can only
 be redirected to a target that exists.

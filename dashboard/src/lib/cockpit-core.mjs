@@ -83,8 +83,12 @@ export function legacyRedirect(pathname, search = "") {
   if (p === "/logs") return withParams(ACTIVITY_PATH, carry(search, { tab: "errors" }));
   if (p === "/failover") return withParams(ACTIVITY_PATH, carry(search, { tab: "failover" }));
 
-  // /strategy (risk-limit versions) lives in the strategies page's limits tab.
-  if (p === "/strategy") return withParams("/strategies", carry(search, { tab: "limits" }));
+  // /strategies, /strategy and /alerts all folded into /settings (docs/20
+  // §20.2): the library/editor, the read-only limit versions and the Telegram
+  // topics. Each keeps its own tab so a legacy link lands where it pointed.
+  if (p === "/strategies") return withParams("/settings", carry(search, { tab: "groups" }));
+  if (p === "/strategy") return withParams("/settings", carry(search, { tab: "limits" }));
+  if (p === "/alerts") return withParams("/settings", carry(search, { tab: "alerts" }));
 
   return null;
 }

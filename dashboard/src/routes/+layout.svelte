@@ -10,11 +10,11 @@
   export let data: { result: { ok: boolean; data?: Health; at?: string; ageMs?: number } | null };
 
   // The nav is the TARGET information architecture (docs/20, ADR-012): the
-  // consolidated surfaces plus the two that are not folded in yet (/chat keeps
-  // the full editor — Q-18; /strategies keeps the library editor).
+  // consolidated surfaces. /chat keeps the full editor (charts, drafts,
+  // principles) until Q-18 closes; everything else lives in /settings.
   const routes = [
     ["/cockpit", "cockpit"], ["/execution", "execution"], ["/activity", "activity"],
-    ["/chat", "💬 chat"], ["/strategies", "strategies"], ["/alerts", "🔔 alerts"],
+    ["/chat", "💬 chat"], ["/settings", "⚙️ settings"],
   ];
 
   let health: Health | null = data?.result?.ok ? (data.result.data as Health) : null;

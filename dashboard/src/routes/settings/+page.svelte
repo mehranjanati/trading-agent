@@ -14,6 +14,7 @@
   import { getStrategyRegistry, type RegistryEntry } from "$lib/registry";
   import { getSymbols, type SymbolsData } from "$lib/symbols";
   import { setups, toggleGroupLink, strategyUsage } from "$lib/setups";
+  import NotifyPrefs from "$lib/components/NotifyPrefs.svelte";
   import Prism from "prismjs";
   import "prismjs/components/prism-go";
   // RUNES MODE — every mutable top-level binding must be `$state(...)`.
@@ -27,16 +28,17 @@
   // One row of the edit tick-list (groupEditRows): a library entry, or a stored
   // member the library no longer carries (`kind: "missing"`).
   type EditRow = { id: string; version?: string; kind: string; label: string; blurb: string; status?: string; selectable?: boolean };
-  // Deep-linkable tab (docs/20 §20.5): `/strategy` redirects here with
-  // ?tab=limits, and every legacy link that carried a tab keeps working. An
-  // unknown value falls back to the default instead of rendering nothing.
-  const TAB_KEYS = ["library", "groups", "drafts", "limits"] as const;
+  // Deep-linkable tab (docs/20 §20.5): `/strategy` → ?tab=limits,
+  // `/alerts` → ?tab=alerts, `/strategies` → ?tab=groups, and every legacy link
+  // that carried a tab keeps working. An unknown value falls back to the
+  // default instead of rendering nothing.
+  const TAB_KEYS = ["library", "groups", "drafts", "limits", "alerts"] as const;
   type TabKey = (typeof TAB_KEYS)[number];
   function initialTab(): TabKey {
     const t = $page.url.searchParams.get("tab") ?? "";
     return (TAB_KEYS as readonly string[]).includes(t) ? (t as TabKey) : "groups";
   }
-  let tab = $state<"library" | "groups" | "drafts" | "limits">(initialTab());
+  let tab = $state<"library" | "groups" | "drafts" | "limits" | "alerts">(initialTab());
   let description = $state("");
   let strategy_id = $state("");
   let version = $state("0.1.0");
@@ -172,13 +174,17 @@
 
 
 <div class="container mx-auto p-6 max-w-6xl">
-  <h1 class="text-3xl font-bold mb-2">strategy factory</h1>
-  <p class="text-sm text-muted-foreground mb-6">one file per strategy — groups bundle N strategies into one advisory output</p>
-  <div class="flex gap-2 mb-6">
+  <h1 class="text-3xl font-bold mb-2">settings</h1>
+  <p class="text-sm text-muted-foreground mb-6">
+    strategy factory + risk limits + Telegram alerts — one place for everything that configures the bot
+    (docs/20; read-only except advisory toggles — D-08)
+  </p>
+  <div class="flex gap-2 mb-6 flex-wrap">
     <Button variant={tab === "library" ? "default" : "outline"} onclick={() => (tab = "library")}>library</Button>
     <Button variant={tab === "groups" ? "default" : "outline"} onclick={() => (tab = "groups")}>groups</Button>
     <Button variant={tab === "drafts" ? "default" : "outline"} onclick={() => (tab = "drafts")}>drafts ({drafts.length})</Button>
     <Button variant={tab === "limits" ? "default" : "outline"} onclick={() => (tab = "limits")}>limits</Button>
+    <Button variant={tab === "alerts" ? "default" : "outline"} onclick={() => (tab = "alerts")}>🔔 alerts</Button>
   </div>
   {#if tab === "library"}
     <div class="flex items-center gap-2 mb-3">
@@ -389,6 +395,12 @@
           </div>
         {/each}
         {#if versions.length === 0}<p class="text-sm text-muted-foreground">no versions</p>{/if}
+      </CardContent>
+    </Card>
+  {:else if tab === "alerts"}
+    <Card>
+      <CardContent class="p-4">
+        <NotifyPrefs />
       </CardContent>
     </Card>
   {/if}

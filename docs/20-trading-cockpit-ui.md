@@ -98,7 +98,7 @@ in the Worker: the BFF contract does not change.
 | S1 shell | `/cockpit` route, symbol sidebar, selected-symbol store, layout badge/banner reuse | Given a direct visit When rendering Then sidebar + price + watch board paint from SSR data, no client-only blank | **DONE** (§20.9) |
 | S2 panels | watch board + analysis panel + inline Stalk card moved into the cockpit | Given a symbol When selected Then its watches (all statuses) and analysis form render without navigation | **DONE** (§20.9) |
 | S3 assistant | inline chat panel bound to the room session (`chat_session_{symbol}`) | Given a message When sent Then the same session as `/chat` continues; advisory banner visible | **DONE** (`RoomChat.svelte`) |
-| S4 redirects | the §20.5 table wired, legacy pages removed | Given any legacy URL When opened Then 302 to the mapped cockpit URL and the target state is pre-selected | **PARTIAL** — 14 redirects live; `/settings` (which `/strategies` + `/alerts` fold into) is still open, and `/chat` stays by Q-18 |
+| S4 redirects | the §20.5 table wired, legacy pages removed | Given any legacy URL When opened Then 302 to the mapped cockpit URL and the target state is pre-selected | **DONE** — 16 redirects live; only `/chat` stays, by Q-18 (`/settings` absorbed `/strategies`, `/strategy`, `/alerts`) |
 
 Each slice ships independently; the legacy pages are deleted only after the
 redirect for that group is live in production.
@@ -140,23 +140,21 @@ Built and verified in this increment:
 | Redirects (S4) | `$lib/legacy.ts` → `legacyRedirect()` | 302 for `/`, `/setups`, `/setups/{symbol}`, `/watches`, `/zones`, `/analyze`, `/analysis`, `/approvals`, `/orders`, `/signals`, `/events`, `/logs`, `/failover`, `/strategy` |
 | Tests | `dashboard/src/lib/cockpit-core.test.mjs` | 13 tests: the redirect table row-by-row, zone parsing, watch ordering, approval state (fail closed), execution joins, board derivation, filters, aggregate, incident filters |
 
-**Deliberately NOT redirected yet (and why):**
+**Deliberately NOT redirected (and why):**
 
-- `/chat` — Q-18 keeps the full-page editor (charts, drafts, principles) until the
-  inline panel has run for two weeks; the cockpit links to it.
-- `/strategies` and `/alerts` — they belong to the `/settings` view, which is the one
-  S4 slice not built: it hosts the largest editor (library / groups / drafts /
-  limits). Redirecting them before `/settings` exists would delete function, so the
-  redirect table returns `null` for them and `legacyRedirect` is unit-tested on that
-  contract. `/strategy` (read-only limit versions) does redirect — into
-  `/strategies?tab=limits`, which the page now reads from the URL.
+- `/chat` only — Q-18 keeps the full-page editor (charts, drafts, principles) until
+  the inline panel has run for two weeks; the cockpit links to it. Everything else
+  in the §20.5 table is redirected, including the last three: `/strategies` →
+  `/settings?tab=groups`, `/strategy` → `/settings?tab=limits` and
+  `/alerts` → `/settings?tab=alerts` (the settings page reads `?tab=`).
 
 **Runtime evidence (node-adapter preview, HTTP status per route):**
 
 ```
-/  /setups  /setups/BTCUSDT  /watches  /zones  /analyze  /analysis
-/approvals  /orders  /signals  /events  /logs  /failover  /strategy   → 302 (target per §20.5)
-/cockpit  /execution  /activity  /chat  /strategies  /alerts           → 200
+/  /setups  /setups/BTCUSDT  /watches  /zones  /analyze  /analysis  /strategies
+/strategy  /alerts                                                     → 302
+/approvals  /orders  /signals  /events  /logs  /failover               → 302
+/cockpit  /execution  /activity  /settings  /chat                      → 200
 ```
 
 `npm run check` → 0 errors; `npm test` → 120 pass (13 new); `npm run build` → OK.

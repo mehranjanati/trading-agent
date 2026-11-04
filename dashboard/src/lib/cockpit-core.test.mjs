@@ -38,15 +38,26 @@ test("legacyRedirect: every docs/20 §20.5 row maps", () => {
   assert.equal(legacyRedirect("/events"), `${ACTIVITY_PATH}?tab=events`);
   assert.equal(legacyRedirect("/logs"), `${ACTIVITY_PATH}?tab=errors`);
   assert.equal(legacyRedirect("/failover"), `${ACTIVITY_PATH}?tab=failover`);
-  assert.equal(legacyRedirect("/strategy"), "/strategies?tab=limits");
+  assert.equal(legacyRedirect("/strategies"), "/settings?tab=groups");
+  assert.equal(legacyRedirect("/strategy"), "/settings?tab=limits");
+  assert.equal(legacyRedirect("/alerts"), "/settings?tab=alerts");
 });
 
 test("legacyRedirect: un-consolidated routes return null (slice-by-slice safety)", () => {
-  // These still render their own page: redirecting to a target that does not
-  // exist yet would be a dead end, so the map says "not mine".
-  for (const p of ["/chat", "/strategies", "/alerts", "/cockpit", "/execution", "/activity", "/nope"]) {
+  // /chat keeps the full editor (Q-18) and the four target views are their own
+  // destinations — the map must not bounce them into each other.
+  for (const p of ["/chat", "/cockpit", "/execution", "/activity", "/settings", "/nope"]) {
     assert.equal(legacyRedirect(p), null, p);
   }
+});
+
+test("legacyRedirect: the whole §20.5 table is covered — 17 legacy URLs, no gaps", () => {
+  const legacy = [
+    "/", "/setups", "/setups/BTCUSDT", "/watches", "/zones", "/analyze", "/analysis",
+    "/approvals", "/orders", "/signals", "/events", "/logs", "/failover",
+    "/strategies", "/strategy", "/alerts",
+  ];
+  for (const p of legacy) assert.ok(legacyRedirect(p), `${p} must redirect`);
 });
 
 test("legacyRedirect: carries the incoming search params and normalises the path", () => {

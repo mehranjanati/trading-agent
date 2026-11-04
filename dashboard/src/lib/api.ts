@@ -307,17 +307,61 @@ export async function chatServiceUp(): Promise<boolean> {
   }
 }
 
-/** POST /api/chat/create — start a Redis-backed session. */
-export async function postChatCreate(principles = ""): Promise<Result<{ id: string }>> {
+/** POST /api/chat/create — start a Redis-backed session. `symbol` binds it to
+ *  ONE venue symbol: the service then derives the permanent thread id
+ *  (`sym_<SYMBOL>`) instead of a random one, so the conversation survives a
+ *  cleared localStorage, another device or a Redis TTL (ADR-014). */
+export async function postChatCreate(principles = "", symbol = ""): Promise<Result<{ id: string }>> {
   try {
     const res = await fetch(`${CHAT_BASE}/api/chat/create`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ principles }),
+      body: JSON.stringify({ principles, symbol }),
     });
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     const data = await res.json();
     return { ok: true, data, at: new Date().toISOString(), ageMs: 0 };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// ── Durable transcript (ADR-014) — D1 is canonical, Redis is a cache ─────────
+// Both writers use these: the Go chat service (through its own persister) and
+// the BROWSER when the chat service is unreachable (rest mode), which is the
+// case on a Pages deployment without VITE_CHAT_BASE. Without them a rest-mode
+// conversation lived in localStorage only and vanished with it.
+
+export type ChatHistoryData = {
+  session_id: string;
+  symbol: string;
+  principles: string;
+  messages: { id?: string; role: string; content: string; timestamp: string; attachments?: ChatStoredAttachment[] }[];
+};
+
+/** GET /api/chat:history — the stored transcript (oldest first). */
+export async function getChatHistory(sessionId: string, limit?: number): Promise<Result<ChatHistoryData>> {
+  const qs = `session=${encodeURIComponent(sessionId)}${limit ? `&limit=${limit}` : ""}`;
+  return getJson<ChatHistoryData>(`/api/chat:history?${qs}`);
+}
+
+/** POST /api/chat:append — persist ONE turn (advisory only, D-08). */
+export async function appendChatTurn(turn: {
+  session_id: string;
+  role: "user" | "assistant";
+  content: string;
+  attachments?: { mediaType: string; detail?: string; bytes?: number }[];
+  message_id?: string;
+}): Promise<Result<{ id: string }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/chat:append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-role": "trader", accept: "application/json" },
+      body: JSON.stringify(turn),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: (data as { message?: string })?.message ?? `HTTP ${res.status}` };
+    return { ok: true, data: data as { id: string }, at: new Date().toISOString(), ageMs: 0 };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

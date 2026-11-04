@@ -17,3 +17,4 @@ Format: Status / Context / Decision / Alternatives / Consequences / Verification
 | [011](./ADR-011-strategy-retirement.md) | Retiring a published strategy version (never deleting it) | PROPOSED |
 | [012](./ADR-012-trading-cockpit-single-surface.md) | Trading cockpit — one surface instead of seventeen URLs | PROPOSED |
 | [013](./ADR-013-live-execution-adapter.md) | Live execution — signed adapter behind a fail-closed env gate | PROPOSED |
+| [014](./ADR-014-durable-chat.md) | Durable chat transcripts — D1 canonical, Redis cache, R2 bytes | ACCEPTED |

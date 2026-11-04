@@ -17,6 +17,20 @@ export const WIDGET_OPEN_KEY = "chat_widget_open";
  *  in the session (Redis / /chat shows them); the widget shows the tail. */
 export const WIDGET_VISIBLE_TURNS = 30;
 
+/** SESSION_SYMBOL_RE is the venue symbol shape (same rule as the Go service and
+ *  workers/src/chat-store.mjs): a typo must never mint a second thread. */
+export const SESSION_SYMBOL_RE = /^[A-Z]{2,12}USDT$/;
+
+/** roomSessionId — the PERMANENT per-symbol thread id (ADR-014).
+ *  `sym_OPENUSDT`, or "" for "not a venue symbol" (then the caller falls back
+ *  to the legacy random session). Deriving it client-side is what makes the
+ *  cockpit show the same conversation on every device, without trusting
+ *  localStorage to remember anything. */
+export function roomSessionId(symbol) {
+  const s = String(symbol ?? "").trim().toUpperCase();
+  return SESSION_SYMBOL_RE.test(s) ? `sym_${s}` : "";
+}
+
 /** One chat turn as the widget renders it; WsState/WsNext are the WS reducer's in/out. */
 /** @typedef {{ role?: string, content?: string, id?: string, [k: string]: any }} ChatTurn */
 /** @typedef {{ live?: string, loading?: boolean }} WsState */

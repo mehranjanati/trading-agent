@@ -10,6 +10,7 @@
     chatServiceUp,
     postChatCreate,
     getChatSession,
+    appendChatTurn,
     chatSocket,
     type ChatOutboundMessage,
   } from "$lib/api";
@@ -198,8 +199,14 @@
       error = res.error;
       return;
     }
-    messages = [...messages, { role: "assistant", content: res.data.response || streamed, timestamp: new Date().toISOString() }];
+    const answer = res.data.response || streamed;
+    messages = [...messages, { role: "assistant", content: answer, timestamp: new Date().toISOString() }];
     persistLocal();
+    // ADR-014: the durable log is written even in rest mode, so the floating
+    // widget's conversation is not trapped in this browser's storage.
+    const durableId = sessionId || "global";
+    void appendChatTurn({ session_id: durableId, role: "user", content: text, message_id: turnId });
+    void appendChatTurn({ session_id: durableId, role: "assistant", content: answer });
   }
 </script>
 

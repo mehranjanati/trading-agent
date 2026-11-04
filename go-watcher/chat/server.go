@@ -215,16 +215,24 @@ func newID() string {
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Principles string `json:"principles"`
+		// Symbol binds the session to ONE venue symbol: the service derives the
+		// permanent thread id ("sym_OPENUSDT") instead of a random one, so the
+		// conversation survives a cleared localStorage, another device or a
+		// Redis TTL (ADR-014). Empty keeps the legacy random session.
+		Symbol string `json:"symbol"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
-	id := newID()
+	id := SessionIDForSymbol(body.Symbol)
+	if id == "" {
+		id = newID()
+	}
 	if err := s.Store.Create(id, body.Principles); err != nil {
 		writeChatErr(w, http.StatusBadGateway, "REDIS", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "symbol": body.Symbol})
 }
 
 func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {

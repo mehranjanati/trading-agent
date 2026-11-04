@@ -17,6 +17,8 @@
     chatServiceUp,
     postChatCreate,
     getChatSession,
+    getChatHistory,
+    appendChatTurn,
     chatSocket,
     type ChatOutboundMessage,
   } from "$lib/api";
@@ -26,6 +28,7 @@
     buildOutbound,
     buildRestOutbound,
     pageContext,
+    roomSessionId,
     SETUPS_KEY,
   } from "$lib/chat-widget-core.mjs";
   import { chatSessionKey } from "$lib/setups";
@@ -47,8 +50,11 @@
   let reconnects = 0;
   let msgsEl: HTMLElement | undefined;
 
-  // Session keys: the room's when a symbol is bound, the legacy global ones
-  // otherwise (identical to the floating widget, so both stay in sync).
+  // ADR-014: a symbol binds a PERMANENT thread (`sym_OPENUSDT`) stored in D1, so
+  // the history is the same on every device and survives a cleared localStorage
+  // or the Redis 24h TTL. The localStorage keys below only serve the legacy
+  // global (symbol-less) chat and act as an offline mirror.
+  $: persistentId = roomSessionId(symbol);
   $: sessionKey = symbol ? chatSessionKey(symbol) : "chat_session_id";
   $: messagesKey = symbol ? `chat_messages_${symbol}` : "chat_messages";
 
@@ -71,6 +77,20 @@
   async function boot() {
     if (!(await chatServiceUp())) {
       mode = "rest";
+      // D1 is canonical (ADR-014): read the stored transcript first, so a
+      // cleared localStorage / another browser still shows the conversation.
+      if (persistentId) {
+        const h = await getChatHistory(persistentId);
+        if (h.ok && h.data.messages.length) {
+          messages = h.data.messages.map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            timestamp: m.timestamp,
+          }));
+          return;
+        }
+      }
       const saved = localStorage.getItem(messagesKey);
       if (saved) {
         try {
@@ -82,22 +102,10 @@
       return;
     }
     mode = "ws";
-    sessionId = localStorage.getItem(sessionKey) ?? "";
-    if (sessionId) {
-      const res = await getChatSession(sessionId);
-      if (res.ok) {
-        messages = res.data.messages.map((m) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          timestamp: m.timestamp,
-        }));
-      } else {
-        sessionId = ""; // stale id (Redis TTL) → fresh session below
-      }
-    }
+    // A symbol thread is deterministic; only the legacy chat needs a stored id.
+    sessionId = persistentId || localStorage.getItem(sessionKey) || "";
     if (!sessionId) {
-      const res = await postChatCreate("");
+      const res = await postChatCreate("", symbol);
       if (res.ok) {
         sessionId = res.data.id;
         localStorage.setItem(sessionKey, sessionId);
@@ -105,6 +113,24 @@
         mode = "rest";
         return;
       }
+    } else if (persistentId) {
+      // Ensure the durable session row exists (idempotent, fail-soft).
+      void postChatCreate("", symbol);
+    }
+    const res = await getChatSession(sessionId);
+    if (res.ok) {
+      messages = res.data.messages.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        timestamp: m.timestamp,
+      }));
+    } else if (persistentId) {
+      sessionId = ""; // stale id (Redis TTL) → the durable thread still answers
+    }
+    if (!sessionId) {
+      const created = await postChatCreate("", symbol);
+      if (created.ok) sessionId = created.data.id;
     }
     openSocket();
   }
@@ -211,8 +237,15 @@
       error = res.error;
       return;
     }
-    messages = [...messages, { role: "assistant", content: res.data.response || streamed, timestamp: new Date().toISOString() }];
+    const answer = res.data.response || streamed;
+    messages = [...messages, { role: "assistant", content: answer, timestamp: new Date().toISOString() }];
     persistLocal();
+    // ADR-014: rest mode ALSO writes the durable log. Without this the
+    // transcript lived only in this browser's localStorage — the exact reason a
+    // conversation "disappeared" on another device or after clearing storage.
+    const durableId = persistentId || sessionId || "global";
+    void appendChatTurn({ session_id: durableId, role: "user", content: text, message_id: turnId });
+    void appendChatTurn({ session_id: durableId, role: "assistant", content: answer });
   }
 
   // Keep the tail visible as turns arrive.

@@ -1,15 +1,17 @@
 # 18 — Chat Service & Real-Time Strategy Authoring
 
 > Advisory plane only. The chat service never touches watches, orders,
-> approvals, leases or kill-switch state; its only writes are its own Redis
-> keys (`chat:*`). D-08 (no order submission from the dashboard) is unchanged:
-> the AI path ends in a `strategy_drafts` row with status `generated`.
+> approvals, leases or kill-switch state; its writes are its own Redis cache keys
+> (`chat:*`) plus the durable transcript rows in D1 (`chat_sessions`,
+> `chat_messages`, §18.9 / ADR-014). D-08 (no order submission from the
+> dashboard) is unchanged: the AI path ends in a `strategy_drafts` row with
+> status `generated`.
 
 ## 18.1 Shape (v2-vibe pattern, trading-scoped)
 
 | Piece | Where | Role |
 |---|---|---|
-| Session store | Redis (`ta-redis`) | `chat:{id}:meta` HASH{created_at, principles} + `chat:{id}:msgs` LIST of JSON turns, both 24h TTL, refreshed on write |
+| Session store | Redis (`ta-redis`) cache + **D1 canonical** | `chat:{id}:meta` HASH{created_at, principles} + `chat:{id}:msgs` LIST of JSON turns, 24h TTL — a cache lifetime only: every turn is mirrored to `chat_messages` and a cache miss rehydrates from D1 (§18.9) |
 | Chat service | routes inside `go-watcher` (:8080) | HTTP for session CRUD, WebSocket for the turn loop — same binary/port as the watcher, no second process |
 | AI plane | Worker `POST /api/strategy:chat:stream` | owns the `AI` binding (no keys in Go); passes the model's SSE through untouched, reports the model on `x-ai-model` |
 | Platform context | Worker `platform-snapshot.mjs` (§18.8) | every turn carries the read-only platform state the model advises on — same single injection point covers WS and REST |
@@ -95,6 +97,10 @@ is written after it completes. A crash between the two leaves a transcript gap
 (a lost reply), never a lost user intent. Chat availability is therefore
 allowed to degrade (REST fallback, reconnect x3) while the trading plane stays
 fail-closed.
+
+Since ADR-014 each of those writes is also mirrored into D1
+(`chat_messages`), so a Redis restart or the 24h TTL no longer loses the
+transcript — the order above is unchanged, only the durability of each step is.
 
 ## 18.5 Deployment note
 
@@ -201,5 +207,36 @@ from D1, **before** the principles and history:
   `chat-widget-core.test.mjs` (the `pageContext` envelope) plus injection
   assertions on both `:chat` and `:chat:stream` in `strategies-ai.test.mjs`.
   No migration, no new env/secret.
+
+## 18.9 Durable transcripts — one permanent thread per symbol (ADR-014)
+
+**The bug this fixes.** A cockpit conversation vanished after a day, on another
+device, or after clearing storage. Four independent causes, all now closed:
+Redis held the only copy with `EXPIRE 86400`; the session id lived only in
+`localStorage`; a Pages deployment without `VITE_CHAT_BASE` ran the REST path and
+persisted to `localStorage` alone; and D1 kept only attachment metadata.
+
+**Shape.**
+
+| Piece | Detail |
+|---|---|
+| Tables | `chat_sessions(id, symbol, principles, created_at, updated_at)` + `chat_messages(id, session_id, role, content, attachments_json, message_id, at)` — `migrations/0011` |
+| Session id | `sym_<SYMBOL>` derived on all three planes (`chat.SessionIDForSymbol`, `sessionIdForSymbol` in `workers/src/chat-store.mjs`, `roomSessionId` in `dashboard/src/lib/chat-widget-core.mjs`); a partial UNIQUE index on `chat_sessions(symbol)` forbids a second thread per symbol |
+| Write | Go mirrors every `Append` to `POST /api/chat:append`; the browser does the same in REST mode. Both fail-soft |
+| Read | `GET /api/chat:history?session=&limit=`; the Go service asks it on a Redis miss and rehydrates the window |
+| Delete | `POST /api/chat:delete` clears Redis **and** D1 (otherwise the thread reappears on the next read) |
+| Bytes | charts stay in R2 (`chat_attachments`); `attachments_json` is metadata only — a data URL is stripped before the D1 write (2 MB row cap, ADR-010) |
+
+**Consequences for the UI.** `RoomChat` (cockpit) and `ChatWidget` no longer
+depend on localStorage to remember which conversation belongs to a symbol; the
+inline panel header still shows `live` (WS) vs `rest` (Worker REST), and both
+modes are now durable. `MAX_CONTENT` caps one turn at 32k chars, ≤4 attachments
+are recorded, and a read returns at most 500 rows.
+
+**Tests.** `workers/src/chat-store.test.mjs` (ids, metadata-only, validation and
+an append → history → delete flow against an in-memory D1 fake),
+`go-watcher/chat/persist_test.go` (persister against an `httptest` Worker,
+nil-safety), `chat-widget-core.test.mjs` (`roomSessionId`).
+
 
 

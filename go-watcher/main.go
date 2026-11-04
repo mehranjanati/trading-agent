@@ -131,7 +131,16 @@ func main() {
 		state := func(ctx context.Context, texts ...string) string {
 			return opstate.FetchAndRender(ctx, base, texts...)
 		}
-		s := &chat.Service{Store: chat.NewStore(), AI: chat.NewAIClient(base), Market: market, State: state, Origins: origins}
+		s := &chat.Service{
+			// ADR-014: Redis is the hot cache; every turn is mirrored into the
+			// Worker's D1 log so a 24h TTL (or a Redis restart, or another
+			// device) can no longer erase a conversation.
+			Store:   chat.NewStore().WithRemote(chat.NewPersister(base, os.Getenv("GO_AGENT_TOKEN"))),
+			AI:      chat.NewAIClient(base),
+			Market:  market,
+			State:   state,
+			Origins: origins,
+		}
 		mux.Handle("/api/chat/", s)
 		mux.Handle("/ws/chat/", s)
 	}

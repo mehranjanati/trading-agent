@@ -19,7 +19,8 @@
 | E14 | Deep analysis API + advisory chat (vision) | P1 | `/analyze` deep engine, chat WS + R2 chart vision | aggregate + verdicts + suggest_zones live; chat advisory only | E14-T01/T02 DONE (docs/18) |
 | E15 | Trading cockpit — single-surface UI (DONE) | P1 | 17 URLs → 1 cockpit + 3 views, legacy redirects | docs/20 §20.8: reach "watch armed" without leaving `/cockpit`; badges unchanged | E15-T01 DONE — S1–S4 complete (16/17 URLs redirect; `/chat` kept per Q-18) |
 | E16 | Live-trading readiness (PROPOSED, GATED) | P0 | Signed exchange adapter behind a fail-closed env gate | docs/21 §21.9 signed: 14-day paper PASS + ack-loss + kill <5s + rollback drill | E16-T01 (P0..P4, docs/21) |
+| E17 | Durable chat transcripts (DONE) | P1 | One permanent thread per symbol — D1 canonical, Redis cache, R2 bytes | A cockpit conversation survives the 24h TTL, a Redis restart, another device and a cleared localStorage | E17-T01 DONE (ADR-014, docs/18 §18.9) |
 
-Total: 29 tasks, 72+ subtasks. Source of truth: `BACKLOG.json`. E15/E16 are
-PROPOSED and carry no live capability: E16 is a **gate plan**, and nothing in it
+Total: 30 tasks, 80 subtasks. Source of truth: `BACKLOG.json`. E15 is DONE; E16 is
+PROPOSED and carries no live capability — it is a **gate plan**, and nothing in it
 may be implemented as a flag flip (docs/13 §13.8).

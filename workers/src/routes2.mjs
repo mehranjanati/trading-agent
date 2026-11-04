@@ -15,6 +15,7 @@ import { createPaperExchange } from "./exchange.mjs";
 import { readLease } from "./health-route.mjs";
 import { watcherBase } from "./proxy.mjs";
 import { transitionStatements } from "./watches.mjs";
+import { appendTurn, history, deleteSession } from "./chat-store.mjs";
 
 // D-06: Toobit has no testnet, so the wired venue is the paper simulator. Tests
 // and drills inject `env.EXCHANGE` to drive ack-loss / partial-fill scenarios;
@@ -565,6 +566,41 @@ export function miscRoutes() {
         updated.push({ topic, enabled: !!enabled });
       }
       return ok({ updated });
+    }),
+
+    /** POST /api/chat:append — one durable transcript turn (ADR-014).
+     *  Both writers call it: the Go chat service (after a WS turn) and the
+     *  browser REST fallback (when no Go chat service is reachable). D1 is the
+     *  canonical log, so a Redis TTL or a cleared localStorage can no longer
+     *  erase a conversation. Advisory data only — no watch/order/approval
+     *  authority is reachable from here (D-08). */
+    chatAppend: safe(async (req, env) => {
+      const g = guard("POST /api/chat:append", req);
+      if (g) return g;
+      const b = await readBody(req);
+      const id = await appendTurn(env, b);
+      return ok({ id }, 201);
+    }),
+
+    /** POST /api/chat:delete — clear ONE thread. Both stores must go: leaving
+     *  the D1 rows behind would make the transcript reappear on the next read
+     *  (D1 is canonical, the Redis list is only a cache). Attachments stay in
+     *  R2/chat_attachments for audit. */
+    chatDelete: safe(async (req, env) => {
+      const g = guard("POST /api/chat:delete", req);
+      if (g) return g;
+      const b = await readBody(req);
+      return ok(await deleteSession(env, b?.session_id));
+    }),
+
+    /** GET /api/chat:history?session=&limit= — the stored transcript
+     *  (oldest first). A missing session is an empty transcript, not a 404:
+     *  opening a symbol's thread for the first time is normal. */
+    chatHistory: safe(async (req, env) => {
+      const u = new URL(req.url);
+      const session = u.searchParams.get("session") ?? "";
+      const limit = Number(u.searchParams.get("limit") ?? "") || undefined;
+      return ok(await history(env, session, limit));
     }),
   };
 }

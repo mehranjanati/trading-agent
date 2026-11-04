@@ -39,6 +39,17 @@ Key relationships: watches 1—N transitions/signals/runs/intents; approvals 1�
 
 **Versioned payloads (E07-T01):** no schema change was needed — version stamps live inside existing columns. A `signals.payload_json` carries `_schema_version` (the registry contract that admitted it), and an `analysis_runs.output_json` carries `strategy_version` (the active `strategy_configs` version pinned at run start). Both are additive keys, so forward-only migrations stay untouched and old rows keep their original pin.
 
+**Chat transcripts (ADR-014, `0011_chat_persistence.sql`):** D1 is canonical for
+advisory chat. `chat_sessions(id, symbol, principles, created_at, updated_at)`
+holds one row per thread (`id = sym_<SYMBOL>` for a symbol thread; a partial
+UNIQUE index on `symbol` forbids a second one), and
+`chat_messages(id, session_id, role, content, attachments_json, message_id, at)`
+holds the turns. `attachments_json` is METADATA only (`mediaType/detail/bytes`)
+because D1 caps a row at 2,000,000 bytes — the bytes live in R2
+(`chat_attachments`, ADR-010). Redis keeps the `chat:*` cache with a 24h TTL;
+that TTL is now only a cache lifetime, not the transcript's. Chat rows carry no
+order/approval authority and are never read by a risk gate (D-08).
+
 ## 4.2 Retention & migrations
 - Ticks: never in D1. Events/audit ≥2y; positions snapshots 1y; health 90d. Migrations `migrations/NNNN_*.sql`, forward-only, `wrangler d1 migrations apply` per env; failed migration → forward fix, never edit applied files.
 

@@ -38,6 +38,11 @@ export const BROWSER_POST_PATHS = new Set([
   // Telegram alert topic prefs are advisory-only toggles (docs/09 §9.3a): they
   // select which pushes arrive, never an order or approval (D-08 preserved).
   "/api/notify:prefs",
+  // Durable chat log (ADR-014): appending a transcript turn is advisory-only
+  // data (no watch/order/approval authority), so the browser may POST it. This
+  // is what keeps REST-mode sessions (no Go chat service reachable) from
+  // vanishing with localStorage.
+  "/api/chat:append",
 ]);
 export const CORS = {
   "access-control-allow-origin": "*",

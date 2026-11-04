@@ -30,6 +30,10 @@ export const ALLOW = {
   "POST /api/strategy:draft:delete": ["trader", "operator", "admin"],
   // Telegram alert topic prefs: advisory-only toggles, trader+ may change.
   "POST /api/notify:prefs": ["trader", "operator", "admin"],
+  // Durable chat transcript (ADR-014): advisory data only — appending a turn
+  // cannot touch a watch, an order or an approval (D-08).
+  "POST /api/chat:append": ["trader", "operator", "admin"],
+  "POST /api/chat:delete": ["trader", "operator", "admin"],
   "POST /api/lease:handoff": ["operator", "admin"],
   "POST /api/kill-switch": ["operator", "admin"],
 };

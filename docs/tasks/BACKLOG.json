@@ -1,12 +1,12 @@
 {
-  "version": "2.2.0",
-  "generated": "2026-11-01",
+  "version": "2.3.0",
+  "generated": "2026-11-04",
   "project": "AI Trading Agent (Toobit USDT-M)",
   "stack": "TypeScript + Go only (no Python)",
   "counts": {
-    "epics": 16,
-    "tasks": 29,
-    "subtasks": 77
+    "epics": 17,
+    "tasks": 30,
+    "subtasks": 80
   },
   "tasks": [
     {
@@ -1917,6 +1917,81 @@
           "title": "First live order (P4)",
           "output": "two-person release + supervised minimal order + reconcile-to-terminal",
           "acceptance": "Given the first fill When reconciled Then terminal state with no duplicate client_order_id"
+        }
+      ]
+    },
+    {
+      "id": "E17-T01",
+      "epic_id": "E17",
+      "title": "Durable chat transcripts — one permanent thread per symbol",
+      "objective": "Stop a cockpit conversation from disappearing: D1 becomes the canonical transcript, Redis a cache, R2 keeps chart bytes.",
+      "scope": "migrations/0011 chat_sessions+chat_messages; workers/src/chat-store.mjs + POST /api/chat:append, /api/chat:delete, GET /api/chat:history; Go chat persister with write-through + read-through rehydrate; deterministic sym_<SYMBOL> session id on all three planes; dashboard RoomChat/ChatWidget durability (incl. REST mode).",
+      "out_of_scope": "No order/approval authority (D-08). No live charts in D1 (2MB cap — bytes stay in R2). No multi-thread history list (one thread per symbol by decision, ADR-014). No retention policy yet.",
+      "priority": "P1",
+      "risk_level": "low",
+      "dependencies": [],
+      "affected_components": [
+        "migrations",
+        "workers",
+        "go-watcher",
+        "dashboard",
+        "docs"
+      ],
+      "implementation_steps": [
+        "D1: chat_sessions + chat_messages with a partial UNIQUE index on symbol",
+        "Workers: chat-store.mjs (sessionIdForSymbol, normalizeTurn, appendTurn, history, deleteSession) + three routes + RBAC + browser POST allow-list",
+        "Go: chat/persist.go (Persister) wired into Store as write-through + read-through rehydrate; handleCreate accepts symbol",
+        "Dashboard: roomSessionId in chat-widget-core, RoomChat/ChatWidget use the derived id and persist REST-mode turns"
+      ],
+      "acceptance_criteria": [
+        "Given a cockpit conversation on OPENUSDT When the day passes (Redis TTL) or storage is cleared Then the transcript is still shown from D1",
+        "Given the same symbol on another browser When the panel opens Then it shows the same thread (sym_<SYMBOL>)",
+        "Given REST mode (no Go chat service) When a turn completes Then both turns are persisted via /api/chat:append",
+        "Given an inline chart Then attachments_json carries metadata only and the bytes stay in R2"
+      ],
+      "test_plan": [
+        "workers/src/chat-store.test.mjs: id derivation, metadata-only attachments, validation, append→history→delete flow on an in-memory D1 fake",
+        "go-watcher/chat/persist_test.go: SessionIDForSymbol, httptest append/history/delete, nil-safety, data URL stripped",
+        "dashboard chat-widget-core.test.mjs: roomSessionId mirrors the servers",
+        "make check green (CI is Redis-free by design)"
+      ],
+      "documentation_references": [
+        "docs/decisions/ADR-014-durable-chat.md",
+        "docs/18-chat-service-and-realtime-streaming.md",
+        "docs/04-data-model-and-persistence.md",
+        "docs/decisions/ADR-010-multimodal-chart-chat.md"
+      ],
+      "model_assignment": {
+        "primary": "Muse Spark 1.3",
+        "reviewer": "GLM-5.3-Flash"
+      },
+      "estimated_complexity": "M",
+      "status": "DONE",
+      "blocking_decisions": [],
+      "safety_tags": [
+        "advisory-only"
+      ],
+      "verify_tags": [
+        "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E17-T01-S1",
+          "title": "D1 schema + Worker routes",
+          "output": "0011 migration, chat-store.mjs, append/delete/history routes",
+          "acceptance": "Given append then history When read Then both turns return in order"
+        },
+        {
+          "id": "E17-T01-S2",
+          "title": "Go durable bridge",
+          "output": "chat/persist.go + Store write/read-through",
+          "acceptance": "Given a Redis miss When Messages runs Then D1 history is served and cached"
+        },
+        {
+          "id": "E17-T01-S3",
+          "title": "Dashboard durability",
+          "output": "roomSessionId + RoomChat/ChatWidget REST persistence",
+          "acceptance": "Given rest mode When a turn completes Then it is persisted via /api/chat:append"
         }
       ]
     }

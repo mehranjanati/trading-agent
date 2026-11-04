@@ -10,6 +10,8 @@ import {
   applyWsEvent,
   buildOutbound,
   buildRestOutbound,
+  roomSessionId,
+  SESSION_SYMBOL_RE,
   parseChatStreamFrame,
   pageContext,
   SETUPS_KEY,
@@ -217,5 +219,22 @@ describe("parseChatStreamFrame (POST /api/strategy:chat:stream — the vision-tu
     // data: prefix required; empty payload is a skip, not an error.
     assert.equal(parseChatStreamFrame("hello world").ok, false);
     assert.equal(parseChatStreamFrame("data:").ok, false);
+  });
+});
+
+describe("ADR-014 roomSessionId — one permanent thread per symbol", () => {
+  it("derives sym_<SYMBOL> exactly like the Go service and the Worker", () => {
+    assert.equal(roomSessionId("openusdt"), "sym_OPENUSDT");
+    assert.equal(roomSessionId(" OPENUSDT "), "sym_OPENUSDT");
+    assert.equal(roomSessionId("BTCUSDT"), "sym_BTCUSDT");
+  });
+  it("fails closed on a non-venue name (no second thread from a typo)", () => {
+    for (const bad of ["", "BTC", "btc-usdt", null, undefined, "BTC/USDT"]) {
+      assert.equal(roomSessionId(bad), "", String(bad));
+    }
+  });
+  it("the session regex matches the shared shape", () => {
+    assert.equal(SESSION_SYMBOL_RE.test("OPENUSDT"), true);
+    assert.equal(SESSION_SYMBOL_RE.test("openusdt"), false);
   });
 });

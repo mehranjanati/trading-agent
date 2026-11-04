@@ -65,6 +65,10 @@ export default {
       if (req.method === "GET" && p === "/api/positions") return misc.listPositions(req, env);
       if (req.method === "GET" && p === "/api/notify:prefs") return misc.listNotifyPrefs(req, env);
       if (req.method === "POST" && p === "/api/notify:prefs") return misc.setNotifyPrefs(req, env);
+      // ADR-014: durable chat transcript (D1 is canonical; Redis is a cache).
+      if (req.method === "POST" && p === "/api/chat:append") return misc.chatAppend(req, env);
+      if (req.method === "POST" && p === "/api/chat:delete") return misc.chatDelete(req, env);
+      if (req.method === "GET" && p === "/api/chat:history") return misc.chatHistory(req, env);
       if (req.method === "GET" && p === "/api/symbols") {
         try {
           return ok({ ...(await listSymbols(env)), at: new Date().toISOString() });

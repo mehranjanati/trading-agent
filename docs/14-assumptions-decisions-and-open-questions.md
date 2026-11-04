@@ -10,6 +10,22 @@
 - **D-07 ADR-004 ACCEPTED** — fallback 5s REST poll proven for ≤100 symbols (3000 weight/min ÷ weight-1 ticker). Owner: architect.
 - **D-08 Execution plane is Cloudflare-only** — signed submit + reconcile run in Workers; orders, positions and approvals are canonical in D1; dashboard is read-only via Workers. Go Watcher is market-data + triggers only and MUST NOT submit orders, including fallback (docs/03 §3.3, ADR-003). Toobit trade keys live in the Cloudflare secret store only (T5). 2026-10-11. Owner: architect.
 
+## 14.1a Proposed decisions (planning accepted — implementation gated on sign-off)
+
+- **D-09 (PROPOSED 2026-11-01)** Dashboard consolidation into **one cockpit + three
+  secondary views** (`/cockpit`, `/execution`, `/activity`, `/settings`) with legacy
+  URLs kept alive by SvelteKit redirects. Record: [ADR-012](./decisions/ADR-012-trading-cockpit-single-surface.md),
+  plan: [docs/20](./20-trading-cockpit-ui.md), task E15-T01. Read-only (D-08) and the
+  per-widget freshness rules are unchanged. Once accepted, docs/20 wins over
+  docs/09 §9.1 for new UI work.
+- **D-10 (PROPOSED 2026-11-01)** Live trading is reached by a **signed exchange
+  adapter behind a fail-closed env gate** (`ENV=live` **and**
+  `LIVE_TRADING_ENABLED=true`, read in one factory), only after the SAFE-007 paper
+  proof and the docs/21 §21.9 gates are signed. Record:
+  [ADR-013](./decisions/ADR-013-live-execution-adapter.md), plan:
+  [docs/21](./21-live-trading-readiness.md), task E16-T01. **Until signed,
+  `LIVE_TRADING_ENABLED` must not exist in any deploy** (docs/13 §13.8).
+
 ## 14.2 Assumptions (VERIFY_REQUIRED — each blocks backlog items)
 - **A-01 CLOSED 2026-10-10** — WS verified: `wss://stream.toobit.com/quote/ws/v1`, topics trade/markPrice/bookTicker, ping ≤5min, symbol form `BTC-SWAP-USDT`. Evidence: `docs/ops/TOOBIT-API-FACTS.md`. Unblocked E02-T02.
 - **A-02 CLOSED 2026-10-10** — REST verified: base `https://api.toobit.com`, 3000 weight/min + 60 orders/2s, `clientOrderId` supported, recvWindow default 5000. Evidence: same file. Unblocked E06-T02/E09-T01 math.
@@ -30,3 +46,7 @@
 - **Q-12** Artifact store location/quota (Hetzner vol path + backup)? Owner: operator · Close: E13-T04 · Proposal: volume dir + hourly snapshot.
 - **Q-13** WASM invocation budget SLO (p95 ms, mem MB)? Owner: trader+operator · Close: E13-T03 bench · Proposal: 500ms deadline, measure first.
 - **Q-14** `WASM_PROPOSAL` signal kind + RBAC for activation? Owner: signal owner+admin · Close: E13-T02 · Proposal: kind added, admin-only activation.
+- **Q-15** Live account mode — one-way or hedge — and which margin type? Owner: trader+operator · Close: E16 P2 · Needed before the adapter can be considered correct (a mismatch rejects or flips intent semantics; docs/21 §21.6).
+- **Q-16** First-live-trade size/notional cap and the symbol used for the supervised P4 trade? Owner: trader · Close: E16 P4 · Proposal: the smallest value the venue accepts, one major only.
+- **Q-17** Close-all policy when the kill switch engages: auto-flatten, or notify + manual? Owner: operator · Close: E16 P3 · A kill switch stops *new* orders today and does not flatten exposure (docs/21 §21.6).
+- **Q-18** After the cockpit lands, is the full-page `/chat` kept as a fallback view or deleted? Owner: trader · Close: E15 S3 · Proposal: keep it as a redirect target for `?chat=1` until the inline panel has run for two weeks.

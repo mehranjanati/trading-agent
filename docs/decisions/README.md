@@ -15,3 +15,5 @@ Format: Status / Context / Decision / Alternatives / Consequences / Verification
 | [009](./ADR-009-wasm-supply-chain.md) | WASM supply chain (AI-generated) | PROPOSED |
 | [010](./ADR-010-multimodal-chart-chat.md) | Multimodal chart chat (vision, R2/D1, turn ids) | PROPOSED |
 | [011](./ADR-011-strategy-retirement.md) | Retiring a published strategy version (never deleting it) | PROPOSED |
+| [012](./ADR-012-trading-cockpit-single-surface.md) | Trading cockpit — one surface instead of seventeen URLs | PROPOSED |
+| [013](./ADR-013-live-execution-adapter.md) | Live execution — signed adapter behind a fail-closed env gate | PROPOSED |

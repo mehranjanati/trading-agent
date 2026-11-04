@@ -157,3 +157,34 @@ flowchart LR
 - `go run ./cmd/replay && go run ./cmd/flap && go run ./cmd/restart-drill`
 - Paper cycle: `node scripts/paper-cycle.mjs` + drills in `docs/ops/paper/`.
 
+## 19.9 From analysis to a real order — the single path (and where it stops today)
+
+There is exactly one path from a strategy verdict to a submitted order, and it does
+not branch:
+
+```
+SELECT (Registry.Active) → ANALYZE (Go /analyze, advisory) → STALK (POST /api/watches)
+  → ARM (triggerloop 10s) → FIRE (POST /api/watches:trigger) → SIGNAL (WASM_PROPOSAL)
+  → APPROVAL (single-use, expiring) → RISK (9 gates, fixed order) → EXECUTE
+  (kill → lease → risk → consume → intent → submit) → RECONCILE → POSITION (fills only)
+```
+
+What stops it today is **only the last hop**: the exchange adapter is the paper
+simulator (D-06), so a `FILLED` row is a simulated fill and the dashboard says so in
+the venue banner. Everything before the adapter — the gates, the approval token, the
+intent/`client_order_id` identity, the reconcile sweep — is the production path and is
+already exercised by the paper cycle and the drills.
+
+Consequences for anyone adding a strategy or a UI surface:
+
+- A new strategy (docs/19 §19.6) changes *what* is proposed, never *how* an order is
+  placed. It cannot skip approval, risk, or reconcile.
+- A new UI surface (docs/20) changes *where* a human clicks, never *what* the click can
+  do: the only write is `POST /api/watches` (D-08).
+- Enabling a real venue is a separate, gated change with its own ADR and a 14-day
+  paper proof — [docs/21](./21-live-trading-readiness.md) §21.3 P0→P4,
+  [ADR-013](./decisions/ADR-013-live-execution-adapter.md).
+
+Reading order for the live question: docs/19 §19.5 (the ten steps) → docs/08 §8.2
+(the gates) → docs/21 (what is still missing) → docs/12 §12.6 (the gated procedure).
+

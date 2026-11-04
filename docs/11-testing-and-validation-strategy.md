@@ -17,3 +17,29 @@
 
 ## 11.3 Entry/exit per epic
 E02 exit: 24h soak log. E04: restart-safe proof. E06: drill videos/logs. E08: reject-matrix green. E09: ack-loss drill green on testnet. E11: signed gate report.
+
+## 11.4 Test plans for the proposed work
+
+**E15 — trading cockpit (docs/20).** `npm run check` + `npm test` stay green; the
+redirect matrix in docs/20 §20.5 is walked URL by URL (each legacy URL → mapped state,
+symbol/tab preserved); a badge-coverage walk over the four views proves no widget lost
+its LIVE/STALE/CACHED/UNAVAILABLE badge in the merge. Pure logic for new panels lands in
+`dashboard/src/lib/*-core.mjs` so `node --test` covers it without a browser.
+
+**E16 — live readiness (docs/21).** Three layers, none of which may be skipped:
+
+1. **Boot matrix** (new): `ENV` × `LIVE_TRADING_ENABLED` × keys — every
+   half-configured combination must refuse to start; flag absent must behave exactly
+   like the paper simulator.
+2. **Adapter contract** (extends `workers/src/execution.test.mjs`,
+   `workers/src/reconcile.test.mjs`): recorded venue fixtures, an ack-loss case that
+   must produce `SUBMIT_UNKNOWN` and resolve only through `query(client_order_id)`, an
+   unknown venue status that must resolve nothing, and partial fills feeding
+   `positionStatements`.
+3. **Operational drills** (`scripts/chaos.mjs`, `docs/ops/DRILLS.md`): kill → no new
+   order in < 5 s in the live configuration, close-all flattens exposure, and the
+   rollback (§21.8) is timed end-to-end (< 5 min) with the `recovery_log` rows attached.
+
+The SAFE-007 tripwires stay in place while E16 runs: `paper-gate.mjs` refuses a PASS
+when any `LIVE_*` key exists, and `paper-cycle.mjs` / `chaos.mjs` refuse to run with
+`LIVE_TRADING_ENABLED` set. Their tests must be updated in the release PR, on purpose.

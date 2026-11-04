@@ -16,5 +16,10 @@
 | E11 | Testing, Simulation & Paper Trading | P0 | Suites + 14d paper + gate report | Zero unapproved; signed report | E11-T01 IN_PROGRESS (3) — machinery done, 1 cycle proven; 14d clock starts at E12 |
 | E12 | Deployment, Monitoring & Readiness | P1 | Envs, alerts, backups, drills | Rollback <5min; alert routing | E12-T01 (3) |
 | E13 | Go/WASM Strategy Runtime (PLAN ONLY) | P0/P1 | Versioned WASM strategies w/o rebuild | Contract frozen; compat matrix; MVP backlog | E13-T01 DONE, E13-T02..T06 (11) |
+| E14 | Deep analysis API + advisory chat (vision) | P1 | `/analyze` deep engine, chat WS + R2 chart vision | aggregate + verdicts + suggest_zones live; chat advisory only | E14-T01/T02 DONE (docs/18) |
+| E15 | Trading cockpit — single-surface UI (IN_PROGRESS) | P1 | 17 URLs → 1 cockpit + 3 views, legacy redirects | docs/20 §20.8: reach "watch armed" without leaving `/cockpit`; badges unchanged | E15-T01 IN_PROGRESS — S1/S2/S3 DONE, S4 partial (14 redirects live; `/settings` slice open) |
+| E16 | Live-trading readiness (PROPOSED, GATED) | P0 | Signed exchange adapter behind a fail-closed env gate | docs/21 §21.9 signed: 14-day paper PASS + ack-loss + kill <5s + rollback drill | E16-T01 (P0..P4, docs/21) |
 
-Total: 27 tasks, 68 subtasks. Source of truth: `BACKLOG.json`.
+Total: 29 tasks, 72+ subtasks. Source of truth: `BACKLOG.json`. E15/E16 are
+PROPOSED and carry no live capability: E16 is a **gate plan**, and nothing in it
+may be implemented as a flag flip (docs/13 §13.8).

@@ -12,6 +12,10 @@ Binding rule: every deploy reads secrets from a manager, never from repo files.
 | `TOOBIT_WS_URL` | verify-required placeholder | official URL (E02-T01) | official URL | no | public data |
 | `TOOBIT_API_KEY` | testnet/paper | testnet | testnet until gate | **yes** | trade-only, no withdraw |
 | `TOOBIT_API_SECRET` | testnet/paper | testnet | testnet until gate | **yes** | rotation 90d (§12.5) |
+| `LIVE_TRADING_ENABLED` | *(absent)* | *(absent)* | *(absent)* | no | **fail-closed live gate — must stay absent until the docs/21 §21.9 gate is signed** (ADR-013, docs/13 §13.8). `true` selects the signed adapter only when `ENV=live` |
+| `TOOBIT_RECV_WINDOW` | — | — | — | no | live only; signed-request clock-skew guard (default 5000 ms), caller must be NTP-synced |
+| `POSITION_MODE` | — | — | — | no | live only; `one-way` \| `hedge`, must match the account and is verified at boot (Q-15) |
+| `MARGIN_TYPE` | — | — | — | no | live only; `cross` \| `isolated`, verified at boot (Q-15) |
 | `SIGNAL_HMAC_SECRET` | dev value | staging value | prod value | **yes** | single-secret form for the signal webhook (E07-T01-S2b); never in repo |
 | `SIGNAL_HMAC_SECRETS` | — | `{"<source>":"<secret>",…}` | per-source map | **yes** | keyed per source; overrides the single form when set |
 | `GO_AGENT_TOKEN` | `dev-token` | staging value | prod value | **yes** | shared secret the Go plane sends as `x-agent-token` on service routes (heartbeat, `POST /api/watches:trigger`); falls back to `GO_HEARTBEAT_TOKEN` when unset |

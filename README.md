@@ -3,6 +3,7 @@
 Independent repo. Human approval required before every new order. No live trading, no withdrawals.
 
 - Docs: `docs/` (start: `docs/00-project-charter.md`, `docs/13-development-guide.md`)
+- Proposed next steps: `docs/20-trading-cockpit-ui.md` (simplify the 17 dashboard URLs into one cockpit — ADR-012) · `docs/21-live-trading-readiness.md` (what a real venue still needs, gated by SAFE-007 — ADR-013). Both are PLAN ONLY; neither enables live trading.
 - Backlog: `docs/tasks/BACKLOG.json` + `ROADMAP.md`
 - Layout: `go-watcher/` (Go WS + watcher) · `workers/` (control plane) · `dashboard/` (SvelteKit — decided Q-01) · `migrations/` (D1, forward-only) · `schemas/` (event/API JSON-schema)
 

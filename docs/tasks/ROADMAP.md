@@ -15,8 +15,21 @@
 ## Wave 4 — Go/WASM strategy runtime (PLAN ONLY, WASM-only, no Web3)
 15. **E13-T01 DONE** (contract v1 schemas + golden fixtures + validator in `make check`). 16. **E13-T02** host boundary + lifecycle design, and **E13-T03** compat matrix (parallel) → **E13-T04** persistence/ops → **E13-T05** MVP slice → **E13-T06** safety sign-off. Paper-only; no runtime code until E13-T06 signed.
 
+## Wave 5 — Trading cockpit (PROPOSED, P1) · does not touch the trading path
+17. **E15-T01** (docs/20, ADR-012): one cockpit + three views, legacy routes redirect
+    with state preserved, badges/mode banner/venue notice unchanged, dashboard stays
+    read-only (D-08). Slices S1 shell → S2 panels → S3 inline assistant → S4 redirects;
+    legacy pages are deleted only after their redirect is live.
+
+## Wave 6 — Live-trading readiness (PROPOSED, GATED on SAFE-007)
+18. **E16-T01** (docs/21, ADR-013): P0 14-day paper proof → P1 signed adapter →
+    P2 fail-closed env gate → P3 live-only controls (recvWindow, position/margin mode,
+    funding/liquidation, close-all, key-rotation drill) → P4 two-person first order.
+    **Nothing in this wave may be implemented as a flag flip**; `LIVE_TRADING_ENABLED`
+    must not exist in any deploy until docs/21 §21.9 is signed (docs/13 §13.8).
+
 ## Critical path
-E00 → E01 → E04 → E05 → E06 → E08 → E09 → E11. E02/E03 join after A-01 clears. E10/E12 parallelize after E05-T01.
+E00 → E01 → E04 → E05 → E06 → E08 → E09 → E11. E02/E03 join after A-01 clears. E10/E12 parallelize after E05-T01. E15 is off the trading critical path (UI only); E16 depends on E11 and blocks only live capability.
 
 ## Release gate
-No live-trading capability without: all P0 DONE + paper report + security review + signed `recovery_log` row. See `TEST-AND-RELEASE-GATES.md`.
+No live-trading capability without: all P0 DONE + paper report + security review + signed `recovery_log` row. See `TEST-AND-RELEASE-GATES.md` and docs/21 §21.9.

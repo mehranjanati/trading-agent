@@ -1,12 +1,12 @@
 {
-  "version": "2.1.0",
-  "generated": "2026-10-11",
+  "version": "2.2.0",
+  "generated": "2026-11-01",
   "project": "AI Trading Agent (Toobit USDT-M)",
   "stack": "TypeScript + Go only (no Python)",
   "counts": {
-    "epics": 14,
-    "tasks": 27,
-    "subtasks": 68
+    "epics": 16,
+    "tasks": 29,
+    "subtasks": 77
   },
   "tasks": [
     {
@@ -1735,6 +1735,188 @@
           "title": "Threat + gates",
           "output": "signed table",
           "acceptance": "Given table When signed Then complete"
+        }
+      ]
+    },
+    {
+      "id": "E15-T01",
+      "epic_id": "E15",
+      "title": "Trading cockpit — one surface + legacy redirects",
+      "objective": "Collapse the dashboard's 17 URLs into one cockpit + three secondary views so a trader can go from \"symbol on screen\" to \"watch armed\" without navigation, with zero change to the read-only charter.",
+      "scope": "docs/20: /cockpit (symbol sidebar + price + watch board + inline chat + inline analysis + Stalk card), /execution, /activity, /settings; SvelteKit 302 redirects with state in query params; per-widget badges preserved.",
+      "out_of_scope": "No order/approval action buttons (D-08, docs/20 §20.4). No new BFF endpoint. No design-system rewrite. No freshness threshold change.",
+      "priority": "P1",
+      "risk_level": "low",
+      "dependencies": [
+        "E10-T01"
+      ],
+      "affected_components": [
+        "dashboard"
+      ],
+      "implementation_steps": [
+        "S1 shell: /cockpit route, symbol sidebar fed by GET /api/symbols + /api/prices, selected-symbol store",
+        "S2 panels: watch board (GET /api/watches all statuses), analysis panel (POST /analyze), Stalk card",
+        "S3 inline assistant bound to chat_session_{symbol} (same session as /chat)",
+        "S4 redirects: /setups/{symbol} -> /cockpit?symbol=, /approvals|/orders -> /execution, timelines -> /activity, strategies|alerts -> /settings",
+        "Delete legacy pages only after their redirect is live in production"
+      ],
+      "acceptance_criteria": [
+        "Given a symbol When selected in /cockpit Then its watches (every status) and analysis form render without navigation",
+        "Given any legacy URL in docs/20 20.5 When opened Then 302 to the mapped cockpit URL with the state pre-selected",
+        "Given a degraded backend When /cockpit renders Then the mode banner, the paper-sim venue notice and a per-widget UNAVAILABLE/STALE badge are visible"
+      ],
+      "test_plan": [
+        "npm run check (tsc + svelte-check) and npm test (node --test dashboard/src/lib/*.test.mjs)",
+        "Manual: every docs/20 20.5 URL resolves and preserves symbol/tab state",
+        "Badge coverage walk: four views, every widget carries a badge"
+      ],
+      "documentation_references": [
+        "docs/20-trading-cockpit-ui.md",
+        "docs/09-dashboard-and-observability.md",
+        "docs/decisions/ADR-012-trading-cockpit-single-surface.md",
+        "docs/13-development-guide.md"
+      ],
+      "model_assignment": {
+        "primary": "Muse Spark 1.3",
+        "reviewer": "GLM-5.3-Flash"
+      },
+      "estimated_complexity": "L",
+      "status": "IN_PROGRESS",
+      "blocking_decisions": [],
+      "safety_tags": [
+        "read-only-ui"
+      ],
+      "verify_tags": [
+        "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E15-T01-S1",
+          "title": "Cockpit shell",
+          "output": "/cockpit route + symbol sidebar + selected-symbol store",
+          "acceptance": "Given a direct visit When rendering Then sidebar/price/watch board paint from SSR data"
+        },
+        {
+          "id": "E15-T01-S2",
+          "title": "Panels",
+          "output": "watch board + analysis panel + Stalk card inside the cockpit",
+          "acceptance": "Given a symbol When selected Then watches+analysis render with no navigation"
+        },
+        {
+          "id": "E15-T01-S3",
+          "title": "Inline assistant",
+          "output": "chat panel bound to chat_session_{symbol}",
+          "acceptance": "Given a message When sent Then the /chat session continues and advisory notice is visible"
+        },
+        {
+          "id": "E15-T01-S4",
+          "title": "Legacy redirects",
+          "output": "302 table wired, legacy pages removed",
+          "acceptance": "Given any legacy URL When opened Then mapped state loads"
+        }
+      ],
+      "progress": {
+        "S1_shell": "DONE — /cockpit + sidebar + SSR snapshot (loadCockpit)",
+        "S2_panels": "DONE — watch board, execution summary, analysis + Stalk card",
+        "S3_assistant": "DONE — components/RoomChat.svelte (chat_session_{symbol})",
+        "S4_redirects": "PARTIAL — 14 legacy routes 302 via lib/legacy.ts + cockpit-core.legacyRedirect; /chat kept (Q-18), /strategies + /alerts wait for /settings",
+        "evidence": "cockpit-core.test.mjs (13 tests), npm run check 0 errors, npm test 120 pass, build OK, node-adapter route matrix 302/200"
+      }
+    },
+    {
+      "id": "E16-T01",
+      "epic_id": "E16",
+      "title": "Live-trading readiness — signed adapter behind a fail-closed gate",
+      "objective": "Make a real venue reachable only through one signed adapter selected by a single fail-closed switch, after the SAFE-007 paper proof and the docs/21 21.9 gates are signed.",
+      "scope": "docs/21 P0..P4: 14-day paper proof, workers/src/exchange-live.mjs (HMAC submit + query by client_order_id), exchange factory (ENV=live AND LIVE_TRADING_ENABLED), boot fail-closed checks, live-only controls (recvWindow, position/margin mode, funding/liquidation, close-all, key rotation drill), two-person first order.",
+      "out_of_scope": "No withdrawal/transfer scope (SAFE-008). No risk-gate reordering or bypass. No dashboard submit path (D-08). No auto-enable from key presence.",
+      "priority": "P0",
+      "risk_level": "high",
+      "dependencies": [
+        "E09-T01",
+        "E11-T01"
+      ],
+      "affected_components": [
+        "workers",
+        "dashboard",
+        "ops"
+      ],
+      "implementation_steps": [
+        "P0: run the 14-day paper window, sign the paper-gate report, attach recovery_log rows",
+        "P1: implement createLiveExchange behind the existing submit()/query() contract; keep VENUE_STATUS_MAP as the only translation; ack-lost -> SUBMIT_UNKNOWN",
+        "P2: add the exchange factory + boot fail-closed checks; half-configuration refuses to start; health reports execution_venue=toobit-live",
+        "P3: recvWindow/clock sync, position+margin mode verification, funding/liquidation surfacing, close-all, key-rotation drill",
+        "P4: two-person release, smallest-notional supervised first order, kill switch exercised immediately after"
+      ],
+      "acceptance_criteria": [
+        "Given LIVE_TRADING_ENABLED absent When deployed Then the paper simulator is the adapter and behaviour is identical to today",
+        "Given ENV=live without keys or the flag without ENV=live When booting Then the process refuses to start (fail closed)",
+        "Given a submit timeout When the adapter answers late Then the intent is SUBMIT_UNKNOWN and is resolved only by query(client_order_id), never resubmitted",
+        "Given the kill switch engages When a new order is attempted Then no submit occurs in under 5s and a kill.engaged incident exists"
+      ],
+      "test_plan": [
+        "node --test workers/src/execution.test.mjs workers/src/reconcile.test.mjs against adapter contract fixtures + ack-loss case",
+        "Boot matrix test: flag/ENV/key combinations, all half-configured cases refuse to start",
+        "node scripts/paper-gate.mjs report attached to the release record",
+        "Drill: kill switch <5s, close-all, rollback timed end-to-end (<5 min)"
+      ],
+      "documentation_references": [
+        "docs/21-live-trading-readiness.md",
+        "docs/08-trading-risk-and-execution-safety.md",
+        "docs/12-deployment-and-operations-runbook.md",
+        "docs/ops/CONFIG-MATRIX.md",
+        "docs/ops/TOOBIT-KEY-POLICY.md",
+        "docs/decisions/ADR-013-live-execution-adapter.md"
+      ],
+      "model_assignment": {
+        "primary": "GLM-5.3",
+        "reviewer": "Qwen3.8 Max"
+      },
+      "estimated_complexity": "XL",
+      "status": "PROPOSED",
+      "blocking_decisions": [
+        "D-10",
+        "Q-15",
+        "Q-16",
+        "Q-17"
+      ],
+      "safety_tags": [
+        "trading-safety",
+        "live-gate"
+      ],
+      "verify_tags": [
+        "none"
+      ],
+      "subtasks": [
+        {
+          "id": "E16-T01-S1",
+          "title": "Paper proof (P0)",
+          "output": "14-day paper-gate report + signed recovery_log row",
+          "acceptance": "Given the window When evaluated Then PASS with zero unapproved orders"
+        },
+        {
+          "id": "E16-T01-S2",
+          "title": "Signed adapter (P1)",
+          "output": "workers/src/exchange-live.mjs with HMAC submit+query",
+          "acceptance": "Given a timeout When submitting Then SUBMIT_UNKNOWN, no resubmit"
+        },
+        {
+          "id": "E16-T01-S3",
+          "title": "Env gate (P2)",
+          "output": "single exchange factory + boot fail-closed checks",
+          "acceptance": "Given half configuration When booting Then startup refuses"
+        },
+        {
+          "id": "E16-T01-S4",
+          "title": "Live-only controls (P3)",
+          "output": "recvWindow, position/margin mode, funding/liquidation, close-all, rotation drill",
+          "acceptance": "Given kill engaged When close-all runs Then exposure flattens and is logged"
+        },
+        {
+          "id": "E16-T01-S5",
+          "title": "First live order (P4)",
+          "output": "two-person release + supervised minimal order + reconcile-to-terminal",
+          "acceptance": "Given the first fill When reconciled Then terminal state with no duplicate client_order_id"
         }
       ]
     }

@@ -93,3 +93,38 @@ Persistent banner with mode + cause + limitations; timelines show explicit gaps 
 SvelteKit + adapter-cloudflare, TypeScript strict, Tailwind optional. Rationale: smallest incident-time bundle, first-class Cloudflare support, simple SSR for SEO-irrelevant ops UI. Alternatives rejected: Next.js (heavier), plain Svelte SPA (weaker routing). Scaffold in E10-T01.
 
 **Implemented (E10-T01):** all eleven routes exist with a per-widget badge; the freshness/badge/degraded-UX rules are pure functions in `dashboard/src/lib/freshness.mjs` with unit tests (LIVE/STALE/CACHED/UNAVAILABLE, mode banner with cause + limitations, verbatim action-block reasons, gap-explicit timelines). Each route uses a `+page.ts` `load` (SSR carries real data on first paint) plus an `onMount` refresh; `setInterval` never sits at component top level. The dashboard is read-only (GETs only — D-08). CI gained a dedicated `dashboard` job (`npm ci && npm run check && npm test && npm run build`); `make check` stays stdlib-only. `adapter-cloudflare`'s dev/preview path needs workerd (unavailable on macOS < 13.5), so a local render proof uses `DASH_ADAPTER=node` — never the deployed adapter. Views whose BFF read endpoints do not exist yet (`/signals`, `/analysis`, `/approvals`, `/orders`, `/strategy`) render UNAVAILABLE by design until the E12 wiring.
+
+## 9.6 Target information architecture — the cockpit (E15, PROPOSED)
+
+The seventeen URLs that exist today (the eleven above plus `/chat`, `/setups`,
+`/setups/{symbol}`, `/analyze`, `/strategies`, `/alerts` — the last six were added
+after E10-T01) were a growth path, not a plan: several of them render the same rows,
+and the trader's real question spans six of them. The target surface, the route
+redirect table, the layout, the slicing, and the acceptance criteria are normative in
+[20 — Trading Cockpit](./20-trading-cockpit-ui.md); the decision is
+[ADR-012](./decisions/ADR-012-trading-cockpit-single-surface.md).
+
+Summary of the target:
+
+| View | Replaces |
+|---|---|
+| `/cockpit` (default) | `/`, `/setups`, `/setups/{symbol}`, `/watches`, `/zones`, `/chat`, `/analyze` |
+| `/execution` | `/approvals`, `/orders` |
+| `/activity` | `/signals`, `/events`, `/logs`, `/failover` |
+| `/settings` | `/strategies`, `/strategy`, `/alerts` |
+
+Non-negotiable while consolidating: one freshness badge **per widget** (§9.2), the
+mode banner stays (§9.4), a failed read renders UNAVAILABLE (never an empty
+table), timelines stay gap-explicit (§9.4), the paper-sim venue notice stays, and
+the dashboard remains read-only (D-08) — the only write is still
+`POST /api/watches`. This section does not remove the §9.1 table: that table is
+what shipped in E10-T01 and stays the record; §9.6 wins for new UI work.
+
+**Shipped so far (E15-T01, docs/20 §20.9):** `/cockpit` (sidebar + watch board +
+execution summary + analysis/Stalk + inline room assistant + the component strip
+inherited from `/`), `/execution`, `/activity`, and 14 legacy redirects.
+`/chat`, `/strategies` and `/alerts` still render their own pages — the
+`/settings` view that absorbs the last two is the remaining slice (Q-18 keeps
+`/chat`). Redirect behaviour is a pure, unit-tested function
+(`lib/cockpit-core.mjs` `legacyRedirect` → `lib/legacy.ts`), so a route can only
+be redirected to a target that exists.

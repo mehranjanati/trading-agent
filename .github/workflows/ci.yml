@@ -7,6 +7,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
+      - uses: actions/setup-go@v5
+        with: { go-version: "stable" }
       - run: make check
   dashboard:
     # E10-T01: the dashboard has its own toolchain, so it gets its own job —
@@ -17,6 +19,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
       - run: npm ci
+        working-directory: dashboard
+      # .svelte-kit/ is gitignored — svelte-check needs the generated tsconfig.
+      - run: npx svelte-kit sync
         working-directory: dashboard
       - run: npm run check   # svelte-check, TypeScript strict
         working-directory: dashboard

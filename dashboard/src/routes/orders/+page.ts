@@ -1,2 +1,2 @@
-import { loadOrders } from "$lib/loaders";
-export const load = loadOrders;
+import { legacyLoad } from "$lib/legacy";
+export const load = legacyLoad;

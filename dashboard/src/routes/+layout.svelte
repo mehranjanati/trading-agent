@@ -9,9 +9,12 @@
 
   export let data: { result: { ok: boolean; data?: Health; at?: string; ageMs?: number } | null };
 
+  // The nav is the TARGET information architecture (docs/20, ADR-012): the
+  // consolidated surfaces plus the two that are not folded in yet (/chat keeps
+  // the full editor — Q-18; /strategies keeps the library editor).
   const routes = [
-    ["/", "overview"], ["/chat", "💬 chat"], ["/setups", "setups"], ["/strategies", "strategies"],
-    ["/approvals", "approvals"], ["/alerts", "🔔 alerts"], ["/logs", "logs"],
+    ["/cockpit", "cockpit"], ["/execution", "execution"], ["/activity", "activity"],
+    ["/chat", "💬 chat"], ["/strategies", "strategies"], ["/alerts", "🔔 alerts"],
   ];
 
   let health: Health | null = data?.result?.ok ? (data.result.data as Health) : null;
@@ -54,7 +57,10 @@
   <main>
     <slot />
   </main>
-  <ChatWidget />
+  <!-- The cockpit carries the room's assistant inline (RoomChat), so the
+   *  floating global widget is hidden there — one assistant on screen, bound to
+   *  the symbol being traded, instead of two competing panels. -->
+  {#if currentPath !== "/cockpit"}<ChatWidget />{/if}
 </div>
 
 <style>

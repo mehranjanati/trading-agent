@@ -1,2 +1,2 @@
-import { loadStrategies } from "$lib/loaders";
-export const load = loadStrategies;
+import { legacyLoad } from "$lib/legacy";
+export const load = legacyLoad;

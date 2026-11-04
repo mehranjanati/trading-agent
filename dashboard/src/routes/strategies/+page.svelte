@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { page } from "$app/stores";
   import { Button } from "$lib/components/ui/button";
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Input } from "$lib/components/ui/input";
@@ -26,7 +27,16 @@
   // One row of the edit tick-list (groupEditRows): a library entry, or a stored
   // member the library no longer carries (`kind: "missing"`).
   type EditRow = { id: string; version?: string; kind: string; label: string; blurb: string; status?: string; selectable?: boolean };
-  let tab = $state<"library" | "groups" | "drafts" | "limits">("groups");
+  // Deep-linkable tab (docs/20 §20.5): `/strategy` redirects here with
+  // ?tab=limits, and every legacy link that carried a tab keeps working. An
+  // unknown value falls back to the default instead of rendering nothing.
+  const TAB_KEYS = ["library", "groups", "drafts", "limits"] as const;
+  type TabKey = (typeof TAB_KEYS)[number];
+  function initialTab(): TabKey {
+    const t = $page.url.searchParams.get("tab") ?? "";
+    return (TAB_KEYS as readonly string[]).includes(t) ? (t as TabKey) : "groups";
+  }
+  let tab = $state<"library" | "groups" | "drafts" | "limits">(initialTab());
   let description = $state("");
   let strategy_id = $state("");
   let version = $state("0.1.0");

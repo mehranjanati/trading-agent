@@ -1,2 +1,2 @@
-import { loadWatches } from "$lib/loaders";
-export const load = loadWatches;
+import { legacyLoad } from "$lib/legacy";
+export const load = legacyLoad;

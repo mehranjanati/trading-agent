@@ -1,2 +1,2 @@
-import { loadHealth } from "$lib/loaders";
-export const load = loadHealth;
+import { legacyLoad } from "$lib/legacy";
+export const load = legacyLoad;

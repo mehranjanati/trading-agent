@@ -9,9 +9,11 @@
 // REQUIRES: Cloudflare environment with `VECTORIZE` vectorize binding and `DB`
 // D1 binding (runs under `wrangler dev` or deployed Worker). Not plain Node.
 //
-// One-time index creation (before the first deploy):
-//   wrangler vectorize create rag-docs-index --dimensions=1024 --metric=cosine
+// One-time index creation (before enabling the binding):
+//   make vectorize-index      # or: wrangler vectorize create rag-docs-index --dimensions=1024 --metric=cosine
 // (bge-m3 emits 1024-dim vectors; change --dimensions if AI_EMBEDDING_MODEL changes.)
+// The [[vectorize]] binding ships COMMENTED in wrangler.toml — uncomment it only
+// after the index exists, else `wrangler deploy` fails closed (code 10159).
 // Then apply migrations 0012+0013 and POST to this module's route to ingest.
 
 import { readFileSync, readdirSync } from "node:fs";

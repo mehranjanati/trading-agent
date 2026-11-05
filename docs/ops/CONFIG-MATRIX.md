@@ -27,7 +27,7 @@ Binding rule: every deploy reads secrets from a manager, never from repo files.
 | `AI_MODEL` | `@cf/qwen/qwen3-30b-a3b-fp8` | same | same | no | text-only chat turns |
 | `AI_VISION_MODEL` | `@cf/qwen/qwen3.8-27b` | same | same | no | chart turns (ADR-010); ~1432 prompt tokens per 1600x900 chart at `detail:"low"` |
 | `AI_EMBEDDING_MODEL` | `@cf/baai/bge-m3` | same | same | no | query/chunk embeddings for RAG semantic search; 1024-dim (must match the Vectorize index) |
-| Vectorize index (`VECTORIZE`) | `rag-docs-index` | per-env | per-env | binding | RAG semantic retrieval over `docs/` (migrations/0013 + `scripts/ingest-vectorize.mjs`); FTS5 BM25 (0012) stays the keyword fallback when the index is absent |
+| Vectorize index (`VECTORIZE`) | *(binding commented)* | per-env | per-env | binding | RAG semantic retrieval over `docs/` (migrations/0013 + `scripts/ingest-vectorize.mjs`). Opt-in: run `make vectorize-index`, then uncomment `[[vectorize]]` in both wrangler configs — a binding to a missing index fails the deploy closed (code 10159). FTS5 BM25 (0012) is the keyword fallback meanwhile |
 | Log level | `debug` | `info` | `warn` | no | JSON logs, trace evt IDs |
 
 Related: [Secret store wiring](./SECRET-STORE.md) · [Security §07](../07-security-and-threat-model.md).

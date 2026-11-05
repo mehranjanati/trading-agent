@@ -47,10 +47,19 @@ AI_EMBEDDING_MODEL = "@cf/baai/bge-m3"
 [ai]
 binding = "AI"
 
-# Vectorize index for RAG semantic retrieval over docs/ corpus.
-[[vectorize]]
-binding = "VECTORIZE"
-index_name = "rag-docs-index"
+# RAG semantic search (OPTIONAL, opt-in).
+# Vectorize indexes are ACCOUNT-LEVEL resources: `wrangler deploy` fails closed
+# with "index ... was not found" (code 10159) when the binding points at an
+# index that does not exist yet. So the binding ships COMMENTED and FTS5 BM25
+# (migrations/0012) serves retrieval meanwhile.
+#
+# To enable semantic retrieval:
+#   1. make vectorize-index        # creates rag-docs-index (1024-dim, cosine)
+#   2. uncomment the three lines below
+#   3. redeploy, then run the ingest route (scripts/ingest-vectorize.mjs)
+# [[vectorize]]
+# binding = "VECTORIZE"
+# index_name = "rag-docs-index"
 
 # ADR-010: chart screenshots attached to chat turns. D1 caps a row/string at
 # 2 MB, so the BYTES live here (key recorded in chat_attachments.r2_key) and D1

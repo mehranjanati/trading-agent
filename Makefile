@@ -14,7 +14,7 @@ strategy-build:
 	@ls -la "go-watcher/strategies/samples/$(ID)-$(VERSION).wasm"
 	@echo "add to go-watcher/strategies/samples/registry.json: {\"id\":\"$(ID)\",\"version\":\"$(VERSION)\",\"file\":\"$(ID)-$(VERSION).wasm\",\"configuration\":{}}"
 
-.PHONY: check lint validate secrets test drills dev
+.PHONY: check lint validate secrets test drills dev vectorize-index
 check: lint validate secrets test
 lint:
 	@./scripts/check.sh
@@ -36,3 +36,9 @@ drills:
 	@cd go-watcher && go run ./cmd/replay && go run ./cmd/flap | head -n 1 && go run ./cmd/restart-drill
 dev:
 	@echo "paper-mode dev stack (E00 skeleton — services land in E02..E05)"
+
+# vectorize-index — create the RAG Vectorize index (account-level, idempotent).
+# Needed ONCE before uncommenting the [[vectorize]] binding in wrangler.toml;
+# without the index `wrangler deploy` fails closed (code 10159).
+vectorize-index: ## Create the RAG Vectorize index (rag-docs-index, 1024-dim, cosine)
+	@./scripts/vectorize-index.sh

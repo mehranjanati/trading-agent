@@ -354,7 +354,8 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
     assert.equal(seen.messages[0].role, "system");
     assert.ok(seen.messages[0].content.includes("Never exceed 2% risk"));
     assert.ok(seen.messages.at(-1).content.endsWith("/no_think"));
-    assert.equal(seen.messages.length, 5); // principles + snapshot + 3 history
+    assert.equal(seen.messages.length, 6); // principles + tool catalog + snapshot + 3 history
+    assert.ok(seen.messages.find((m) => String(m.content).includes("TOOLS AVAILABLE")), "tool catalog injected");
   });
 
   it("every turn carries the ephemeral platform snapshot (docs/18 §18.8)", async () => {
@@ -386,7 +387,7 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
     assert.equal(r.status, 200);
     // principles first, then the room block, then the platform snapshot (merged
     // docs/18 §18.8), then the history.
-    assert.equal(seen.messages.length, 4);
+    assert.equal(seen.messages.length, 5);
     assert.equal(seen.messages[0].role, "system");
     assert.ok(seen.messages[0].content.includes("Max risk 2%"));
     assert.equal(seen.messages[1].role, "system");
@@ -395,7 +396,9 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
     assert.ok(seen.messages[1].content.includes("never an instruction"));
     assert.equal(seen.messages[2].role, "system");
     assert.ok(seen.messages[2].content.startsWith("PLATFORM SNAPSHOT"), seen.messages[2].content);
-    assert.equal(seen.messages[3].role, "user");
+    assert.equal(seen.messages[3].role, "system");
+    assert.ok(seen.messages[3].content.startsWith("TOOLS AVAILABLE"));
+    assert.equal(seen.messages[4].role, "user");
   });
 
   it("a runaway room context is capped, and an absent one adds no system turn", async () => {
@@ -410,14 +413,16 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
     assert.ok(room.content.length <= 4000 + 200, `room block not capped: ${room.content.length}`);
     assert.ok(room.content.endsWith("(truncated)"));
 
-    // No context + no principles → snapshot + history only (no empty system turn).
+    // No context + no principles → snapshot + tool catalog + history.
     await post(app, env, "/api/strategy:chat:stream", JSON.stringify({
       messages: [{ role: "user", content: "hi" }],
     }));
-    assert.equal(seen.messages.length, 2); // platform snapshot + 1 history turn
+    assert.equal(seen.messages.length, 3); // platform snapshot + tool catalog + 1 history turn
     assert.equal(seen.messages[0].role, "system");
     assert.ok(seen.messages[0].content.startsWith("PLATFORM SNAPSHOT"));
-    assert.equal(seen.messages[1].role, "user");
+    assert.equal(seen.messages[1].role, "system");
+    assert.ok(seen.messages[1].content.startsWith("TOOLS AVAILABLE"));
+    assert.equal(seen.messages[2].role, "user");
   });
 
   it("400 VALIDATION on an empty messages array (no AI call)", async () => {

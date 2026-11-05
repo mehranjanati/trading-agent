@@ -43,6 +43,8 @@ AI_MODEL_FALLBACK = "@cf/qwen/qwen2.5-coder-32b-instruct"
 # tokens at detail:"low". Keep the vision model separate from AI_MODEL so the
 # cheap text model keeps serving text-only turns.
 AI_VISION_MODEL = "@cf/qwen/qwen3.8-27b"
+# Embedding model for RAG semantic search (Vectorize). No API keys — Workers AI.
+AI_EMBEDDING_MODEL = "@cf/baai/bge-m3"
 # E14-T02 proxy base: the go-watcher origin (Render) behind /analyze and
 # /strategies/registry. Any per-env GO_WATCHER_URL set in the Cloudflare
 # dashboard overrides this default; the dashboard fallback keeps working when
@@ -52,6 +54,11 @@ GO_WATCHER_URL = "https://trading-agent-knpg.onrender.com"
 # AI strategy generation (chat → Go code). Workers AI binding, no API keys.
 [ai]
 binding = "AI"
+
+# Vectorize index for RAG semantic retrieval over docs/ corpus.
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "rag-docs-index"
 
 # ADR-010: chart screenshots attached to chat turns. D1 caps a row/string at
 # 2 MB, so the BYTES live here (key recorded in chat_attachments.r2_key) and D1

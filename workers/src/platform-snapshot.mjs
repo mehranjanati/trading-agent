@@ -19,11 +19,17 @@
 /** Max rows per domain — keeps the assembled turn inside the 24K budget. */
 export const SNAPSHOT_LIMIT = 5;
 
+/** Max symbols to quote per turn — keeps the price budget bounded. */
+export const PRICE_LIMIT = 10;
+
 /** Advisory guard: the model must never believe it can act (D-08). */
 export const ADVISORY_GUARD =
   "You are an ADVISORY-ONLY assistant: you cannot place, cancel or approve orders, " +
   "touch watches/approvals/leases/kill-switch state, or execute anything. " +
   "Answer with analysis and proposals; the human decides and acts.";
+
+import { listPrices } from "./quotes.mjs";
+import { sharedWindow } from "./fallback-poll.mjs";
 
 /** One guarded query: missing table/env.DB -> [], never a throw. */
 async function rows(env, sqlText, ...args) {
@@ -67,7 +73,23 @@ export async function collectSnapshot(env, { limit = SNAPSHOT_LIMIT } = {}) {
     rows(env, "SELECT version, config_json, activated_by, at FROM strategy_configs ORDER BY at DESC LIMIT ?", limit),
     rows(env, "SELECT id, strategy_id, version, status, created_at FROM strategy_drafts WHERE status <> 'deleted' ORDER BY created_at DESC LIMIT ?", limit),
   ]);
-  return { modeRows, watchCounts, watches, signals, approvals, intents, orders, positions, incidents, versions, drafts };
+  // Prices — filtered read for symbols we already watch, fail-soft.
+  // A price outage marks symbols missing; never breaks the turn.
+  let prices = {};
+  let priceMissing = [];
+  try {
+    const syms = [...new Set((watches ?? []).map((w) => w.symbol).filter(Boolean))].slice(0, PRICE_LIMIT);
+    if (syms.length) {
+      const p = await listPrices(env, { url: new URL(`https://x?symbols=${syms.join(",")}`), window: sharedWindow });
+      prices = p.prices ?? {};
+      priceMissing = p.missing ?? [];
+    } else {
+      const p = await listPrices(env, { window: sharedWindow });
+      prices = p.prices ?? {};
+      priceMissing = p.missing ?? [];
+    }
+  } catch { /* budget exhausted or venue down — prices stay empty */ }
+  return { modeRows, watchCounts, watches, signals, approvals, intents, orders, positions, incidents, versions, drafts, prices, priceMissing };
 }
 
 /** Number of fills in a fills_json blob (0 when absent/malformed). */
@@ -102,6 +124,12 @@ export function renderSnapshot(s, { nowMs = Date.now() } = {}) {
   } else {
     L.push("mode: unavailable (no health snapshot yet)");
   }
+  if (s.prices && Object.keys(s.prices).length) {
+    for (const [sym, px] of Object.entries(s.prices)) L.push(`price: ${sym}=${px} (live)`);
+  } else {
+    L.push("prices: unavailable this turn");
+  }
+  if (s.priceMissing?.length) L.push(`missing: ${s.priceMissing.join(", ")}`);
   if (s.watchCounts?.length) {
     L.push(`watches: ${s.watchCounts.map((r) => `${r.status}=${r.n}`).join(" ")}`);
   } else {

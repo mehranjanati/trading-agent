@@ -18,6 +18,8 @@ import { ok, err, CORS } from "./errors.mjs";
 import { roleOf, guard, readBody } from "./_shared.mjs";
 import { TEMPLATE_MAIN } from "./strategies-template.mjs";
 import { hasImage, appendNoThink, reasoningOpts, persistAttachments, VISION_MODEL_DEFAULT } from "./chat-vision.mjs";
+import { retrieveDocs, formatRagContext } from "./rag.mjs";
+import { runTool, parseToolCall, stripToolLines, toolSystemPrompt, MAX_TOOL_ROUNDS } from "./tools.mjs";
 
 // SYSTEM_PROMPT is the contract the model must obey. Keep tight: every
 // allowed import is enumerated, the envelope is verbatim, and any deviation
@@ -121,6 +123,55 @@ export function buildGeneratePrompt({ description, strategy_id, version, templat
 // MAX_CLIENT_CONTEXT caps the client-declared room/setup block (mirrors the Go
 // chat service's maxClientContext): it is a prompt, not a document.
 const MAX_CLIENT_CONTEXT = 4000;
+
+// buildSystemMessages — the ephemeral system turns every chat turn carries.
+// Order: principles -> room context -> tool catalog -> retrieved knowledge -> platform snapshot.
+// None of these is stored; they are re-injected every turn so stale state is never quoted as history.
+export async function buildSystemMessages(env, { principles, context, ragQuery, ragText }) {
+  const out = contextSystems(principles, context);
+  // Platform snapshot (docs/18 §18.8) — last system block before tool catalog.
+  try {
+    const { platformSnapshot } = await import("./platform-snapshot.mjs");
+    out.push({ role: "system", content: await platformSnapshot(env) });
+  } catch { /* advisory only — the turn proceeds without it */ }
+  // Tool catalog (L1): read-only tools the model may invoke for live platform data.
+  out.push({ role: "system", content: toolSystemPrompt() });
+  if (ragText) out.push({ role: "system", content: ragText });
+  return out;
+}
+
+// runWithTools — runs the model with up to MAX_TOOL_ROUNDS tool-calling rounds.
+// The model emits TOOL: name {json}; the Worker executes it, appends the result,
+// and re-runs the model. Final assistant text is returned (never the raw tool JSON).
+export async function runWithTools({ env, model, messages, maxTokens, stream }) {
+  let current = [...messages];
+  let finalText = "";
+  let rounds = 0;
+  for (;;) {
+    rounds++;
+    const aiRes = await env.AI.run(model, {
+      messages: current,
+      max_tokens: maxTokens,
+      stream,
+      ...reasoningOpts(model),
+    });
+    const firstMsg = aiRes?.choices?.[0]?.message ?? aiRes?.choices?.[0]?.delta ?? null;
+    const text = typeof aiRes === "string" ? aiRes : (aiRes?.response ?? aiRes?.result ?? firstMsg?.content ?? aiRes?.content ?? firstMsg?.reasoning_content ?? firstMsg?.reasoning ?? "");
+    finalText = text;
+    const call = parseToolCall(text);
+    if (!call || rounds >= MAX_TOOL_ROUNDS) break;
+    const result = await runTool(env, call.name, call.args);
+    current.push({ role: "assistant", content: text });
+    current.push({
+      role: "system",
+      content: `TOOL RESULT for ${call.name}: ${JSON.stringify(result)}`,
+    });
+  }
+  // The user must never see raw "TOOL: ..." syntax: strip it from the answer
+  // (it can survive when the loop breaks at MAX_TOOL_ROUNDS or the model
+  // narrates the call it wanted to make).
+  return stripToolLines(finalText);
+}
 
 /** contextSystems — the system turns both chat routes prepend: the trading
  *  principles, then the CLIENT-DECLARED room/setup context.
@@ -238,7 +289,7 @@ export function generateRoutes() {
       await env.DB.prepare("UPDATE strategy_drafts SET status='deleted' WHERE id=?").bind(id).run();
       return ok({ id, status: "deleted", kept_for_audit: true }, 200);
     }),
-    /** POST /api/strategy:chat — multi-turn chat with AI (advisory only).
+    /** POST /api/strategy:chat — multi-turn chat with AI (advisory only). 
      *  Accepts full message history + optional principles (injected as system
      *  message). Returns AI response + extracted code blocks. */
     chat: safe(async (req, env) => {
@@ -259,39 +310,27 @@ export function generateRoutes() {
       const model = vision
         ? (env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT)
         : (env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8");
-      // System turns first: principles, then the client-declared room context
-      // (docs/18) — then the history.
-      const fullMessages = contextSystems(principles, b.context);
-      // Platform snapshot (docs/18 §18.8): the model has no platform access of
-      // its own, so every turn carries the read-only state it advises on
-      // (mode/watches/signals/approvals/intents/positions/incidents, with
-      // ages). Ephemeral — NOT stored, never history (mirrors the Go market
-      // injection). Fail-soft: a D1 outage degrades the answer, not the turn.
+      // System turns first: principles, room context, tool catalog, RAG, snapshot.
+      const lastUser = [...messages].reverse().find((m) => m.role === "user");
+      const ragQuery = lastUser ? String(lastUser.content ?? "") : "";
+      let ragText = null;
       try {
-        const { platformSnapshot } = await import("./platform-snapshot.mjs");
-        fullMessages.push({ role: "system", content: await platformSnapshot(env) });
-      } catch { /* advisory only — the turn proceeds without it */ }
-      fullMessages.push(...messages);
-      // /no_think disables Qwen3's reasoning trace (thinking mode blows the
-      // wall-clock and burns output tokens). appendNoThink keeps the directive
-      // on the TEXT part: on array (multimodal) content a plain `+=` would
-      // stringify it to "[object Object]" and the model would answer about that
-      // literal string instead of the chart.
+        const ragRows = await retrieveDocs(env, ragQuery);
+        ragText = formatRagContext(ragRows);
+      } catch { /* advisory only — the turn proceeds without RAG context */ }
+      const systemMessages = await buildSystemMessages(env, { principles, context: b.context, ragQuery, ragText });
+      const fullMessages = [...systemMessages, ...messages];
+      // /no_think on the last user turn.
       const lastTurn = fullMessages[fullMessages.length - 1];
       if (lastTurn?.role === "user") appendNoThink(lastTurn);
-      // Provenance only — chart bytes go to R2, metadata to D1. A storage
-      // outage must never silence the answer (chat is advisory).
+      // Provenance only — chart bytes go to R2, metadata to D1.
       let attachments = [];
       try {
         attachments = await persistAttachments(env, { sessionId: String(b.session_id ?? ""), messages: fullMessages });
       } catch { attachments = []; }
-      const aiRes = await env.AI.run(model, { messages: fullMessages, max_tokens: 4096, ...reasoningOpts(model) });
-      // Qwen3 thinking trace: when thinking is on, the answer lands in
-      // message.reasoning / reasoning_content with content=null. Prefer real
-      // content; fall back to the reasoning text so the turn is never silent.
-      const firstMsg = aiRes?.choices?.[0]?.message ?? aiRes?.choices?.[0]?.delta ?? null;
-      const text = typeof aiRes === "string" ? aiRes : (aiRes?.response ?? aiRes?.result ?? firstMsg?.content ?? aiRes?.content ?? firstMsg?.reasoning_content ?? firstMsg?.reasoning ?? "");
-      // Extract code blocks from response
+      // L1 tool loop — read-only tools, max 3 rounds.
+      const text = await runWithTools({ env, model, messages: fullMessages, maxTokens: 4096, stream: false });
+      // Extract code blocks from final response
       const codeBlocks = extractCodeBlocks(String(text ?? ""));
       return ok({ response: text, codeBlocks, model, vision, attachments: attachments.length }, 200);
     }),
@@ -317,16 +356,21 @@ export function generateRoutes() {
       const model = vision
         ? (env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT)
         : (env.AI_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8");
-      // System turns first: principles, then the client-declared room context
-      // (docs/18) — then the history.
-      const fullMessages = contextSystems(principles, b.context);
-      // Platform snapshot (docs/18 §18.8) — identical to :chat above.
+      // System turns first: principles, room context, tool catalog, RAG, snapshot.
+      const lastUser = [...messages].reverse().find((m) => m.role === "user");
+      const ragQuery = lastUser ? String(lastUser.content ?? "") : "";
+      let ragText = null;
       try {
-        const { platformSnapshot } = await import("./platform-snapshot.mjs");
-        fullMessages.push({ role: "system", content: await platformSnapshot(env) });
-      } catch { /* advisory only — the turn proceeds without it */ }
-      fullMessages.push(...messages);
-      // The directive rides the TEXT part, never the array (see :chat).
+        const ragRows = await retrieveDocs(env, ragQuery);
+        ragText = formatRagContext(ragRows);
+      } catch { /* advisory only — the turn proceeds without RAG context */ }
+      const systemMessages = await buildSystemMessages(env, { principles, context: b.context, ragQuery, ragText });
+      const fullMessages = [...systemMessages, ...messages];
+      // /no_think disables Qwen3's reasoning trace (thinking mode blows the
+      // wall-clock and burns output tokens). appendNoThink keeps the directive
+      // on the TEXT part: on array (multimodal) content a plain `+=` would
+      // stringify it to "[object Object]" and the model would answer about that
+      // literal string instead of the chart.
       const lastTurn = fullMessages[fullMessages.length - 1];
       if (lastTurn?.role === "user") appendNoThink(lastTurn);
       let attachments = [];
@@ -355,6 +399,28 @@ export function generateRoutes() {
       const code = String(b.code ?? "");
       if (!strategy_id || !version || !code) {
         const e = new Error("strategy_id, version, code required"); e.code = "VALIDATION"; throw e;
+      }
+      // Gate the same way generate does: a saved draft must pass basic
+      // contract checks before it lands in D1. Closes the "Save as draft"
+      // bypass — but lighter than generate: a draft may be a partial snippet,
+      // so we require package main + no banned imports/patterns + balanced
+      // braces, not the full os.Stdin/os.Stdout contract.
+      const problems = [];
+      const src = stripComments(code);
+      if (!src.trim()) problems.push("empty code");
+      if (!/package\s+main\b/.test(src)) problems.push("missing `package main`");
+      for (const re of BANNED_PATTERNS) {
+        if (re.test(src)) problems.push(`banned pattern: ${re}`);
+      }
+      let depth = 0;
+      for (const ch of src) {
+        if (ch === "{") depth++;
+        if (ch === "}") depth--;
+        if (depth < 0) break;
+      }
+      if (depth !== 0) problems.push("unbalanced braces");
+      if (problems.length) {
+        const e = new Error("draft failed contract: " + problems.join("; ")); e.code = "VALIDATION"; throw e;
       }
       const draft = await recordDraft(env, { strategy_id, version, prompt: b.prompt ?? "", code, model: "chat-extract", status: "generated", actor: roleOf(req), message_id: b.message_id });
       return ok({ id: draft.id, status: "generated" }, 201);

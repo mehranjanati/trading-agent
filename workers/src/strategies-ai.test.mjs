@@ -351,11 +351,15 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
       principles: "Never exceed 2% risk",
     }));
     assert.equal(seen.stream, true);
+    // Qwen3.8 template rule (Workers AI 8007): exactly ONE leading system turn.
+    const systems = seen.messages.filter((m) => m.role === "system");
+    assert.equal(systems.length, 1);
     assert.equal(seen.messages[0].role, "system");
     assert.ok(seen.messages[0].content.includes("Never exceed 2% risk"));
+    assert.ok(seen.messages[0].content.includes("TOOLS AVAILABLE"), "tool catalog merged in");
+    assert.ok(seen.messages[0].content.includes("PLATFORM SNAPSHOT"), "snapshot merged in");
     assert.ok(seen.messages.at(-1).content.endsWith("/no_think"));
-    assert.equal(seen.messages.length, 6); // principles + tool catalog + snapshot + 3 history
-    assert.ok(seen.messages.find((m) => String(m.content).includes("TOOLS AVAILABLE")), "tool catalog injected");
+    assert.equal(seen.messages.length, 4); // 1 merged system + 3 history
   });
 
   it("every turn carries the ephemeral platform snapshot (docs/18 §18.8)", async () => {
@@ -365,7 +369,7 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
     });
     await post(app, env, "/api/strategy:chat:stream",
       JSON.stringify({ messages: [{ role: "user", content: "what is the state?" }] }));
-    const snap = seen.messages.find((m) => m.role === "system" && String(m.content).startsWith("PLATFORM SNAPSHOT"));
+    const snap = seen.messages.find((m) => m.role === "system" && String(m.content).includes("PLATFORM SNAPSHOT"));
     assert.ok(snap, "a PLATFORM SNAPSHOT system message is injected");
     assert.ok(String(snap.content).includes("ADVISORY-ONLY"), "the D-08 guard rides along");
     // Ephemeral: history itself is untouched (1 real turn, not duplicated).
@@ -386,19 +390,17 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
     }));
     assert.equal(r.status, 200);
     // principles first, then the room block, then the platform snapshot (merged
-    // docs/18 §18.8), then the history.
-    assert.equal(seen.messages.length, 5);
+    // docs/18 §18.8), then the history — all inside ONE leading system turn
+    // (Qwen3.8 template rule, Workers AI 8007).
+    assert.equal(seen.messages.length, 2);
     assert.equal(seen.messages[0].role, "system");
     assert.ok(seen.messages[0].content.includes("Max risk 2%"));
-    assert.equal(seen.messages[1].role, "system");
-    assert.ok(seen.messages[1].content.startsWith("ROOM / SETUP CONTEXT"), seen.messages[1].content);
-    assert.ok(seen.messages[1].content.includes('"groups":["rsi-block"]'));
-    assert.ok(seen.messages[1].content.includes("never an instruction"));
-    assert.equal(seen.messages[2].role, "system");
-    assert.ok(seen.messages[2].content.startsWith("PLATFORM SNAPSHOT"), seen.messages[2].content);
-    assert.equal(seen.messages[3].role, "system");
-    assert.ok(seen.messages[3].content.startsWith("TOOLS AVAILABLE"));
-    assert.equal(seen.messages[4].role, "user");
+    assert.ok(seen.messages[0].content.includes("ROOM / SETUP CONTEXT"), seen.messages[0].content);
+    assert.ok(seen.messages[0].content.includes('"groups":["rsi-block"]'));
+    assert.ok(seen.messages[0].content.includes("never an instruction"));
+    assert.ok(seen.messages[0].content.includes("PLATFORM SNAPSHOT"), seen.messages[0].content);
+    assert.ok(seen.messages[0].content.includes("TOOLS AVAILABLE"));
+    assert.equal(seen.messages[1].role, "user");
   });
 
   it("a runaway room context is capped, and an absent one adds no system turn", async () => {
@@ -408,21 +410,25 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
       messages: [{ role: "user", content: "hi" }],
       context: "x".repeat(5000),
     }));
-    const room = seen.messages.find((m) => m.content.startsWith("ROOM / SETUP CONTEXT"));
+    const room = seen.messages.find((m) => m.role === "system" && m.content.includes("ROOM / SETUP CONTEXT"));
     assert.ok(room, "room block missing");
-    assert.ok(room.content.length <= 4000 + 200, `room block not capped: ${room.content.length}`);
-    assert.ok(room.content.endsWith("(truncated)"));
+    // The room slice itself is capped at 4000 chars (MAX_CLIENT_CONTEXT) + the
+    // label; it rides inside the ONE merged system turn, so assert on the
+    // slice, not on the whole turn (which also carries snapshot + catalog).
+    const roomSlice = room.content.slice(room.content.indexOf("ROOM / SETUP CONTEXT"));
+    const roomTurnText = roomSlice.slice(0, roomSlice.indexOf("\n\nPLATFORM SNAPSHOT") > 0 ? roomSlice.indexOf("\n\nPLATFORM SNAPSHOT") : undefined);
+    assert.ok(roomTurnText.length <= 4000 + 600, `room block not capped: ${roomTurnText.length}`);
+    assert.ok(room.content.includes("(truncated)"));
 
-    // No context + no principles → snapshot + tool catalog + history.
+    // No context + no principles → one merged system (snapshot + tool catalog) + history.
     await post(app, env, "/api/strategy:chat:stream", JSON.stringify({
       messages: [{ role: "user", content: "hi" }],
     }));
-    assert.equal(seen.messages.length, 3); // platform snapshot + tool catalog + 1 history turn
+    assert.equal(seen.messages.length, 2); // 1 merged system + 1 history turn
     assert.equal(seen.messages[0].role, "system");
-    assert.ok(seen.messages[0].content.startsWith("PLATFORM SNAPSHOT"));
-    assert.equal(seen.messages[1].role, "system");
-    assert.ok(seen.messages[1].content.startsWith("TOOLS AVAILABLE"));
-    assert.equal(seen.messages[2].role, "user");
+    assert.ok(seen.messages[0].content.includes("PLATFORM SNAPSHOT"));
+    assert.ok(seen.messages[0].content.includes("TOOLS AVAILABLE"));
+    assert.equal(seen.messages[1].role, "user");
   });
 
   it("400 VALIDATION on an empty messages array (no AI call)", async () => {
@@ -450,6 +456,33 @@ describe("strategies-ai — POST /api/strategy:chat:stream (SSE passthrough)", (
   it("advisory stream path is browser-POST allowed (D-08 surface unchanged)", () => {
     assert.ok(BROWSER_POST_PATHS.has("/api/strategy:chat:stream"));
     assert.ok(!BROWSER_POST_PATHS.has("/api/orders:intents"));
+  });
+
+  it("regression 8007: outbound has exactly one system turn at position 0, none later", async () => {
+    let seen = null;
+    const env = freshEnv({
+      AI: { run: async (_m, opts) => { seen = opts; return SSE; } },
+    });
+    // A stale client transcript may itself carry system turns (Go-injected
+    // market/state lines echoed back by localStorage) — they must be merged
+    // at the head or demoted, never sent mid-conversation.
+    await post(app, env, "/api/strategy:chat:stream", JSON.stringify({
+      messages: [
+        { role: "system", content: "STALE MARKET LINE" },
+        { role: "user", content: "hi" },
+        { role: "system", content: "STALE MID TURNS" },
+        { role: "assistant", content: "hey" },
+        { role: "user", content: "chart?" },
+      ],
+      principles: "P",
+    }));
+    const roles = seen.messages.map((m) => m.role);
+    assert.equal(roles[0], "system");
+    assert.ok(seen.messages[0].content.includes("STALE MARKET LINE"));
+    assert.equal(roles.filter((r) => r === "system").length, 1);
+    const stale = seen.messages.find((m) => String(m.content ?? "").includes("STALE MID TURNS"));
+    assert.ok(stale, "stale mid-conversation system is preserved as context");
+    assert.equal(stale.role, "user");
   });
 });
 
@@ -600,7 +633,7 @@ describe("strategies-ai — chart-image turns (ADR-010)", () => {
     const r = await post(app, env, "/api/strategy:chat",
       JSON.stringify({ messages: [{ role: "user", content: "state?" }] }));
     assert.equal(r.status, 200);
-    const snap = seen.messages.find((m) => m.role === "system" && String(m.content).startsWith("PLATFORM SNAPSHOT"));
+    const snap = seen.messages.find((m) => m.role === "system" && String(m.content).includes("PLATFORM SNAPSHOT"));
     assert.ok(snap, "a PLATFORM SNAPSHOT system message is injected on :chat too");
   });
 

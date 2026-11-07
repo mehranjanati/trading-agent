@@ -86,3 +86,35 @@ describe("tools — catalog prompt", () => {
     assert.match(p, /Never invent prices or state/);
   });
 });
+
+describe("tools — runWithTools never emits a mid-conversation system (8007)", () => {
+  it("the TOOL RESULT turn rides as user, and the head stays a single system", async () => {
+    const { runWithTools } = await import("./strategies-ai.mjs");
+    const calls = [];
+    const env = {
+      AI: {
+        run: async (_m, opts) => {
+          calls.push(opts.messages.map((m) => m.role));
+          // First round: the model asks for a tool; second round: final answer.
+          return calls.length === 1 ? 'Checking.\nTOOL: list_drafts {}' : { response: "done" };
+        },
+      },
+    };
+    const text = await runWithTools({
+      env,
+      model: "plain-model",
+      messages: [
+        { role: "system", content: "SYS-A" },
+        { role: "system", content: "SYS-B" },
+        { role: "user", content: "drafts?" },
+      ],
+      maxTokens: 64,
+    });
+    assert.equal(text, "done");
+    assert.equal(calls.length, 2);
+    // Round 1: leading systems merged into one.
+    assert.deepEqual(calls[0], ["system", "user"]);
+    // Round 2: assistant TOOL line + TOOL RESULT as USER — still one system.
+    assert.deepEqual(calls[1], ["system", "user", "assistant", "user"]);
+  });
+});

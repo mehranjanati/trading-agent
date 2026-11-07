@@ -124,27 +124,76 @@ export function buildGeneratePrompt({ description, strategy_id, version, templat
 // chat service's maxClientContext): it is a prompt, not a document.
 const MAX_CLIENT_CONTEXT = 4000;
 
-// buildSystemMessages — the ephemeral system turns every chat turn carries.
-// Order: principles -> room context -> tool catalog -> retrieved knowledge -> platform snapshot.
+// buildSystemMessages — the ephemeral system CONTEXT every chat turn carries,
+// merged into ONE leading system turn.
+//
+// WHY ONE (not several): the Qwen3.8 vision template (Workers AI error 8007)
+// raises "System message must be at the beginning" unless there is exactly
+// ONE system turn at position 0 — four consecutive system turns (principles,
+// room, snapshot, tool catalog) already fail on chart turns. So the blocks are
+// joined with blank-line separators into a single first message.
+// Order inside: principles -> room context -> tool catalog -> retrieved knowledge -> platform snapshot.
 // None of these is stored; they are re-injected every turn so stale state is never quoted as history.
 export async function buildSystemMessages(env, { principles, context, ragQuery, ragText }) {
-  const out = contextSystems(principles, context);
+  const parts = contextSystems(principles, context).map((m) => String(m.content ?? ""));
   // Platform snapshot (docs/18 §18.8) — last system block before tool catalog.
   try {
     const { platformSnapshot } = await import("./platform-snapshot.mjs");
-    out.push({ role: "system", content: await platformSnapshot(env) });
+    parts.push(String(await platformSnapshot(env)));
   } catch { /* advisory only — the turn proceeds without it */ }
   // Tool catalog (L1): read-only tools the model may invoke for live platform data.
-  out.push({ role: "system", content: toolSystemPrompt() });
-  if (ragText) out.push({ role: "system", content: ragText });
+  parts.push(toolSystemPrompt());
+  if (ragText) parts.push(String(ragText));
+  const body = parts.map((p) => String(p ?? "").trim()).filter(Boolean).join("\n\n");
+  return body ? [{ role: "system", content: body }] : [];
+}
+
+// normalizeForModel — enforce the Qwen3.8 chat-template rule on the outbound
+// array: EXACTLY ONE system turn, at position 0.
+//
+// The Go chat service prepends up to 3 ephemeral system turns (market, operator
+// state, room context) to the window it posts, and the Worker prepends its own
+// merged block — so the raw concatenation opens with several system turns, and
+// Workers AI answers 8007 "System message must be at the beginning" on every
+// chart (vision) turn. Fix: merge the WHOLE leading system run into one turn
+// (order preserved, blank-line separated); any system turn AFTER the head
+// (a stale client transcript, a retried tool loop) is demoted to `user` so the
+// template never sees a mid-conversation system. Idempotent — safe to run on
+// entry of both chat routes and inside the tool loop.
+export function normalizeForModel(messages) {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  let head = 0;
+  while (head < list.length && list[head]?.role === "system") head++;
+  const leading = list.slice(0, head)
+    .map((m) => String(m?.content ?? "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const out = [];
+  if (leading) {
+    const first = list[0] ?? {};
+    out.push({ ...first, role: "system", content: leading });
+  }
+  for (let i = head; i < list.length; i++) {
+    const m = list[i];
+    if (m?.role === "system") {
+      out.push({ ...m, role: "user" });
+    } else {
+      out.push(m);
+    }
+  }
   return out;
 }
 
 // runWithTools — runs the model with up to MAX_TOOL_ROUNDS tool-calling rounds.
 // The model emits TOOL: name {json}; the Worker executes it, appends the result,
 // and re-runs the model. Final assistant text is returned (never the raw tool JSON).
+//
+// The tool result rides as a USER turn, never a system turn: the Qwen3.8 chat
+// template rejects any system message after position 0 (Workers AI error 8007:
+// "System message must be at the beginning"), and the tool loop appends after
+// the assistant's TOOL line — exactly the forbidden spot.
 export async function runWithTools({ env, model, messages, maxTokens, stream }) {
-  let current = [...messages];
+  let current = normalizeForModel(messages);
   let finalText = "";
   let rounds = 0;
   for (;;) {
@@ -163,7 +212,7 @@ export async function runWithTools({ env, model, messages, maxTokens, stream }) 
     const result = await runTool(env, call.name, call.args);
     current.push({ role: "assistant", content: text });
     current.push({
-      role: "system",
+      role: "user",
       content: `TOOL RESULT for ${call.name}: ${JSON.stringify(result)}`,
     });
   }
@@ -319,7 +368,7 @@ export function generateRoutes() {
         ragText = formatRagContext(ragRows);
       } catch { /* advisory only — the turn proceeds without RAG context */ }
       const systemMessages = await buildSystemMessages(env, { principles, context: b.context, ragQuery, ragText });
-      const fullMessages = [...systemMessages, ...messages];
+      const fullMessages = normalizeForModel([...systemMessages, ...messages]);
       // /no_think on the last user turn.
       const lastTurn = fullMessages[fullMessages.length - 1];
       if (lastTurn?.role === "user") appendNoThink(lastTurn);
@@ -365,7 +414,7 @@ export function generateRoutes() {
         ragText = formatRagContext(ragRows);
       } catch { /* advisory only — the turn proceeds without RAG context */ }
       const systemMessages = await buildSystemMessages(env, { principles, context: b.context, ragQuery, ragText });
-      const fullMessages = [...systemMessages, ...messages];
+      const fullMessages = normalizeForModel([...systemMessages, ...messages]);
       // /no_think disables Qwen3's reasoning trace (thinking mode blows the
       // wall-clock and burns output tokens). appendNoThink keeps the directive
       // on the TEXT part: on array (multimodal) content a plain `+=` would

@@ -2,7 +2,7 @@
 //
 // The model can ask for live data by emitting exactly one line:
 //   TOOL: <name> <json>
-// The Worker executes it, appends the result as a system message, and runs
+// The Worker executes it, appends the result as a user message, and runs
 // the model again. Max 3 tool rounds per turn. All tools are read-only —
 // D-08 unchanged: no orders, approvals, watches, leases or kill-switch writes.
 //

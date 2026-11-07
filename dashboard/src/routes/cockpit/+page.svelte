@@ -73,6 +73,10 @@
   }));
 
   async function refresh() {
+    // ADR-004: LIVE price for the SELECTED symbol only. The old call was
+    // getPrices() with no argument, which asked the venue for every market it
+    // lists (~1000 rows / 61KB) on every 15s tick just to paint one number —
+    // wasteful, and it made the whole desk pivot on a single third-party read.
     const [health, symbols, watches, approvals, intents, positions, prices] = await Promise.all([
       getHealth(),
       getSymbols(),
@@ -80,7 +84,7 @@
       getApprovals(),
       getIntents(),
       getPositions(),
-      getPrices(),
+      getPrices([symbol]),
     ]);
     snap = { health, symbols, watches, approvals, intents, positions, prices };
   }
@@ -131,6 +135,21 @@
   $: filtered = filterSymbols(board, filter);
   $: urlSymbol = validateSymbolInput($page.url.searchParams.get("symbol") ?? "") ?? "";
   $: symbol = urlSymbol || filtered.find((r) => r.status !== "IDLE")?.symbol || filtered[0]?.symbol || "BTCUSDT";
+
+  // A symbol SWITCH must not wait for the next 15s tick — and must not refetch
+  // the other ~1000 markets either: ask for the one symbol that is now selected.
+  // Guarded by lastPricedSymbol so the reactive block cannot re-trigger itself.
+  let lastPricedSymbol = "";
+  $: if (symbol && symbol !== lastPricedSymbol) {
+    lastPricedSymbol = symbol;
+    void refreshPrices(symbol);
+  }
+
+  async function refreshPrices(sym: string) {
+    const r = await getPrices([sym]);
+    if (!snap) return;
+    snap = { ...snap, prices: r };
+  }
 
   $: tradeable = symbolsData ? isTradeable(symbolsData, symbol) : false;
   $: px = priceOf(prices, symbol);

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getSymbols, isTradeable, validateSymbolInput, type SymbolsData } from "$lib/symbols";
-  import { getWatchesAll, getApprovals, getPositions, getPrices, badgeFor, type PricesData } from "$lib/api";
+  import { getWatchesAll, getApprovals, getPositions, getPrices, badgeFor, MAX_PRICE_SYMBOLS, type PricesData } from "$lib/api";
   import { setups, deriveStatus, roomWatchIds, type SetupStatus } from "$lib/setups";
   import DataPage from "$lib/components/DataPage.svelte";
   import Badge from "$lib/components/Badge.svelte";
@@ -43,11 +43,22 @@
     const r = await getSymbols();
     if (r.ok) { symbols = r.data; symErr = null; }
     else { symbols = null; symErr = r.error; }
-    const [w, a, p, px] = await Promise.all([getWatchesAll(), getApprovals(), getPositions(), getPrices()]);
+    const [w, a, p] = await Promise.all([getWatchesAll(), getApprovals(), getPositions()]);
     if (w.ok) watches = (w.data as { watches: any[] }).watches;
     if (a.ok) approvals = (a.data as { approvals: any[] }).approvals;
     if (p.ok) positions = (p.data as { positions: any[] }).positions;
-    if (px.ok) prices = (px.data as PricesData).prices;
+    // ADR-004: quote ONLY the trader's own rooms (plus anything with a watch) —
+    // the rows they actually track. `list` below is the whole venue catalog, so
+    // pricing it would be the "give me all ~1000 markets" call this replaces; a
+    // catalog row therefore renders "—" until it becomes a room. Bounded by
+    // MAX_PRICE_SYMBOLS so a trader with many rooms cannot trip the worker's
+    // per-call cap (VALIDATION/422).
+    const roomSymbols = [...new Set([
+      ...Object.keys($setups ?? {}),
+      ...watches.map((w: any) => String(w?.symbol ?? "")),
+    ].filter((s) => /^[A-Z]{2,12}USDT$/.test(s)))].slice(0, MAX_PRICE_SYMBOLS);
+    const px = roomSymbols.length ? await getPrices(roomSymbols) : null;
+    if (px?.ok) prices = (px.data as PricesData).prices;
   }
 
   onMount(() => {

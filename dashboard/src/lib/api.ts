@@ -459,8 +459,26 @@ export async function downscaleImage(
 
 /** Live venue quote(s) — GET /api/prices. Read-only, fail-soft per symbol:
  *  `missing` names what the venue did not answer (a price is never invented),
- *  `stale` marks a cached answer served while the venue was unreachable. */
-export type PricesData = { prices: Record<string, string>; missing: string[]; stale?: boolean };
+ *  `stale` marks a cached answer served while the venue was unreachable, and
+ *  `stale_symbols` names exactly which rows came from the D1 last-known-price
+ *  fallback (ADR-004) so a widget can badge them instead of trusting a number
+ *  that stopped updating.
+ *
+ *  ADR-004: call this with the symbol(s) you are about to RENDER. With no
+ *  argument the worker answers the whole venue from one unfiltered request —
+ *  correct but wasteful (~1000 markets, 61KB) and it makes the desk pivot on a
+ *  single third-party read, so no dashboard surface does that any more. */
+export type PricesData = {
+  prices: Record<string, string>;
+  missing: string[];
+  stale?: boolean;
+  stale_symbols?: string[];
+  source?: "venue" | "d1";
+  degraded?: string;
+};
+/** Mirrors workers/src/quotes.mjs MAX_FILTERED: a filtered call with more
+ *  symbols than this is rejected with VALIDATION, so callers must bound first. */
+export const MAX_PRICE_SYMBOLS = 25;
 export const getPrices = (symbols?: string[]) =>
   getJson<PricesData>(`/api/prices${symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(","))}` : ""}`);
 

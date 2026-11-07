@@ -20,9 +20,78 @@ import { SYMBOL_RE } from "./symbols.mjs";
 
 export const MAX_FILTERED = 25;   // per-call cap on the per-symbol filtered mode
 export const FULL_TTL_MS = 5_000; // in-isolate cache for the whole-venue answer
+/** SNAPSHOT_WRITE_MS throttles the D1 write of the last-known price per symbol:
+ *  the cockpit polls every 15s and the venue rarely moves a row's purpose, so
+ *  one upsert a minute per symbol keeps the fallback warm without turning a
+ *  read path into a write storm. */
+export const SNAPSHOT_WRITE_MS = 60_000;
 
 // Module scope: one isolate-wide cache, shared by every concurrent dashboard client.
 let fullCache = { at_ms: 0, prices: {}, stale: false };
+// Per-symbol throttle clock for the D1 snapshot write (isolate-local is fine:
+// a cold isolate simply writes one extra row).
+let snapshotAt = new Map();
+
+/** readSnapshots — the last price we actually SAW for these symbols (D1).
+ *
+ *  WHY: on 2026-11-07 the venue answered HTTP 403 to the Worker's Cloudflare
+ *  egress IP (200 from a laptop, same URL) and /api/prices returned
+ *  `prices: {}` with every symbol "missing" — a desk with no number at all. A
+ *  price we observed is honest data as long as it is labelled stale with its
+ *  age, and D1 lives inside Cloudflare, so no third party can blank it.
+ *  Never throws: a missing table/binding is simply "no fallback". */
+export async function readSnapshots(env, symbols, { nowMs = Date.now() } = {}) {
+  const out = {};
+  const wanted = (symbols ?? []).filter((s) => SYMBOL_RE.test(String(s ?? "")));
+  if (!env?.DB?.prepare || !wanted.length) return out;
+  try {
+    const ph = wanted.map(() => "?").join(",");
+    const rows = (await env.DB.prepare(
+      `SELECT symbol,px,at FROM price_snapshots WHERE symbol IN (${ph})`,
+    ).bind(...wanted).all()).results ?? [];
+    for (const r of rows) {
+      const symbol = String(r?.symbol ?? "").toUpperCase().trim();
+      const px = String(r?.px ?? "");
+      if (!SYMBOL_RE.test(symbol) || !px) continue;
+      const at = String(r?.at ?? "");
+      const ageMs = at ? Math.max(0, nowMs - Date.parse(at)) : null;
+      out[symbol] = { px, at, ageMs: Number.isFinite(ageMs) ? ageMs : null };
+    }
+  } catch { /* absent table/DB -> no fallback, never a failure */ }
+  return out;
+}
+
+/** persistSnapshots — record what the venue just told us, throttled and
+ *  fail-soft. This is a CACHE for the fallback path: no order, approval or risk
+ *  decision may read it (D-08 unchanged). */
+export async function persistSnapshots(env, prices, { nowMs = Date.now(), src = "toobit-rest" } = {}) {
+  if (!env?.DB?.prepare) return 0;
+  const at = new Date(nowMs).toISOString();
+  const rows = [];
+  for (const [symbol, px] of Object.entries(prices ?? {})) {
+    if (!SYMBOL_RE.test(symbol) || typeof px !== "string" || !px) continue;
+    // A symbol with NO recorded write must never be throttled: comparing against
+    // a 0 default makes any timestamp below the window look "recent" and silently
+    // drops the very first snapshot.
+    const last = snapshotAt.get(symbol);
+    if (last !== undefined && nowMs - last < SNAPSHOT_WRITE_MS) continue;
+    rows.push([symbol, px, src, at]);
+  }
+  if (!rows.length) return 0;
+  try {
+    const stmts = rows.map((r) => env.DB.prepare(
+      "INSERT INTO price_snapshots(symbol,px,src,at) VALUES(?,?,?,?) " +
+      "ON CONFLICT(symbol) DO UPDATE SET px=excluded.px, src=excluded.src, at=excluded.at",
+    ).bind(...r));
+    if (typeof env.DB.batch === "function") await env.DB.batch(stmts);
+    else for (const s of stmts) await s.run();
+    for (const r of rows) snapshotAt.set(r[0], nowMs);
+    return rows.length;
+  } catch { return 0; }
+}
+
+/** test hook: forget the snapshot write throttle between cases. */
+export function resetSnapshotThrottle() { snapshotAt = new Map(); }
 
 async function getJson(url, timeoutMs = 4_000, fetchFn = fetch) {
   const ctl = new AbortController();
@@ -72,7 +141,31 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
       if (row) prices[symbol] = String(row.price);
       else missing.push(symbol);
     }
-    return { mode: "filtered", prices, missing, at };
+    // What the venue just told us is worth recording: it is the only thing that
+    // can answer the NEXT request when the venue blocks us.
+    await persistSnapshots(env, prices, { nowMs });
+    // Venue-block fallback (ADR-004): a symbol we could not read live but have
+    // SEEN before is served from D1 — labelled stale, with the observation age —
+    // instead of vanishing from the desk. `missing` keeps only what we have
+    // never seen at all, so a caller can still tell "no idea" from "stale".
+    const staleSymbols = [];
+    if (missing.length) {
+      const snaps = await readSnapshots(env, missing, { nowMs });
+      for (let i = missing.length - 1; i >= 0; i--) {
+        const symbol = missing[i];
+        const snap = snaps[symbol];
+        if (!snap) continue;
+        prices[symbol] = snap.px;
+        staleSymbols.push(symbol);
+        missing.splice(i, 1);
+      }
+      staleSymbols.reverse();
+    }
+    return {
+      mode: "filtered", prices, missing, at,
+      stale: staleSymbols.length > 0,
+      ...(staleSymbols.length ? { stale_symbols: staleSymbols, source: "d1" } : { source: "venue" }),
+    };
   }
 
   // Full mode: ONE unfiltered weight-1 request answers every venue market.
@@ -97,7 +190,8 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
     for (const q of parseQuotes(res.body, null, { venueForm: true })) prices[q.symbol] = q.price;
     if (Object.keys(prices).length) {
       fullCache = { at_ms: nowMs, prices, stale: false };
-      return { mode: "full", prices, missing: [], stale: false, cached: false, at };
+      await persistSnapshots(env, prices, { nowMs });
+      return { mode: "full", prices, missing: [], stale: false, cached: false, at, source: "venue" };
     }
   }
   // Venue unreachable: serve the stale cache when it exists, fail closed otherwise.

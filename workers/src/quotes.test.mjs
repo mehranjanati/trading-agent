@@ -1,7 +1,7 @@
 // quotes.test.mjs — /api/prices: filtered + full venue reads, budget, fail-soft.
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { listPrices, resetFullCache, MAX_FILTERED } from "./quotes.mjs";
+import { listPrices, resetFullCache, resetSnapshotThrottle, MAX_FILTERED, SNAPSHOT_WRITE_MS } from "./quotes.mjs";
 import { createWindow, REST_BASE } from "./fallback-poll.mjs";
 
 const url = (q = "") => new URL(`https://worker.dev/api/prices${q}`);
@@ -108,5 +108,83 @@ describe("quotes — full mode", () => {
       listPrices({}, { url: url(), fetchFn, nowMs: 1_000, window: freshWindow() }),
       (e) => e.code === "DEGRADED",
     );
+  });
+});
+
+
+// ── D1 last-known-price fallback (ADR-004, 2026-11-07 venue 403) ─────────────
+// A fake D1 that keeps price_snapshots rows in a Map, so the fallback's write
+// and read paths are exercised for real instead of mocked at the call site.
+function snapshotDb(seed = {}) {
+  const rows = new Map(Object.entries(seed));
+  const writes = [];
+  return {
+    rows,
+    writes,
+    prepare(sql) {
+      return {
+        _sql: sql,
+        _args: [],
+        bind(...a) { this._args = a; return this; },
+        async run() { writes.push({ sql, args: this._args }); return {}; },
+        async all() {
+          if (!/FROM price_snapshots/i.test(sql)) return { results: [] };
+          const out = this._args
+            .map((s) => (rows.has(s) ? { symbol: s, px: rows.get(s).px, at: rows.get(s).at } : null))
+            .filter(Boolean);
+          return { results: out };
+        },
+      };
+    },
+    async batch(list) { for (const s of list) await s.run(); },
+  };
+}
+
+describe("quotes — D1 last-known-price fallback", () => {
+  beforeEach(() => { resetFullCache(); resetSnapshotThrottle(); });
+
+  it("records a live price so the NEXT blocked request can answer", async () => {
+    const DB = snapshotDb();
+    const fetchFn = async () => res(200, [{ s: "BTC-SWAP-USDT", p: "83838" }]);
+    const r = await listPrices({ DB }, { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000, window: freshWindow() });
+    assert.equal(r.prices.BTCUSDT, "83838");
+    assert.equal(r.source, "venue");
+    assert.equal(r.stale, false);
+    assert.equal(DB.writes.length, 1, "one upsert for the live price");
+    assert.match(DB.writes[0].sql, /INSERT INTO price_snapshots/);
+    assert.deepEqual(DB.writes[0].args.slice(0, 2), ["BTCUSDT", "83838"]);
+  });
+
+  it("serves the D1 snapshot as STALE when the venue blocks, and clears it from missing[]", async () => {
+    const DB = snapshotDb({ BTCUSDT: { px: "80000", at: "2026-11-07T20:00:00.000Z" } });
+    const fetchFn = async () => res(403, []); // the Toobit-to-Cloudflare answer
+    const r = await listPrices({ DB }, {
+      url: url("?symbols=BTCUSDT,ETHUSDT"), fetchFn,
+      nowMs: Date.parse("2026-11-07T21:00:00Z"), window: freshWindow(),
+    });
+    assert.equal(r.prices.BTCUSDT, "80000");
+    assert.deepEqual(r.stale_symbols, ["BTCUSDT"]);
+    assert.equal(r.stale, true);
+    assert.equal(r.source, "d1");
+    // ETHUSDT has never been seen: it stays honestly missing, never invented.
+    assert.deepEqual(r.missing, ["ETHUSDT"]);
+    assert.equal(r.prices.ETHUSDT, undefined);
+  });
+
+  it("throttles the snapshot write so polling cannot become a write storm", async () => {
+    const DB = snapshotDb();
+    const fetchFn = async () => res(200, [{ s: "BTC-SWAP-USDT", p: "83838" }]);
+    await listPrices({ DB }, { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000, window: freshWindow() });
+    await listPrices({ DB }, { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000 + SNAPSHOT_WRITE_MS - 1, window: freshWindow() });
+    assert.equal(DB.writes.length, 1, "second read inside the window must not write");
+    await listPrices({ DB }, { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000 + SNAPSHOT_WRITE_MS, window: freshWindow() });
+    assert.equal(DB.writes.length, 2, "after the window it writes again");
+  });
+
+  it("no DB binding is no fallback, never a crash", async () => {
+    const fetchFn = async () => res(403, []);
+    const r = await listPrices({}, { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000, window: freshWindow() });
+    assert.deepEqual(r.missing, ["BTCUSDT"]);
+    assert.deepEqual(r.prices, {});
   });
 });

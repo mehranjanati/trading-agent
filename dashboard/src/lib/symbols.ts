@@ -13,6 +13,14 @@ export interface SymbolsData {
   allowlist: string[];
   stale: boolean;
   at: string;
+  /** Present when the venue list could not be fetched and the answer came from
+   *  D1 instead (the ACTIVE allowlist + symbols already seen in watches and
+   *  positions). `source: "d1"` names the fallback, `degraded` carries the venue
+   *  error verbatim, so a page can say WHY the catalog is short instead of
+   *  rendering a bare UNAVAILABLE. ADR-004: a third party must never blank the
+   *  picker (2026-11-07: Toobit 403'd Cloudflare egress). */
+  degraded?: string;
+  source?: "venue" | "d1" | "cache";
 }
 
 const SYM_RE = /^[A-Z]{2,12}USDT$/;
@@ -35,7 +43,13 @@ export async function getSymbols(): Promise<Result<SymbolsData>> {
     const at: string = body?.at ?? new Date().toISOString();
     const symbols = Array.isArray(body?.symbols) ? body.symbols.filter((s: unknown) => typeof s === "string") : [];
     const allowlist = Array.isArray(body?.allowlist) ? body.allowlist.filter((s: unknown) => typeof s === "string") : [];
-    return { ok: true, data: { symbols, allowlist, stale: body?.stale === true, at }, at, ageMs: Date.now() - Date.parse(at) };
+    const data: SymbolsData = { symbols, allowlist, stale: body?.stale === true, at };
+    // Pass the degraded reason through instead of dropping it: a short catalog
+    // must be explainable ("venue unavailable: venue HTTP 403"), never a silent
+    // mystery for whoever is staring at the picker.
+    if (typeof body?.degraded === "string" && body.degraded) data.degraded = body.degraded;
+    if (typeof body?.source === "string") data.source = body.source;
+    return { ok: true, data, at, ageMs: Date.now() - Date.parse(at) };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

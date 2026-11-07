@@ -61,13 +61,46 @@ describe("symbols", () => {
     assert.deepEqual(r.symbols, ["BTCUSDT"]);
   });
 
-  it("502-style DEGRADED when nothing cached and venue fails", async () => {
+  it("venue block with no cache answers FROM D1, not a 503 (2026-11-07 Toobit 403)", async () => {
+    // A fake D1 that answers each table with its own rows, so the fallback's
+    // three sources (allowlist, watches, positions) are exercised for real.
+    const db = {
+      prepare(sql) {
+        return {
+          all: async () => {
+            if (sql.includes("strategy_configs")) {
+              return { results: [{ config_json: JSON.stringify({ allowlist: ["BTCUSDT"] }) }] };
+            }
+            if (sql.includes("watches")) return { results: [{ symbol: "ETHUSDT" }] };
+            if (sql.includes("positions")) return { results: [{ symbol: "SOLUSDT" }] };
+            return { results: [] };
+          },
+        };
+      },
+    };
+    // SYMBOLS_KV.get() -> null forces a COLD start: readCache() answers from KV
+    // when the binding exists, so the module-level memory cache left by the
+    // earlier tests cannot mask the venue failure here.
+    const env = { DB: db, TOOBIT_BASE: "https://x", SYMBOLS_KV: { get: async () => null, put: async () => {} } };
+    const r = await listSymbols(env, {
+      fetchFn: async () => { throw new Error("venue HTTP 403"); },
+      nowMs: 9_000,
+    });
+    // Every symbol the platform knows, sorted — the picker stays usable.
+    assert.deepEqual(r.symbols, ["BTCUSDT", "ETHUSDT", "SOLUSDT"]);
+    assert.deepEqual(r.allowlist, ["BTCUSDT"]);
+    assert.equal(r.stale, true);
+    assert.equal(r.source, "d1");
+    assert.match(r.degraded, /403/);
+  });
+
+  it("a total miss still answers 200-shaped with an explicit reason, never throws", async () => {
     const env = freshEnv(null);
-    await assert.rejects(
-      listSymbols(env, {
-        fetchFn: async () => { throw new Error("down"); }, nowMs: 9_000 + SYMBOLS_TTL_MS + 1,
-      }),
-      (e) => e.code === "DEGRADED",
-    );
+    const r = await listSymbols(env, {
+      fetchFn: async () => { throw new Error("down"); }, nowMs: 9_000 + SYMBOLS_TTL_MS + 1,
+    });
+    assert.deepEqual(r.symbols, []);
+    assert.equal(r.stale, true);
+    assert.match(r.degraded, /venue unavailable/);
   });
 });

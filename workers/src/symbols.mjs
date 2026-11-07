@@ -15,10 +15,18 @@
 // Weight discipline (ADR-004): ONE venue weight-1 request per cache miss,
 // served from cache otherwise — the dashboard poll never touches the venue.
 //
-// Fail-soft: on any venue/parse failure the last-good cache answers with
-// `stale: true`; only when no cache exists at all is 502 returned. The
-// allowlist of the ACTIVE strategy_configs version rides along so the UI can
-// badge "tradeable now" vs "venue-only".
+// Fail-soft in THREE layers, because a third party must never be able to blank
+// the UI:
+//   1. KV cache (env.SYMBOLS_KV) — survives isolates; requires the binding
+//   2. in-isolate memory cache — the fallback for --local/tests without KV
+//   3. D1 (the ACTIVE allowlist + symbols already seen in watches/positions) —
+//      answered with `stale:true` + `degraded:<reason>` + `source:"d1"`
+// 2026-11-07: Toobit answered HTTP 403 to Cloudflare egress (200 from a laptop
+// for the same URL), so layer 3 is what keeps the symbol picker usable during a
+// venue block. A total miss still answers 200 with an explicit `degraded` reason
+// rather than a 503 — see listSymbols. The allowlist of the ACTIVE
+// strategy_configs version rides along so the UI can badge "tradeable now" vs
+// "venue-only".
 export const SYMBOLS_PATH = "/quote/v1/contract/ticker/price";
 export const SYMBOLS_TTL_MS = 3_600_000; // 1h — listings change rarely
 export const SYMBOL_RE = /^[A-Z]{2,12}USDT$/;
@@ -91,6 +99,34 @@ export async function activeAllowlist(env) {
   } catch { return []; }
 }
 
+/** d1Symbols — the symbol set the PLATFORM already knows, read from D1.
+ *
+ *  WHY IT IS THE LAST LINE OF DEFENCE: on 2026-11-07 the venue answered
+ *  HTTP 403 to the Worker's Cloudflare egress IP (verified: the same request
+ *  from a laptop returned 200), which blanked the whole symbol picker with a
+ *  503. Every symbol the platform actually trades is already recorded here —
+ *  the ACTIVE risk allowlist, every watch ever armed, every position held — and
+ *  D1 is inside Cloudflare, so no third party can make this list unreachable.
+ *  It is a FALLBACK, not a replacement: it can only ever list symbols we have
+ *  seen before, which is exactly what an operator needs when the venue list is
+ *  unavailable. Never throws. */
+export async function d1Symbols(env) {
+  const out = new Set();
+  for (const s of await activeAllowlist(env)) out.add(s);
+  if (env?.DB?.prepare) {
+    for (const sql of ["SELECT DISTINCT symbol FROM watches", "SELECT symbol FROM positions"]) {
+      try {
+        const rows = (await env.DB.prepare(sql).all()).results ?? [];
+        for (const r of rows) {
+          const s = String(r?.symbol ?? "").toUpperCase().trim();
+          if (SYMBOL_RE.test(s)) out.add(s);
+        }
+      } catch { /* a missing table is an empty contribution, never a failure */ }
+    }
+  }
+  return [...out].sort();
+}
+
 /** GET /api/symbols — cached venue list + active allowlist. Never throws. */
 export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now() } = {}) {
   const cached = await readCache(env);
@@ -110,8 +146,22 @@ export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now() } =
     if (cached?.symbols?.length) {
       return { symbols: cached.symbols, allowlist: await activeAllowlist(env), stale: true, at: new Date(cached.at).toISOString() };
     }
-    const err = new Error(`symbols unavailable: ${e?.message ?? e}`);
-    err.code = "DEGRADED";
-    throw err;
+    // No cache and the venue refused us. Throwing here turned a third-party
+    // block into a 503 that blanked the dashboard's symbol picker, even though
+    // the page's documented contract (dashboard/src/lib/symbols.ts) is "a total
+    // failure answers with symbols:[] and stale:true, never a crash". So answer
+    // with what the platform still knows (D1) and say WHY it is not the venue
+    // list: `degraded` carries the venue error, `source` names the fallback.
+    // Callers that need a hard failure read `degraded`, not a status code.
+    const allowlist = await activeAllowlist(env);
+    const fallback = await d1Symbols(env);
+    return {
+      symbols: fallback,
+      allowlist,
+      stale: true,
+      degraded: `venue unavailable: ${e?.message ?? e}`,
+      source: "d1",
+      at: new Date(nowMs).toISOString(),
+    };
   }
 }

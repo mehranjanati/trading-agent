@@ -37,9 +37,13 @@ export function sessionIdForSymbol(symbol) {
 
 /** symbolFromSession — inverse of sessionIdForSymbol, so a caller that only has
  *  the session id (the Go service posts just {session_id}) still records which
- *  symbol the thread belongs to. "" when the id is not a symbol thread. */
+ *  symbol the thread belongs to. "" when the id is not a symbol thread.
+ *
+ *  The id is upper-cased before matching, so the pattern must be upper-case too:
+ *  a lower-case `^sym_` never matches "SYM_OPENUSDT" and silently returned "" for
+ *  every symbol thread (regression covered by chat-store.test.mjs). */
 export function symbolFromSession(session_id) {
-  const m = /^sym_([A-Z]{2,12}USDT)$/.exec(String(session_id ?? "").trim().toUpperCase());
+  const m = /^SYM_([A-Z]{2,12}USDT)$/.exec(String(session_id ?? "").trim().toUpperCase());
   return m ? m[1] : "";
 }
 

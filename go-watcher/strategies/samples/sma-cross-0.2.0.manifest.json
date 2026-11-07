@@ -1,0 +1,14 @@
+{
+  "id": "sma-cross",
+  "version": "0.2.0",
+  "artifact": "sma-cross-0.2.0.wasm",
+  "sha256": "3a3071f67597eda239eafaa5fb6ddef3c70cfd54b1d625a7467ddb5cadd3a200",
+  "contract_version": "1",
+  "bytes": 4521876,
+  "go_version": "pre-pin",
+  "build_flags": "GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 -trimpath -ldflags=\"-s -w\"",
+  "built_at": null,
+  "source_sha256": "ece01b12b3bf2dced7d329db51b0f6d65fc33cbfec891a8c57a4c614be4fccdd",
+  "provenance": "backfilled",
+  "note": "Pre-dates the strategy pipeline; sha256 computed from the committed artifact. New artifacts record full provenance."
+}

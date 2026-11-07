@@ -10,6 +10,32 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: "1.25.0" }
       - run: make check
+  strategy:
+    # WHY ITS OWN JOB (same reasoning as `dashboard` below): verifying a strategy
+    # means COMPILING it to wasip1 and RUNNING the real bytes through the real
+    # runner — that needs the Go toolchain and takes seconds per module, which
+    # must not sit on `make check`'s stdlib-only path.
+    #
+    # This is the gate that replaced regex guards on generated source: a PR that
+    # makes a strategy panic on a missing config key, stop echoing its ids, or
+    # leave registry.json pointing at a file that no longer matches its sha256
+    # fails HERE, before it can be deployed. It does not promote anything —
+    # publishing stays a human step (ADR-009).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.0" }
+      # registry.json + artifact integrity (unique id@version, sha256, statuses).
+      - run: node scripts/lint-registry.mjs
+      # Every module under strategies/dev must build and speak the contract.
+      - run: make strategy-verify-all
+      # The shipped template is the baseline every strategy is copied from: if it
+      # ever stops satisfying the contract, every scaffolded strategy inherits
+      # the fault, so the invariant is checked on every push.
+      - run: make strategy-template-check
   dashboard:
     # E10-T01: the dashboard has its own toolchain, so it gets its own job —
     # `make check` stays stdlib-only and runnable without an npm install.

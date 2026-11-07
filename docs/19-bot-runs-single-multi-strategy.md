@@ -133,14 +133,41 @@ flowchart LR
 
 ## 19.6 Authoring a new strategy (checklist)
 
-1. Copy `go-watcher/strategies/template/` to a standalone dir (own `go.mod`, stdlib-only, never import the watcher or wazero).
-2. Implement stdin->stdout contract v1 (golden req/resp in `schemas/fixtures/`).
-3. Build: `make strategy-build SRC=path/to/strategy ID=<id> VERSION=<x.y.z>` (`GOOS=wasip1 GOARCH=wasm`).
-4. Register row in `registry.json` (`id,version,file,configuration`) + `node scripts/validate-strategy-contract.mjs` (in `make check`).
-5. Single-strategy dry run: `go run ./cmd/analyze-live -symbol BTCUSDT -strategies <id>@<ver>` must reproduce `POST /analyze`.
-6. Multi-strategy run: add to `strategies[]` (max 8), read `aggregate.explanation` + `data_source` per verdict.
-7. Lifecycle: `draft -> validating -> validated -> active -> disabled|failed`, `+retired` (no delete; new behaviour = NEW version; rollback = re-activate prior). D1 owns registry; Redis `strat:active:{id}`, `strat:lease:{inv}` (24h NX), `strat:state:{id}` (7d).
-8. Never add secrets, net/fs, or order submission to the guest — isolation MVP: only `clock_nanos`, 500ms deadline.
+> ADR-015: strategies are authored in the IDE/local toolchain, not in the chat.
+> The chat plane is advisory only (market questions, verdict explanation, charts).
+
+1. Scaffold: `make strategy-new ID=<id> NAME="Human Name"` — copies
+   `go-watcher/strategies/template/` into `strategies/dev/<id>/` with its own
+   `go.mod` (stdlib-only, pinned to the watcher's Go version, never imports the
+   watcher or wazero) plus a `strategy.json` for the registry row.
+2. Implement `decide()` in `strategies/dev/<id>/main.go`. Keep everything below
+   the "DO NOT EDIT" marker byte-identical — the runner, the fixtures and the
+   chat prompt all assume that envelope. Contract v1 (golden req/resp in
+   `schemas/fixtures/`) is unchanged.
+3. Build + verify: `make strategy-check SRC=strategies/dev/<id> ID=<id> VERSION=<x.y.z>`
+   (`scripts/strategy-pipeline.mjs`). This compiles to wasip1, then runs the real
+   bytes through the real runner (`go-watcher/cmd/strategy-check`) against the
+   golden fixture AND the failure shapes production sends — no candles, one
+   candle, a garbage configuration, an over-cap deadline, a bare document. Any
+   runner fault code (PANIC/TIMEOUT/OOM/OUTPUT_TOO_LARGE/CONTRACT_MISMATCH) fails
+   the build; a `VALIDATION` answer passes (the strategy declined instead of
+   crashing). On success it writes `<id>-<version>.manifest.json` (sha256, source
+   hash, toolchain, build flags — ADR-009).
+4. Publish (explicit, human-gated — ADR-009 rejects auto-promote):
+   `make strategy-register MANIFEST=go-watcher/strategies/build/<id>-<x.y.z>.manifest.json`
+   is a DRY run (validates sha256, prints the row, changes nothing). Re-run with
+   `ACTIVATE=1` to copy the artifact + manifest into `strategies/samples/` and
+   append the `registry.json` row. Overwriting a published `id@version` is
+   refused — new behaviour is a NEW version (ADR-011).
+5. Integrity: `make lint-registry` (in `make check` and CI) validates every row —
+   unique `id@version`, semver, artifact present, loader size cap, status enum,
+   manifest sha256 match. Two rows sharing identical bytes are reported as a
+   warning: that is legal (a version may differ only by `configuration`) but must
+   be visible.
+6. Single-strategy dry run: `go run ./cmd/analyze-live -symbol BTCUSDT -strategies <id>@<ver>` must reproduce `POST /analyze`.
+7. Multi-strategy run: add to `strategies[]` (max 8), read `aggregate.explanation` + `data_source` per verdict.
+8. Lifecycle: `draft -> validating -> validated -> active -> disabled|failed`, `+retired` (no delete; new behaviour = NEW version; rollback = re-activate prior). D1 owns registry; Redis `strat:active:{id}`, `strat:lease:{inv}` (24h NX), `strat:state:{id}` (7d). The filesystem registry implements only `active|retired`; the pipeline (step 3) plays the role of `validating|validated`.
+9. Never add secrets, net/fs, or order submission to the guest — isolation MVP: only `clock_nanos`, 500ms deadline.
 
 ## 19.7 Known gaps (multi-strategy hardening, proposed)
 

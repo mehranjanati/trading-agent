@@ -1,0 +1,14 @@
+{
+  "id": "sma-x-v2",
+  "version": "0.1.0",
+  "artifact": "sma-x-v2-0.1.0.wasm",
+  "sha256": "a1c778f137d2a0f5660facda7609bd914d40c52069813f0fe9acaed4828b0d5e",
+  "contract_version": "1",
+  "bytes": 4522867,
+  "go_version": "pre-pin",
+  "build_flags": "GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 -trimpath -ldflags=\"-s -w\"",
+  "built_at": null,
+  "source_sha256": "ece01b12b3bf2dced7d329db51b0f6d65fc33cbfec891a8c57a4c614be4fccdd",
+  "provenance": "backfilled",
+  "note": "Pre-dates the strategy pipeline; sha256 computed from the committed artifact. New artifacts record full provenance."
+}

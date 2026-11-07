@@ -33,4 +33,8 @@ go-watcher/session/
 # NOTE: go-watcher/strategies/samples/*.wasm ARE tracked on purpose — the
 # registry pins them by filename and the Dockerfile copies them into the
 # image, so a checkout must ship the exact artifacts the registry names.
-# Rebuild any entry with: make strategy-build SRC=<dir> ID=<id> VERSION=<x.y.z>
+# Rebuild any entry with: make strategy-check SRC=<dir> ID=<id> VERSION=<x.y.z>
+# Staged (verified but NOT yet registered) artifacts live in strategies/build/:
+# they are build output, so they are never committed — only a registered copy in
+# strategies/samples/ (with its manifest sidecar) is.
+/go-watcher/strategies/build/

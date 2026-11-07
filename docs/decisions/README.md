@@ -18,3 +18,4 @@ Format: Status / Context / Decision / Alternatives / Consequences / Verification
 | [012](./ADR-012-trading-cockpit-single-surface.md) | Trading cockpit — one surface instead of seventeen URLs | PROPOSED |
 | [013](./ADR-013-live-execution-adapter.md) | Live execution — signed adapter behind a fail-closed env gate | PROPOSED |
 | [014](./ADR-014-durable-chat.md) | Durable chat transcripts — D1 canonical, Redis cache, R2 bytes | ACCEPTED |
+| [015](./ADR-015-local-strategy-authoring.md) | Local strategy authoring — IDE + verified pipeline, not in-chat codegen | ACCEPTED |

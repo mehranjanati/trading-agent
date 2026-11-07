@@ -6,7 +6,6 @@
   import { Badge } from "$lib/components/ui/badge";
   import {
     streamChat,
-    postDraft,
     chatServiceUp,
     postChatCreate,
     getChatSession,
@@ -22,13 +21,14 @@
   import { page } from "$app/stores";
   import { setups, chatSessionKey, touchSetup } from "$lib/setups";
   import { validateSymbolInput } from "$lib/symbols";
-  import Prism from "prismjs";
-  import "prismjs/components/prism-go";
   import StalkSetup from "$lib/components/StalkSetup.svelte";
   import { extractSetupProposals } from "$lib/stalk";
 
   type Message = { id?: string; role: "user" | "assistant"; content: string; timestamp: string; images?: string[] };
   type CodeBlock = { language: string; code: string };
+  // WsEvent mirrors the Go service's envelope. `codeBlocks` still rides the wire
+  // (the service extracts fences server-side), but ADR-015 removed the panel that
+  // consumed it here: this page no longer produces or stores strategy code.
   type WsEvent = { type: string; text?: string; error?: string; codeBlocks?: CodeBlock[]; messageId?: string };
 
   let messages: Message[] = [];
@@ -43,9 +43,6 @@
   let attachments: ChartAttachment[] = [];
   let attachBusy = false;
   let fileInput: HTMLInputElement | undefined;
-  // The turn id whose reply is on screen — saved with a draft so the code can
-  // be traced back to the chart it came from.
-  let lastTurnId = "";
 
   // WS mode: the chat routes inside go-watcher. REST mode: Worker POST fallback.
   let mode: "ws" | "rest" = "rest";
@@ -104,7 +101,6 @@
       const saved = localStorage.getItem(msgKey);
       if (saved) messages = JSON.parse(saved);
     }
-    setTimeout(() => Prism.highlightAll(), 0);
   });
 
   onDestroy(() => {
@@ -130,11 +126,9 @@
         live += msg.text ?? "";
       } else if (msg.type === "done") {
         const content = msg.text ?? live;
-        if (msg.messageId) lastTurnId = msg.messageId;
         messages = [...messages, { role: "assistant", content, timestamp: new Date().toISOString() }];
         live = "";
         loading = false;
-        setTimeout(() => Prism.highlightAll(), 0);
       } else if (msg.type === "error") {
         error = msg.error ?? "chat error";
         live = "";
@@ -323,23 +317,18 @@
       error = res.error;
       return;
     }
-    lastTurnId = turnId;
     messages = [...messages, { role: "assistant", content: res.data.response || streamed, timestamp: new Date().toISOString() }];
     saveToStorage();
-    setTimeout(() => Prism.highlightAll(), 0);
   }
 
-  async function handleSaveDraft(codeBlock: CodeBlock) {
-    const strategy_id = prompt("Strategy ID (e.g., sma-cross):");
-    if (!strategy_id) return;
-    const version = prompt("Version (e.g., 0.1.0):") || "0.1.0";
-    const res = await postDraft({ strategy_id, version, code: codeBlock.code, prompt: messages[0]?.content ?? "", message_id: lastTurnId || undefined });
-    if (res.ok) {
-      alert(`Draft saved: ${res.data.id}`);
-    } else {
-      alert(`Failed: ${res.error}`);
-    }
-  }
+  // ADR-015: this page no longer generates or stores strategy code. Authoring
+  // moved to the IDE/toolchain (`make strategy-new` -> `make strategy-check` ->
+  // `make strategy-register`), where the real compiler and the real runner are.
+  // The old "Extracted Code" panel + Save-as-draft used to post model-written Go
+  // to /api/strategy:draft, which no gate ever executed — a draft that compiled
+  // was indistinguishable from one that panicked on live input. What stays here
+  // is what ONLY this surface can do: chart/vision analysis, stalkable proposal
+  // extraction, and the per-symbol thread.
 
   async function clearChat() {
     if (!confirm("Clear all messages?")) return;
@@ -362,16 +351,6 @@
         mode = "rest";
       }
     }
-  }
-
-  function extractCodeBlocks(content: string): CodeBlock[] {
-    const blocks: CodeBlock[] = [];
-    const re = /```(\w+)?\s*\n([\s\S]*?)```/g;
-    let m;
-    while ((m = re.exec(content)) !== null) {
-      blocks.push({ language: m[1] ?? "text", code: m[2].trim() });
-    }
-    return blocks;
   }
 </script>
 
@@ -464,26 +443,6 @@
         {/if}
       </CardContent>
     </Card>
-
-    <Card>
-      <CardHeader><CardTitle>Extracted Code</CardTitle><CardDescription>Click "Save as draft" to store</CardDescription></CardHeader>
-      <CardContent class="space-y-3 max-h-[600px] overflow-y-auto">
-        {#each messages.filter((m) => m.role === "assistant") as msg}
-          {#each extractCodeBlocks(msg.content) as block}
-            <Card class="p-3">
-              <div class="flex items-center justify-between mb-2">
-                <Badge variant="outline">{block.language}</Badge>
-                <Button size="sm" onclick={() => handleSaveDraft(block)}>Save as draft</Button>
-              </div>
-              <pre class="bg-muted p-2 rounded text-xs overflow-x-auto"><code class="language-{block.language}">{block.code}</code></pre>
-            </Card>
-          {/each}
-        {/each}
-        {#if messages.filter((m) => m.role === "assistant").every((m) => extractCodeBlocks(m.content).length === 0)}
-          <div class="text-muted-foreground text-sm text-center py-8">Code blocks from AI responses will appear here</div>
-        {/if}
-      </CardContent>
-    </Card>
   </div>
 
   <Card class="mt-6">
@@ -528,7 +487,7 @@
         <Button variant="outline" onclick={() => fileInput?.click()} disabled={attachBusy || loading || attachments.length >= MAX_IMAGES_PER_TURN} class="self-end" title="Attach chart screenshots — you can pick several (or paste into the box)">
           {attachBusy ? "..." : `Chart${attachments.length ? ` (${attachments.length}/${MAX_IMAGES_PER_TURN})` : ""}`}
         </Button>
-        <Textarea bind:value={input} placeholder="Describe your strategy... or paste: setup BTCUSDT LONG @ trigger / invalidation (I'll shape it into a stalkable proposal)" rows={3} onpaste={onPaste} onkeydown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())} />
+        <Textarea bind:value={input} placeholder="Ask about the chart, the setup, or the verdict — or paste: setup BTCUSDT LONG @ trigger / invalidation (I'll shape it into a stalkable proposal)" rows={3} onpaste={onPaste} onkeydown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())} />
         <Button onclick={handleSend} disabled={loading || (!input.trim() && !attachments.length)} class="self-end">{loading ? "Sending..." : "Send"}</Button>
       </div>
       {#if error}<div class="mt-2 p-2 bg-destructive/10 border border-destructive rounded text-destructive text-sm">{error}</div>{/if}

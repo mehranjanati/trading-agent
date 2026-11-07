@@ -10,8 +10,9 @@
   export let data: { result: { ok: boolean; data?: Health; at?: string; ageMs?: number } | null };
 
   // The nav is the TARGET information architecture (docs/20, ADR-012): the
-  // consolidated surfaces. /chat keeps the full editor (charts, drafts,
-  // principles) until Q-18 closes; everything else lives in /settings.
+  // consolidated surfaces. /chat keeps the full ANALYSIS workspace (chart
+  // vision, principles, stalkable proposals) — ADR-015 removed its code
+  // generation/drafts half, so nothing here authors strategy code any more.
   const routes = [
     ["/cockpit", "cockpit"], ["/execution", "execution"], ["/activity", "activity"],
     ["/chat", "💬 chat"], ["/settings", "⚙️ settings"],

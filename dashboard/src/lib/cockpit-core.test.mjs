@@ -8,6 +8,7 @@ import {
   legacyRedirect,
   priceOf,
   priceBadge,
+  partialPriceNote,
   parseZone,
   zoneText,
   watchBoard,
@@ -102,6 +103,43 @@ test("priceBadge: no number is UNAVAILABLE, a D1 last-known row is CACHED", () =
   // Go-plane gap fill is the SAME venue read a second ago: live, not cached.
   const bridged = { ok: true, ageMs: 900, data: { prices: { BTCUSDT: "75894.1" }, source: "go-watcher", bridged_symbols: ["BTCUSDT"] } };
   assert.equal(priceBadge(bridged, "BTCUSDT").label, "LIVE");
+});
+
+// The desk flapped between a price and an opaque "venue did not answer this
+// symbol" — while the venue NEVER answers the Worker and the go-watcher bridge
+// answered 24/25. The note must say what actually happened in that tick.
+test("partialPriceNote: names the partial bridge answer, or the total failure", () => {
+  // A price exists: nothing to explain.
+  assert.equal(partialPriceNote({ prices: { DOGEUSDT: "0.21" } }, "DOGEUSDT", 25), null);
+
+  // Partial bridge tick: the honest line, with the retry promise.
+  const partial = {
+    prices: { AAOIUSDT: "1", AAPLUSDT: "2" },
+    missing: ["DOGEUSDT"],
+    source: "go-watcher",
+    bridged_symbols: ["AAOIUSDT", "AAPLUSDT"],
+    degraded: "venue HTTP 403",
+  };
+  const note = partialPriceNote(partial, "DOGEUSDT", 25);
+  assert.match(note, /venue HTTP 403/);
+  assert.match(note, /bridge answered 2\/25 this tick — DOGEUSDT was not among them/);
+  assert.match(note, /next tick/);
+
+  // D1 covered the rest of the same tick.
+  const withD1 = { ...partial, stale_symbols: ["ETHUSDT"] };
+  assert.match(partialPriceNote(withD1, "DOGEUSDT", 25), /D1 last-known price covered the rest/);
+
+  // Nothing answered at all: the worker's degraded reason stands alone.
+  assert.match(
+    partialPriceNote({ prices: {}, missing: ["DOGEUSDT"], degraded: "venue HTTP 403" }, "DOGEUSDT", 25),
+    /^venue HTTP 403/,
+  );
+
+  // No degraded, no bridge: the old honest fallback stays.
+  assert.match(partialPriceNote({ prices: {}, missing: ["DOGEUSDT"] }, "DOGEUSDT", 25), /venue did not answer/);
+
+  // No data yet: loading, not an error.
+  assert.equal(partialPriceNote(null, "DOGEUSDT", 25), "loading");
 });
 
 test("parseZone / zoneText: malformed JSON renders — instead of throwing", () => {

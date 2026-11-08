@@ -23,12 +23,13 @@
 import { DEFAULT_WATCHER_URL } from "./proxy.mjs";
 
 /** Bounded like the dashboard's own ceiling: a tick must never wait on a slow
- *  plane. 10s is deliberate — the Go plane reads the SAME venue once per symbol
- *  with up to 8 in flight (~1-2s for a 25-symbol cockpit tick, verified live),
- *  and a Render cold start can eat the first few seconds. The previous 6s
- *  deadline is exactly why a 25-symbol tick came back EMPTY: the Go answer
- *  arrived after the Worker had stopped listening (2026-11-08). */
-export const MARKET_TIMEOUT_MS = 10_000;
+ *  plane. 12s is deliberate — the Go plane budgets itself at 9s, and the gap is
+ *  the margin that keeps a slow venue minute (its TLS handshake alone measured
+ *  6.8s, and a 25-symbol answer measured 8-10s live) from being cut off by the
+ *  Worker a second before it would have arrived. The previous 10s deadline sat
+ *  exactly ON the Go budget, which is what made the desk flap between "price"
+ *  and "UNAVAILABLE" tick by tick (2026-11-08). */
+export const MARKET_TIMEOUT_MS = 12_000;
 
 /** watcherMarketBase — the Go-plane origin, or null when the operator
  *  explicitly disabled the handoff (`GO_WATCHER_URL = ""`). Mirrors

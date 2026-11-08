@@ -153,12 +153,13 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
     const prices = {};
     let missing = [];
     let venueError = null;
-    // A venue that just refused us is not worth asking 25 more times (see
-    // VENUE_BLOCK_MS). Nothing is spent while skipped, because nothing is sent.
-    const venueSkipped = venueBlockedUntil > nowMs;
-    if (venueSkipped) venueError = "venue blocked (recent HTTP 403) — venue skipped";
+    let venueSkipped = false;
     for (const symbol of wanted) {
-      if (venueSkipped) { missing.push(symbol); continue; }
+      // Checked INSIDE the loop: the first 403 trips the breaker, so the
+      // remaining symbols of this tick are skipped instead of collecting 24 more
+      // identical refusals (~0.1-0.3s each, seconds off every fresh-isolate tick
+      // and exactly the deadline pressure that used to cut the bridge off).
+      if (venueBlockedUntil > nowMs) { venueSkipped = true; missing.push(symbol); continue; }
       window.spend(nowMs, 1);
       let res = null;
       try {
@@ -174,6 +175,9 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
       const row = rows.find((r) => r.symbol === symbol);
       if (row) prices[symbol] = String(row.price);
       else missing.push(symbol);
+    }
+    if (venueSkipped && !venueError) {
+      venueError = "venue blocked (recent HTTP 403) — venue skipped this tick";
     }
     // What the venue just told us is worth recording: it is the only thing that
     // can answer the NEXT request when the venue blocks us.
@@ -229,9 +233,11 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
       source,
       ...(staleSymbols.length ? { stale_symbols: staleSymbols } : {}),
       ...(bridged.length ? { bridged_symbols: bridged } : {}),
-      // Nothing answered at all: say WHY, instead of an empty object that reads
-      // like "the venue has no price for this symbol".
-      ...(!Object.keys(prices).length && venueError ? { degraded: venueError } : {}),
+      // Anything still missing gets the venue's reason, even when the bridge
+      // filled the rest: a partially-answered tick must be explainable too
+      // ("bridge answered 24/25" means nothing without the venue's 403 next to
+      // it). A fully-answered tick carries no degraded at all.
+      ...(venueError && missing.length ? { degraded: venueError } : {}),
     };
   }
 

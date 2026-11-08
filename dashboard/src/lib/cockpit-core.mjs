@@ -101,6 +101,42 @@ export function priceOf(prices, symbol) {
   return typeof v === "string" && v ? v : null;
 }
 
+/** partialPriceNote — WHY a symbol has no number this tick, in one line.
+ *
+ *  The 2026-11-08 complaint: the desk flapped between a price and
+ *  "price UNAVAILABLE — venue did not answer this symbol", which explains
+ *  nothing (the venue NEVER answers the Worker; the go-watcher bridge does).
+ *  The honest line names what actually happened:
+ *
+ *    - the read itself failed            → the fetch error;
+ *    - the venue was blocked and the
+ *      bridge answered only part of the
+ *      tick (a slow venue minute)        → "bridge answered 24/25 … DOGEUSDT
+ *                                          was not among them";
+ *    - nothing answered at all          → the worker's `degraded` reason.
+ *
+ *  `asked` is how many symbols the caller actually requested this tick.
+ *  @param {{ prices?: Record<string,string>, missing?: string[], source?: string, degraded?: string, bridged_symbols?: string[], stale_symbols?: string[] }|null|undefined} data
+ *  @param {string} symbol
+ *  @param {number} [asked]
+ *  @returns {string|null} null when there is nothing to explain (a price exists). */
+export function partialPriceNote(data, symbol, asked) {
+  if (!data) return "loading";
+  if (priceOf(data.prices, symbol)) return null;
+  const answered = Object.keys(data.prices ?? {}).length;
+  const parts = [];
+  if (data.degraded) parts.push(data.degraded);
+  if (data.source === "go-watcher" || (data.bridged_symbols?.length ?? 0) > 0) {
+    const n = asked ?? answered;
+    parts.push(`go-watcher bridge answered ${answered}/${n} this tick — ${symbol} was not among them`);
+  } else if (!data.degraded) {
+    parts.push("venue did not answer this symbol");
+  }
+  if ((data.stale_symbols?.length ?? 0) > 0) parts.push("D1 last-known price covered the rest");
+  parts.push("the next tick (15s) retries");
+  return parts.join(" · ");
+}
+
 /** priceBadge — the ONE badge for the price widget (docs/20 §20.3 rule 1).
  *
  *  WHY THIS IS NOT `badgeFor(result)`: a 200 response with `prices: {}` is a

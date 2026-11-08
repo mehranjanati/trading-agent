@@ -286,7 +286,7 @@ describe("quotes — Go-plane gap fill when the venue blocks Cloudflare", () => 
     };
     const win = freshWindow();
     const first = await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT,ETHUSDT"), fetchFn, nowMs: 1_000, window: win });
-    assert.equal(venueCalls(), 2, "the first tick does try the venue, per symbol");
+    assert.equal(venueCalls(), 1, "the FIRST 403 trips the breaker — the second symbol is not re-asked");
     assert.equal(first.prices.BTCUSDT, "1");
 
     // Inside the block window the venue is not asked at all — not once per symbol.
@@ -294,7 +294,7 @@ describe("quotes — Go-plane gap fill when the venue blocks Cloudflare", () => 
     const second = await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT,ETHUSDT"), fetchFn, nowMs: 2_000, window: win });
     assert.equal(venueCalls(), before, "a blocked venue must not be re-asked for every symbol");
     assert.equal(second.prices.BTCUSDT, "1", "the bridge still answers");
-    assert.equal(win.usage(2_000), 2, "nothing is spent on a venue we did not call");
+    assert.equal(win.usage(2_000), 1, "nothing is spent on a venue we did not call (only the first refusal was paid for)");
 
     // After the window it tries again by itself — no manual reset, ever.
     await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 2_000 + VENUE_BLOCK_MS, window: win });

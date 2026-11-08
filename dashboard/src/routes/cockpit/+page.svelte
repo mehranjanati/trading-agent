@@ -40,6 +40,7 @@
     aggregateSummary,
     priceOf,
     priceBadge,
+    partialPriceNote,
   } from "$lib/cockpit-core.mjs";
   import { deriveStatus, roomWatchIds } from "$lib/setups";
   import { getSymbols, isTradeable, validateSymbolInput, type SymbolsData } from "$lib/symbols";
@@ -266,7 +267,7 @@
     ? null
     : snap?.prices && !snap.prices.ok
       ? snap.prices.error
-      : (snap?.prices?.data as PricesData | undefined)?.degraded ?? "venue did not answer this symbol";
+      : partialPriceNote((snap?.prices?.data as PricesData | undefined) ?? null, symbol, priceTargets().length) ?? "venue did not answer this symbol";
   $: approvalsBadge = badgeForApi(snap?.approvals ?? null);
   $: ordersBadge = badgeForApi(snap?.intents ?? null);
 </script>

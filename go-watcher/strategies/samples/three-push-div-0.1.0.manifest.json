@@ -1,0 +1,14 @@
+{
+  "id": "three-push-div",
+  "version": "0.1.0",
+  "artifact": "three-push-div-0.1.0.wasm",
+  "sha256": "96af1bc62b5cabb5ee25829c0fcf6520d2fae9aea435ef1abb03e85d0b2145c7",
+  "contract_version": "1",
+  "bytes": 4444934,
+  "go_version": "go1.27.2",
+  "build_flags": "GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 -trimpath -ldflags=\"-s -w\"",
+  "built_at": "2026-11-08T19:14:38.726Z",
+  "source_sha256": "a3ba150e7c7dea8c0b664f5138c14922925b8db3cd44dc78b763350de9b2a4d4",
+  "source_path": "strategies/dev/three-push-div",
+  "verified": true
+}

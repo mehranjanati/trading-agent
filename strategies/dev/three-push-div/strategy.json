@@ -1,0 +1,13 @@
+{
+  "id": "three-push-div",
+  "version": "0.1.0",
+  "name": "Three-Push Divergence",
+  "description": "Bearish/bullish triple-push RSI divergence (A/B/C vs RSI A'/B'/C'); SHORT on bearish, LONG on bullish. Tuned for 5m scalps like GIGADEV chart.",
+  "configuration": {
+    "rsi_period": 14,
+    "swing_lookback": 2,
+    "min_rsi_drop": 1.0,
+    "min_confidence": 0.55,
+    "signal_confidence": 0.66
+  }
+}

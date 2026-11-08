@@ -1,0 +1,16 @@
+{
+  "id": "order-block",
+  "version": "0.1.0",
+  "name": "Order Block Retest",
+  "description": "Last opposite-colour candle before a displacement leg (body>=1.5x avg + range>=1.0x ATR14); signal on price retest into the block. LONG demand / SHORT supply.",
+  "configuration": {
+    "atr_period": 14,
+    "lookback": 50,
+    "body_mult": 1.5,
+    "displacement_atr_mult": 1.0,
+    "retest_tol_atr": 0.15,
+    "max_age_bars": 30,
+    "min_confidence": 0.55,
+    "signal_confidence": 0.6
+  }
+}

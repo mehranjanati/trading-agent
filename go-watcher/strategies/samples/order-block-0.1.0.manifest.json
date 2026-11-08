@@ -1,0 +1,14 @@
+{
+  "id": "order-block",
+  "version": "0.1.0",
+  "artifact": "order-block-0.1.0.wasm",
+  "sha256": "0c642b79265eafc768aedc57f85b6ddf378cd259e61f262b65e4fcd2b4cf8fc4",
+  "contract_version": "1",
+  "bytes": 4441034,
+  "go_version": "go1.27.2",
+  "build_flags": "GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 -trimpath -ldflags=\"-s -w\"",
+  "built_at": "2026-11-08T19:18:40.073Z",
+  "source_sha256": "1df30001ed74eb1f177fcf7cf08391316ae98f05d5bac1b85d9ef3da30ebb97d",
+  "source_path": "strategies/dev/order-block",
+  "verified": true
+}

@@ -1,10 +1,27 @@
 [
   {
+    "id": "order-block",
+    "version": "0.1.0",
+    "file": "order-block-0.1.0.wasm",
+    "name": "Order Block Retest",
+    "description": "Displacement + block retest (LONG demand / SHORT supply)",
+    "configuration": {
+      "atr_period": 14,
+      "lookback": 50,
+      "body_mult": 1.5,
+      "displacement_atr_mult": 1.0,
+      "retest_tol_atr": 0.15,
+      "max_age_bars": 30,
+      "min_confidence": 0.55,
+      "signal_confidence": 0.6
+    }
+  },
+  {
     "id": "sma-cross",
     "version": "0.1.0",
     "file": "sma-cross-0.1.0.wasm",
     "name": "SMA Cross (fast)",
-    "description": "fast 2 / slow 3 — golden fixture",
+    "description": "fast 2 / slow 3 \u2014 golden fixture",
     "configuration": {
       "fast_window": 2,
       "slow_window": 3,
@@ -45,6 +62,20 @@
       "fast_window": 5,
       "slow_window": 20,
       "min_confidence": 0.6
+    }
+  },
+  {
+    "id": "three-push-div",
+    "version": "0.1.0",
+    "file": "three-push-div-0.1.0.wasm",
+    "name": "Three-Push Divergence",
+    "description": "Triple-push RSI divergence (bearish SHORT / bullish LONG)",
+    "configuration": {
+      "rsi_period": 14,
+      "swing_lookback": 2,
+      "min_rsi_drop": 1.0,
+      "min_confidence": 0.55,
+      "signal_confidence": 0.66
     }
   }
 ]

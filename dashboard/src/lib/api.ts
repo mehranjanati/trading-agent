@@ -473,7 +473,13 @@ export type PricesData = {
   missing: string[];
   stale?: boolean;
   stale_symbols?: string[];
-  source?: "venue" | "d1";
+  /** Which egress answered: `d1` = the last price we ever SAW (stale, aged),
+   *  `go-watcher` = the SAME venue read live by the platform's own Go plane
+   *  because the venue 403s Cloudflare's egress (2026-11-08), `venue` = direct. */
+  source?: "venue" | "go-watcher" | "d1";
+  /** The symbols this answer filled over the Go-plane bridge (a subset of
+   *  `prices`; the rest came straight from the venue). */
+  bridged_symbols?: string[];
   degraded?: string;
 };
 /** Mirrors workers/src/quotes.mjs MAX_FILTERED: a filtered call with more

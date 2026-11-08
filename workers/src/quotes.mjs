@@ -15,8 +15,14 @@
 //    hit per TTL window.
 // 3. Weight discipline: every request spends the shared ADR-004 window with the
 //    poller, so the dashboard can never silently walk the venue into a 429.
+// 4. A refused venue is not a blank desk (2026-11-08): the symbols the venue
+//    would not answer are re-asked over the platform's OWN second egress
+//    (go-watcher /api/market/prices, see market-bridge.mjs) before the D1
+//    last-known-price layer is consulted. Only the no-param full mode has no
+//    bridge — no dashboard surface calls it (ADR-004).
 import { priceUrl, parseQuotes, sharedWindow, REST_BASE, PRICE_PATH } from "./fallback-poll.mjs";
 import { SYMBOL_RE } from "./symbols.mjs";
+import { fetchMarketPrices } from "./market-bridge.mjs";
 
 export const MAX_FILTERED = 25;   // per-call cap on the per-symbol filtered mode
 export const FULL_TTL_MS = 5_000; // in-isolate cache for the whole-venue answer
@@ -129,13 +135,18 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
       throw Object.assign(new Error(`price budget exhausted (need ${weight})`), { code: "RATE" });
     }
     const prices = {};
-    const missing = [];
+    let missing = [];
+    let venueError = null;
     for (const symbol of wanted) {
       window.spend(nowMs, 1);
       let res = null;
       try {
         res = await getJson(priceUrl(baseUrl, symbol), 4_000, fetchFn);
-      } catch { res = null; }
+      } catch (e) {
+        res = null;
+        venueError = venueError ?? `venue unreachable: ${e?.message ?? e}`;
+      }
+      if (res && res.status !== 200) venueError = venueError ?? `venue HTTP ${res.status}`;
       const rows = res?.status === 200 ? parseQuotes(res.body, [symbol], { venueForm: true }) : [];
       const row = rows.find((r) => r.symbol === symbol);
       if (row) prices[symbol] = String(row.price);
@@ -144,6 +155,31 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
     // What the venue just told us is worth recording: it is the only thing that
     // can answer the NEXT request when the venue blocks us.
     await persistSnapshots(env, prices, { nowMs });
+
+    // Second egress (2026-11-08): the Go plane reads the SAME venue from an IP
+    // Toobit does answer while it 403s Cloudflare. Without this leg a blocked
+    // venue left the desk with NO number at all — `prices: {}` and every symbol
+    // "missing" — because D1 had never seen one either. Only the symbols the
+    // venue just refused travel over the bridge, so the venue keeps first say
+    // (and the ADR-004 weight window keeps counting what actually went there).
+    const bridged = [];
+    if (missing.length) {
+      const hit = await fetchMarketPrices(env, missing, { fetchFn }).catch(() => null);
+      if (hit) {
+        const filled = {};
+        for (const [symbol, row] of Object.entries(hit.prices)) {
+          if (!SYMBOL_RE.test(symbol) || prices[symbol]) continue;
+          prices[symbol] = row.px;
+          filled[symbol] = row.px;
+          bridged.push(symbol);
+        }
+        if (bridged.length) {
+          await persistSnapshots(env, filled, { nowMs, src: "go-watcher" });
+          missing = missing.filter((s) => prices[s] === undefined);
+        }
+      }
+    }
+
     // Venue-block fallback (ADR-004): a symbol we could not read live but have
     // SEEN before is served from D1 — labelled stale, with the observation age —
     // instead of vanishing from the desk. `missing` keeps only what we have
@@ -161,10 +197,18 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
       }
       staleSymbols.reverse();
     }
+    // `source` names the egress that answered: D1 = last-known (stale, aged),
+    // go-watcher = live venue data read by our own plane, venue = direct.
+    const source = staleSymbols.length ? "d1" : bridged.length ? "go-watcher" : "venue";
     return {
       mode: "filtered", prices, missing, at,
       stale: staleSymbols.length > 0,
-      ...(staleSymbols.length ? { stale_symbols: staleSymbols, source: "d1" } : { source: "venue" }),
+      source,
+      ...(staleSymbols.length ? { stale_symbols: staleSymbols } : {}),
+      ...(bridged.length ? { bridged_symbols: bridged } : {}),
+      // Nothing answered at all: say WHY, instead of an empty object that reads
+      // like "the venue has no price for this symbol".
+      ...(!Object.keys(prices).length && venueError ? { degraded: venueError } : {}),
     };
   }
 

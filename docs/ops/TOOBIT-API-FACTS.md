@@ -73,3 +73,21 @@ Consequences (normative):
 **Impact:** S2a's "filtered form answers in the canonical form" was true but under-specified — that canonical answer was the **spot** book. The E02/E06 REST paths (`go-watcher/prices`, `workers/src/fallback-poll.mjs`) and the E14 klines path (`go-watcher/strategies/klines.go`) now request the venue form; regression tests pin the URL and the refusal of a spot echo.
 
 Related: [ADR-004](../decisions/ADR-004-market-data-fallback.md) · [Contracts §10.4](../10-api-and-integration-contracts.md) · [Assumptions](../14-assumptions-decisions-and-open-questions.md).
+
+## S6 — Egress asymmetry: Cloudflare 403, our own planes 200 (2026-11-08)
+
+**Source:** live probes, read-only market data, three egresses at the same time.
+
+| Egress | `GET /quote/v1/contract/ticker/price` | `?symbol=BTC-SWAP-USDT` |
+|---|---|---|
+| Cloudflare Worker (`trading-agent-control`, `fetch` with only `accept`) | **HTTP 403** | 403 |
+| Dev laptop (`curl`) | 200 | 200, `[{"s":"BTC-SWAP-USDT","p":"75894.1"}]` |
+| Go plane on Render (verified through `POST /analyze` → `data_source: "toobit-rest"`) | 200 | 200, `last: 75896.3` |
+
+**Consequence (normative): the venue's IP policy — not our code — decides which URLs answer.** A Worker-only pipeline therefore cannot be the platform's only path to market data. Both planes must be able to ask, and the control plane must be able to ask the *other* plane:
+
+1. `go-watcher` now serves `GET /api/market/symbols` → `{symbols:[...853 canonical USDT-M...], source:"toobit-rest", at}` and `GET /api/market/prices?symbols=…` (≤25, `prices[]` with `src`/`ts`/`stale`, unanswered symbols in `missing[]`). Both are read-only, keyless market data — no order, no approval, no D1 write.
+2. `workers/src/market-bridge.mjs` calls them **only after the venue refuses the Worker**, so a healthy direct path is never slowed down and the ADR-004 weight window keeps counting what actually went to the venue.
+3. The catalog keeps the S4 rules through the new egress: only `-SWAP-` rows (853 of them) survive, canonicalised; the ~536-row spot universe and the 10 USDC-margined contracts never enter `symbols`. Symbols the repo's `SYMBOL_RE` refuses (e.g. `1INCHUSDT`, `[A-Z]{2,12}USDT`) stay out on both egresses.
+4. Because the answer is the SAME venue read seconds ago, it is labelled `source: "go-watcher"` with `stale: false` — not CACHED. Only the D1 last-known-price layer is labelled stale, and only it carries an observation age.
+

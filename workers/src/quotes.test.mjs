@@ -188,3 +188,83 @@ describe("quotes — D1 last-known-price fallback", () => {
     assert.deepEqual(r.prices, {});
   });
 });
+
+// ── second egress (2026-11-08) ───────────────────────────────────────────────
+// The reported symptom: "the price isn't there at all". Toobit answers HTTP 403
+// to Cloudflare's egress while answering the Go plane (verified live: the Go
+// /analyze returned data_source "toobit-rest"), and D1 had never observed a
+// price either — so `prices` came back EMPTY and the desk had no number. The
+// venue stays first; only the symbols it refused travel over the bridge.
+describe("quotes — Go-plane gap fill when the venue blocks Cloudflare", () => {
+  beforeEach(() => { resetFullCache(); resetSnapshotThrottle(); });
+
+  const bridgeEnv = () => ({ GO_WATCHER_URL: "https://go.example" });
+
+  /** fetchFn that 403s every venue read and answers the Go plane. */
+  const venueBlocked = (prices, missing = []) => async (u) => {
+    const s = String(u);
+    if (s.startsWith("https://go.example/api/market/prices")) {
+      return { status: 200, text: async () => JSON.stringify({ at: 1, prices, missing }) };
+    }
+    return res(403, []); // the Toobit → Cloudflare answer
+  };
+
+  it("fills the blocked symbol from the Go plane and labels the egress", async () => {
+    const fetchFn = venueBlocked([{ symbol: "BTCUSDT", px: "75894.1", src: "toobit-rest" }]);
+    const r = await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000, window: freshWindow() });
+    assert.equal(r.prices.BTCUSDT, "75894.1");
+    assert.equal(r.source, "go-watcher");
+    assert.equal(r.stale, false, "the Go plane read the SAME venue live — not a cached number");
+    assert.deepEqual(r.bridged_symbols, ["BTCUSDT"]);
+    assert.deepEqual(r.missing, []);
+    assert.equal(r.degraded, undefined, "a price we actually have is not degraded");
+  });
+
+  it("records the bridged price in D1, so the NEXT blackout still has a number", async () => {
+    const DB = snapshotDb();
+    const fetchFn = venueBlocked([{ symbol: "BTCUSDT", px: "75894.1", src: "toobit-rest" }]);
+    const r = await listPrices({ DB, ...bridgeEnv() }, { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000, window: freshWindow() });
+    assert.equal(r.prices.BTCUSDT, "75894.1");
+    assert.equal(DB.writes.length, 1);
+    assert.deepEqual(DB.writes[0].args.slice(0, 3), ["BTCUSDT", "75894.1", "go-watcher"]);
+  });
+
+  it("D1 stays the last line when the Go plane cannot answer either", async () => {
+    // Both egresses fail for BTCUSDT: the snapshot is served, labelled stale.
+    const DB = snapshotDb({ BTCUSDT: { px: "80000", at: "2026-11-07T20:00:00.000Z" } });
+    const fetchFn = async (u) => (String(u).startsWith("https://go.example")
+      ? { status: 200, text: async () => JSON.stringify({ prices: [], missing: ["BTCUSDT"] }) }
+      : res(403, []));
+    const r = await listPrices({ DB, ...bridgeEnv() }, {
+      url: url("?symbols=BTCUSDT"), fetchFn,
+      nowMs: Date.parse("2026-11-07T21:00:00Z"), window: freshWindow(),
+    });
+    assert.equal(r.prices.BTCUSDT, "80000");
+    assert.equal(r.source, "d1");
+    assert.equal(r.stale, true);
+    assert.deepEqual(r.stale_symbols, ["BTCUSDT"]);
+  });
+
+  it("nothing answers: the symbol stays missing and degraded says WHY", async () => {
+    const fetchFn = async (u) => (String(u).startsWith("https://go.example")
+      ? res(502, { code: "MARKET_UNAVAILABLE" })
+      : res(403, []));
+    const r = await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000, window: freshWindow() });
+    assert.deepEqual(r.prices, {});
+    assert.deepEqual(r.missing, ["BTCUSDT"]);
+    assert.match(r.degraded, /403/, "a blocked venue must be explainable, never a silent empty object");
+  });
+
+  it("keeps the venue's answer for a symbol the bridge also reports", async () => {
+    // The venue is NOT blocked here: the bridge must not be consulted at all.
+    let bridged = 0;
+    const fetchFn = async (u) => {
+      if (String(u).startsWith("https://go.example")) { bridged++; return res(200, { prices: [] }); }
+      return res(200, [{ s: "BTC-SWAP-USDT", p: "83838" }]);
+    };
+    const r = await listPrices({ ...bridgeEnv() }, { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000, window: freshWindow() });
+    assert.equal(r.prices.BTCUSDT, "83838");
+    assert.equal(r.source, "venue");
+    assert.equal(bridged, 0);
+  });
+});

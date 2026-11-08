@@ -18,9 +18,14 @@ export interface SymbolsData {
    *  positions). `source: "d1"` names the fallback, `degraded` carries the venue
    *  error verbatim, so a page can say WHY the catalog is short instead of
    *  rendering a bare UNAVAILABLE. ADR-004: a third party must never blank the
-   *  picker (2026-11-07: Toobit 403'd Cloudflare egress). */
+   *  picker (2026-11-07: Toobit 403'd Cloudflare egress).
+   *
+   *  `source: "go-watcher"` (2026-11-08) means the venue refused CLOUDFLARE but
+   *  answered the platform's own Go plane, which the Worker proxies — the same
+   *  venue read, a different egress, so the catalog is LIVE and `stale` is
+   *  false. It is what turns "four symbols" back into the full venue list. */
   degraded?: string;
-  source?: "venue" | "d1" | "cache";
+  source?: "venue" | "go-watcher" | "d1" | "cache";
 }
 
 const SYM_RE = /^[A-Z]{2,12}USDT$/;

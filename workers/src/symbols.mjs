@@ -15,18 +15,22 @@
 // Weight discipline (ADR-004): ONE venue weight-1 request per cache miss,
 // served from cache otherwise — the dashboard poll never touches the venue.
 //
-// Fail-soft in THREE layers, because a third party must never be able to blank
+// Fail-soft in FOUR layers, because a third party must never be able to blank
 // the UI:
 //   1. KV cache (env.SYMBOLS_KV) — survives isolates; requires the binding
 //   2. in-isolate memory cache — the fallback for --local/tests without KV
-//   3. D1 (the ACTIVE allowlist + symbols already seen in watches/positions) —
+//   3. the GO PLANE (go-watcher /api/market/symbols) — the platform's own second
+//      egress, which the venue DOES answer when Cloudflare's is 403'd
+//   4. D1 (the ACTIVE allowlist + symbols already seen in watches/positions) —
 //      answered with `stale:true` + `degraded:<reason>` + `source:"d1"`
 // 2026-11-07: Toobit answered HTTP 403 to Cloudflare egress (200 from a laptop
-// for the same URL), so layer 3 is what keeps the symbol picker usable during a
-// venue block. A total miss still answers 200 with an explicit `degraded` reason
-// rather than a 503 — see listSymbols. The allowlist of the ACTIVE
-// strategy_configs version rides along so the UI can badge "tradeable now" vs
-// "venue-only".
+// for the same URL); 2026-11-08 it was still refusing, so layer 3 is what keeps
+// the picker usable — layer 4 alone listed four symbols out of ~773 markets.
+// A total miss still answers 200 with an explicit `degraded` reason rather than
+// a 503 — see listSymbols. The allowlist of the ACTIVE strategy_configs version
+// rides along so the UI can badge "tradeable now" vs "venue-only".
+import { fetchMarketSymbols } from "./market-bridge.mjs";
+
 export const SYMBOLS_PATH = "/quote/v1/contract/ticker/price";
 export const SYMBOLS_TTL_MS = 3_600_000; // 1h — listings change rarely
 export const SYMBOL_RE = /^[A-Z]{2,12}USDT$/;
@@ -127,12 +131,20 @@ export async function d1Symbols(env) {
   return [...out].sort();
 }
 
-/** GET /api/symbols — cached venue list + active allowlist. Never throws. */
-export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now() } = {}) {
+/** GET /api/symbols — cached venue list + active allowlist. Never throws.
+ *
+ *  Egress order (2026-11-08): cache → venue → **Go plane** → stale cache → D1.
+ *  The venue answers HTTP 403 to Cloudflare's egress while answering the Go
+ *  plane, and without that second leg this route collapsed onto D1's four rows
+ *  (ADR-004: "a single venue is a single point of failure for the CATALOG
+ *  too"). The Go leg answers the SAME venue read, so `source: "go-watcher"`
+ *  is a live catalog and not a fallback with an age to be ashamed of. */
+export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now(), marketSymbols = fetchMarketSymbols } = {}) {
   const cached = await readCache(env);
   if (cached && nowMs - cached.at < SYMBOLS_TTL_MS) {
     return { symbols: cached.symbols, allowlist: await activeAllowlist(env), stale: false, at: new Date(cached.at).toISOString() };
   }
+  let venueError = null;
   try {
     const base = (env.TOOBIT_BASE ?? "https://api.toobit.com").replace(/\/$/, "");
     const res = await fetchFn(`${base}${SYMBOLS_PATH}`);
@@ -143,25 +155,62 @@ export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now() } =
     await writeCache(env, entry);
     return { symbols, allowlist: await activeAllowlist(env), stale: false, at: new Date(nowMs).toISOString() };
   } catch (e) {
-    if (cached?.symbols?.length) {
-      return { symbols: cached.symbols, allowlist: await activeAllowlist(env), stale: true, at: new Date(cached.at).toISOString() };
-    }
-    // No cache and the venue refused us. Throwing here turned a third-party
-    // block into a 503 that blanked the dashboard's symbol picker, even though
-    // the page's documented contract (dashboard/src/lib/symbols.ts) is "a total
-    // failure answers with symbols:[] and stale:true, never a crash". So answer
-    // with what the platform still knows (D1) and say WHY it is not the venue
-    // list: `degraded` carries the venue error, `source` names the fallback.
-    // Callers that need a hard failure read `degraded`, not a status code.
-    const allowlist = await activeAllowlist(env);
-    const fallback = await d1Symbols(env);
-    return {
-      symbols: fallback,
-      allowlist,
-      stale: true,
-      degraded: `venue unavailable: ${e?.message ?? e}`,
-      source: "d1",
-      at: new Date(nowMs).toISOString(),
-    };
+    venueError = e;
   }
+  // Second egress: our own Go plane reads the same venue from an IP the venue
+  // does answer. It caches like a venue success (1h), so the fallback costs one
+  // round-trip per TTL window, not one per dashboard poll.
+  const bridged = await marketSymbols(env, { fetchFn }).catch(() => null);
+  if (bridged?.length) {
+    const symbols = bridgeCatalog(bridged);
+    if (symbols.length) {
+      await writeCache(env, { at: nowMs, symbols, stale: false });
+      return {
+        symbols,
+        allowlist: await activeAllowlist(env),
+        stale: false,
+        source: "go-watcher",
+        at: new Date(nowMs).toISOString(),
+      };
+    }
+  }
+  if (cached?.symbols?.length) {
+    return { symbols: cached.symbols, allowlist: await activeAllowlist(env), stale: true, at: new Date(cached.at).toISOString() };
+  }
+  // No cache and the venue refused us. Throwing here turned a third-party
+  // block into a 503 that blanked the dashboard's symbol picker, even though
+  // the page's documented contract (dashboard/src/lib/symbols.ts) is "a total
+  // failure answers with symbols:[] and stale:true, never a crash". So answer
+  // with what the platform still knows (D1) and say WHY it is not the venue
+  // list: `degraded` carries the venue error, `source` names the fallback.
+  // Callers that need a hard failure read `degraded`, not a status code.
+  const e = venueError;
+  const allowlist = await activeAllowlist(env);
+  const fallback = await d1Symbols(env);
+  return {
+    symbols: fallback,
+    allowlist,
+    stale: true,
+    degraded: `venue unavailable: ${e?.message ?? e}`,
+    source: "d1",
+    at: new Date(nowMs).toISOString(),
+  };
+}
+
+/** bridgeCatalog — the Go plane's catalog through the SAME form rules as the
+ *  venue path, so a bridged list can never widen the universe: canonical
+ *  SYMBOL_RE form only, deduped, sorted. A symbol the venue lists but the repo
+ *  refuses (e.g. `1INCHUSDT`, which the regex rejects repo-wide) stays out
+ *  whichever egress answered. */
+export function bridgeCatalog(symbols) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of symbols ?? []) {
+    const symbol = canonicalSymbol(raw);
+    if (!SYMBOL_RE.test(symbol) || seen.has(symbol)) continue;
+    seen.add(symbol);
+    out.push(symbol);
+  }
+  out.sort();
+  return out;
 }

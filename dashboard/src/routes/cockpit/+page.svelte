@@ -28,6 +28,7 @@
     postAnalyze,
     getRegistry,
     badgeFor as badgeForApi,
+    MAX_PRICE_SYMBOLS,
     type PricesData,
   } from "$lib/api";
   import {
@@ -38,6 +39,7 @@
     intentLines,
     aggregateSummary,
     priceOf,
+    priceBadge,
   } from "$lib/cockpit-core.mjs";
   import { deriveStatus, roomWatchIds } from "$lib/setups";
   import { getSymbols, isTradeable, validateSymbolInput, type SymbolsData } from "$lib/symbols";
@@ -73,10 +75,12 @@
   }));
 
   async function refresh() {
-    // ADR-004: LIVE price for the SELECTED symbol only. The old call was
-    // getPrices() with no argument, which asked the venue for every market it
-    // lists (~1000 rows / 61KB) on every 15s tick just to paint one number —
-    // wasteful, and it made the whole desk pivot on a single third-party read.
+    // ADR-004: quote the symbols this desk RENDERS — the selection plus the
+    // sidebar rows below it — capped at the worker's MAX_PRICE_SYMBOLS. The old
+    // call asked for the WHOLE venue (~1000 rows / 61KB) on every 15s tick just
+    // to paint one number; pricing only the selection instead (the previous fix)
+    // went too far the other way and left every other row a dash.
+    const targets = priceTargets();
     const [health, symbols, watches, approvals, intents, positions, prices] = await Promise.all([
       getHealth(),
       getSymbols(),
@@ -84,9 +88,17 @@
       getApprovals(),
       getIntents(),
       getPositions(),
-      getPrices([symbol]),
+      getPrices(targets),
     ]);
     snap = { health, symbols, watches, approvals, intents, positions, prices };
+    // The selection moved while this tick was in flight: the answer we just got
+    // is for the OLD targets, so price the current ones instead of waiting 15s.
+    // Otherwise record what this tick just priced, so the reactive block below
+    // does not fire a duplicate request for the identical set.
+    const nowKey = priceTargets().join(",");
+    const gotKey = targets.join(",");
+    if (nowKey !== gotKey) void refreshPrices(nowKey.split(","));
+    else pricedKey = gotKey;
   }
 
   async function bootCatalog() {
@@ -137,16 +149,30 @@
   $: symbol = urlSymbol || filtered.find((r) => r.status !== "IDLE")?.symbol || filtered[0]?.symbol || "BTCUSDT";
 
   // A symbol SWITCH must not wait for the next 15s tick — and must not refetch
-  // the other ~1000 markets either: ask for the one symbol that is now selected.
-  // Guarded by lastPricedSymbol so the reactive block cannot re-trigger itself.
-  let lastPricedSymbol = "";
-  $: if (symbol && symbol !== lastPricedSymbol) {
-    lastPricedSymbol = symbol;
-    void refreshPrices(symbol);
+  // the venue's whole market list either. One bounded call covers the selection
+  // AND the sidebar rows the trader is looking at (ADR-004: quote what you
+  // draw). Guarded by pricedKey so the reactive block cannot re-trigger itself.
+  let pricedKey = "";
+
+  /** priceTargets — the symbols this render actually draws a number for:
+   *  the selection first, then the visible sidebar rows, capped at the worker's
+   *  MAX_PRICE_SYMBOLS (a filtered call above that is refused with VALIDATION). */
+  function priceTargets(): string[] {
+    const rows = filtered.slice(0, MAX_PRICE_SYMBOLS - 1).map((r: any) => String(r.symbol));
+    return [...new Set([symbol, ...rows].filter(Boolean))].slice(0, MAX_PRICE_SYMBOLS);
   }
 
-  async function refreshPrices(sym: string) {
-    const r = await getPrices([sym]);
+  // Only react once a price answer EXISTS: the first tick (onMount → refresh)
+  // owns the initial quote, so this block cannot fire into an empty snapshot and
+  // throw its answer away (the old `lastPricedSymbol` guard did exactly that).
+  $: currentPriceKey = priceTargets().join(",");
+  $: if (snap?.prices && currentPriceKey && currentPriceKey !== pricedKey) {
+    void refreshPrices(currentPriceKey.split(","));
+  }
+
+  async function refreshPrices(symbols: string[]) {
+    pricedKey = symbols.join(",");
+    const r = await getPrices(symbols);
     if (!snap) return;
     snap = { ...snap, prices: r };
   }
@@ -230,7 +256,17 @@
   // approvals and orders widgets each carry their OWN badge off their own
   // Result — merging the views must not merge the badges.
   $: watchesBadge = badgeForApi(snap?.watches ?? null);
-  $: pricesBadge = badgeForApi(snap?.prices ?? null);
+  // The PRICE badge is not a freshness badge: a 200 answer with no number for
+  // this symbol is UNAVAILABLE, and a D1 last-known row is CACHED (see
+  // cockpit-core.priceBadge — the 2026-11-08 "no price at all" regression).
+  $: pricesBadge = priceBadge(snap?.prices ?? null, symbol);
+  // ...and when there is no number, say WHY under the header instead of leaving
+  // a silent dash (docs/09 §9.4: never a blank that looks like "no data").
+  $: pxNote = px
+    ? null
+    : snap?.prices && !snap.prices.ok
+      ? snap.prices.error
+      : (snap?.prices?.data as PricesData | undefined)?.degraded ?? "venue did not answer this symbol";
   $: approvalsBadge = badgeForApi(snap?.approvals ?? null);
   $: ordersBadge = badgeForApi(snap?.intents ?? null);
 </script>
@@ -240,7 +276,9 @@
   <p class="subtitle">one desk — sidebar · watch board · analysis · assistant (docs/20; read-only, D-08)</p>
 
   {#if symbolsData?.stale}
-    <div class="warn">symbol list is stale-cached (venue unreachable) — tradeable badges may lag</div>
+    <div class="warn">
+      symbol list is stale-cached (venue unreachable) — tradeable badges may lag{#if symbolsData.degraded} · {symbolsData.degraded}{/if}
+    </div>
   {/if}
 
   <div class="shell">
@@ -288,6 +326,10 @@
           {/if}
         </div>
       </header>
+
+      {#if pxNote}
+        <p class="note">price UNAVAILABLE for {symbol} — {pxNote}</p>
+      {/if}
 
       {#if components.length}
         <div class="comps" role="status" aria-label="component health">

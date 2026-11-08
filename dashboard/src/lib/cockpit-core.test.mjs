@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   legacyRedirect,
   priceOf,
+  priceBadge,
   parseZone,
   zoneText,
   watchBoard,
@@ -72,6 +73,35 @@ test("priceOf: an unanswered symbol is null, never an invented price", () => {
   assert.equal(priceOf({ BTCUSDT: "67000.5" }, "ETHUSDT"), null);
   assert.equal(priceOf({ BTCUSDT: "" }, "BTCUSDT"), null);
   assert.equal(priceOf(null, "BTCUSDT"), null);
+});
+
+// The 2026-11-08 symptom: the venue 403s Cloudflare's egress, so /api/prices
+// answered 200 with `prices: {}` — a FRESH response carrying no number. The old
+// badge followed the response's freshness and the desk showed a dash with no
+// complaint. A price widget must fail closed (docs/09 §9.4).
+test("priceBadge: no number is UNAVAILABLE, a D1 last-known row is CACHED", () => {
+  const fresh = { ok: true, ageMs: 800, data: { prices: { BTCUSDT: "75894.1" }, missing: [] } };
+  assert.equal(priceBadge(fresh, "BTCUSDT").label, "LIVE");
+  assert.equal(priceBadge(fresh, "BTCUSDT").age_s, 1);
+
+  // 200 OK, zero prices: nothing to render, so nothing may look live.
+  const empty = { ok: true, ageMs: 200, data: { prices: {}, missing: ["BTCUSDT"] } };
+  assert.equal(priceBadge(empty, "BTCUSDT").label, "UNAVAILABLE");
+  assert.equal(priceBadge(empty, "BTCUSDT").tone, "red");
+
+  // A failed read is never fresh either.
+  assert.equal(priceBadge({ ok: false, error: "HTTP 500" }, "BTCUSDT").label, "UNAVAILABLE");
+  assert.equal(priceBadge(null, "BTCUSDT").label, "UNAVAILABLE");
+
+  // The D1 last-known price is honest — as long as it is labelled CACHED with age.
+  const cached = { ok: true, ageMs: 3_600_000, data: { prices: { BTCUSDT: "80000" }, stale_symbols: ["BTCUSDT"], stale: true } };
+  assert.equal(priceBadge(cached, "BTCUSDT").label, "CACHED");
+  assert.equal(priceBadge(cached, "BTCUSDT").tone, "grey");
+  assert.equal(priceBadge(cached, "BTCUSDT").age_s, 3600);
+
+  // Go-plane gap fill is the SAME venue read a second ago: live, not cached.
+  const bridged = { ok: true, ageMs: 900, data: { prices: { BTCUSDT: "75894.1" }, source: "go-watcher", bridged_symbols: ["BTCUSDT"] } };
+  assert.equal(priceBadge(bridged, "BTCUSDT").label, "LIVE");
 });
 
 test("parseZone / zoneText: malformed JSON renders — instead of throwing", () => {

@@ -13,7 +13,7 @@
 //      cockpit merges six views, and the merge must not change what any of them
 //      meant. `roomWatches` / `deriveStatus` come from setups-core so the
 //      sidebar and the room page can never disagree.
-import { countdown } from "./freshness.mjs";
+import { badge, countdown } from "./freshness.mjs";
 import { deriveStatus, roomWatchIds, roomWatches } from "./setups-core.mjs";
 
 export const COCKPIT_PATH = "/cockpit";
@@ -100,6 +100,31 @@ export function priceOf(prices, symbol) {
   const v = (prices ?? {})[symbol];
   return typeof v === "string" && v ? v : null;
 }
+
+/** priceBadge — the ONE badge for the price widget (docs/20 §20.3 rule 1).
+ *
+ *  WHY THIS IS NOT `badgeFor(result)`: a 200 response with `prices: {}` is a
+ *  perfectly FRESH answer that carries NO price, and the desk used to render
+ *  exactly that — a green/plain badge next to a dash where the number belongs
+ *  (2026-11-08: the venue answers HTTP 403 to Cloudflare's egress, so every
+ *  symbol came back "missing"). The rules:
+ *
+ *    - no price for THIS symbol            → UNAVAILABLE (red) — nothing to show;
+ *    - the number came from the D1 last-known row → CACHED (grey, with its age);
+ *    - otherwise                           → the response's own freshness.
+ *
+ *  @param {{ ok: boolean, data?: any, ageMs?: number|null }|null|undefined} result
+ *  @param {string} symbol
+ *  @returns {{ label: string, tone: string, age_s: number|null }} */
+export function priceBadge(result, symbol) {
+  if (!result || result.ok !== true) return badge({ source: "unavailable" });
+  const data = result.data ?? {};
+  if (!priceOf(data.prices, symbol)) return badge({ source: "unavailable" });
+  const fromD1 = Array.isArray(data.stale_symbols) ? data.stale_symbols : [];
+  if (fromD1.includes(symbol)) return badge({ source: "cached", ageMs: result.ageMs });
+  return badge({ ageMs: result.ageMs });
+}
+
 
 /** parseZone — `{op, price}` out of a watch's *_json column, or null.
  *  A malformed or EMPTY value renders as "—" instead of throwing inside the

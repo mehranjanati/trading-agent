@@ -98,6 +98,12 @@ func main() {
 	mux.HandleFunc("/analyze", serveAnalyze)
 	// Pinned-WASM catalog for the dashboard library tab (advisory, read-only).
 	mux.HandleFunc("/strategies/registry", serveRegistry)
+	// Market data for the CONTROL PLANE: the venue 403s Cloudflare's egress
+	// (2026-11-07/08) while it answers this host, so the Worker's catalog and
+	// quote reads fall back here instead of collapsing onto D1's four symbols.
+	// Read-only, keyless, no order/approval — see market_endpoint.go.
+	mux.HandleFunc("/api/market/symbols", serveMarketSymbols)
+	mux.HandleFunc("/api/market/prices", serveMarketPrices)
 	// Skill facade: POST /skills/{name} → native Go skill engine.
 	mux.HandleFunc("/skills/{name}", skills.HandleRoute(skillRouter))
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {

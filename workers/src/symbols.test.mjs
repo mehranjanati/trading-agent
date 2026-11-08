@@ -103,4 +103,70 @@ describe("symbols", () => {
     assert.equal(r.stale, true);
     assert.match(r.degraded, /venue unavailable/);
   });
+
+  // ── second egress (2026-11-08) ─────────────────────────────────────────────
+  // The reported symptom: "I search and nothing but these few coins comes up".
+  // Toobit 403s Cloudflare's egress while answering the Go plane, so the picker
+  // had collapsed onto D1's allowlist + watched symbols (four rows). The Go leg
+  // answers the SAME venue read, so the catalog is full again — and live, which
+  // is why it is NOT flagged stale.
+  it("venue 403 + the Go plane answers → the FULL catalog, live, not D1's four rows", async () => {
+    const env = {
+      DB: memDb(JSON.stringify({ allowlist: ["BTCUSDT"] })),
+      TOOBIT_BASE: "https://venue.example",
+      SYMBOLS_KV: kvStore(),
+      GO_WATCHER_URL: "https://go.example",
+    };
+    const seen = [];
+    const fetchFn = async (u) => {
+      const s = String(u);
+      seen.push(s);
+      if (s.startsWith("https://go.example/api/market/symbols")) {
+        // The venue lists 1INCHUSDT; the repo-wide SYMBOL_RE refuses it, so the
+        // bridge must not widen the universe just because the egress changed.
+        return {
+          ok: true, status: 200,
+          json: async () => ({ symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "1INCHUSDT", "BTCUSDT"], source: "toobit-rest" }),
+          text: async () => JSON.stringify({ symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "1INCHUSDT", "BTCUSDT"] }),
+        };
+      }
+      return { ok: false, status: 403, json: async () => ({}), text: async () => "" }; // Toobit → Cloudflare
+    };
+    const r = await listSymbols(env, { fetchFn, nowMs: 5_000 });
+    assert.deepEqual(r.symbols, ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]);
+    assert.deepEqual(r.allowlist, ["BTCUSDT"]);
+    assert.equal(r.source, "go-watcher");
+    assert.equal(r.stale, false, "a live venue read is not a stale cache");
+    assert.match(seen[0], /^https:\/\/venue\.example/);
+    assert.match(seen[1], /^https:\/\/go\.example\/api\/market\/symbols$/);
+
+    // The bridged catalog caches like a venue success: one round-trip per TTL.
+    const r2 = await listSymbols(env, {
+      fetchFn: async () => { throw new Error("must not fetch inside the TTL"); },
+      nowMs: 5_000 + SYMBOLS_TTL_MS - 1,
+    });
+    assert.deepEqual(r2.symbols, r.symbols);
+    assert.equal(r2.stale, false);
+  });
+
+  it("both egresses blocked still answers from D1, and says so", async () => {
+    const db = {
+      prepare(sql) {
+        return {
+          all: async () => (sql.includes("strategy_configs")
+            ? { results: [{ config_json: JSON.stringify({ allowlist: ["BTCUSDT"] }) }] }
+            : { results: [] }),
+        };
+      },
+    };
+    const env = { DB: db, TOOBIT_BASE: "https://venue.example", SYMBOLS_KV: kvStore(), GO_WATCHER_URL: "https://go.example" };
+    const r = await listSymbols(env, {
+      fetchFn: async () => { throw new Error("venue HTTP 403"); },
+      nowMs: 7_000,
+    });
+    assert.deepEqual(r.symbols, ["BTCUSDT"]);
+    assert.equal(r.source, "d1");
+    assert.equal(r.stale, true);
+    assert.match(r.degraded, /403/);
+  });
 });

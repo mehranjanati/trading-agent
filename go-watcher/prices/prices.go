@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"trading-agent/go-watcher/normalize"
@@ -44,6 +45,16 @@ const (
 	// staleAfter marks a Redis px as too old to quote as live. Ticks carry
 	// TTL 30s; anything approaching it is worth labelling degraded anyway.
 	staleAfter = 15 * time.Second
+	// maxParallelREST bounds the REST fills in flight. The venue allows 50
+	// requests/s (ADR-004) and one snapshot asks for at most 25 symbols, so 8 is
+	// a latency win with a wide safety margin — never an unbounded fan-out.
+	maxParallelREST = 8
+	// batchTimeout bounds the ONE unfiltered ticker read that answers a batch.
+	// It is longer than restTimeout because the payload is ~61KB and a cold
+	// connection can spend several seconds in TLS (measured 6.8s on 2026-11-08
+	// while a reused connection answered in 0.7s); it still leaves room inside
+	// the endpoint's 9s and the Worker's 10s.
+	batchTimeout = 7 * time.Second
 )
 
 // DefaultSymbols are the majors the model is expected to know live
@@ -120,14 +131,42 @@ func Fetch(ctx context.Context, symbols []string) Snapshot {
 		}
 	}
 
-	// Pass 2: REST fallback for the rest (Toobit then Binance, per symbol).
-	for _, sym := range remaining {
-		p, ok := fromREST(ctx, sym, now)
-		if !ok {
-			snap.Missing = append(snap.Missing, sym)
+	// Pass 2: REST fallback for the rest (Toobit then Binance, per symbol) —
+	// PARALLEL and bounded.
+	//
+	// WHY PARALLEL (2026-11-08): the control plane asks this package for every
+	// symbol a desk RENDERS (the cockpit sidebar quotes up to 25 at a time), and
+	// a sequential fill spent ~0.5s per symbol — 12s for 25 symbols, i.e. longer
+	// than the Worker's own deadline, so the answer always arrived too late to be
+	// used and the desk showed "price UNAVAILABLE ... venue HTTP 403" for rows
+	// whose price the venue had answered perfectly well. Concurrency changes no
+	// semantics: the snapshot is sorted below, each symbol still costs one
+	// weight-1 read, and 8 in flight stays far below the venue's 50/s ceiling
+	// (ADR-004) — it only stops one slow provider from serialising the rest.
+	type restResult struct {
+		p  Price
+		ok bool
+	}
+	results := make([]restResult, len(remaining))
+	sem := make(chan struct{}, maxParallelREST)
+	var wg sync.WaitGroup
+	for i, sym := range remaining {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, sym string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			p, ok := fromREST(ctx, sym, now)
+			results[i] = restResult{p, ok}
+		}(i, sym)
+	}
+	wg.Wait()
+	for i, r := range results {
+		if !r.ok {
+			snap.Missing = append(snap.Missing, remaining[i])
 			continue
 		}
-		snap.Prices = append(snap.Prices, p)
+		snap.Prices = append(snap.Prices, r.p)
 	}
 
 	sort.Slice(snap.Prices, func(i, j int) bool { return snap.Prices[i].Symbol < snap.Prices[j].Symbol })
@@ -226,10 +265,16 @@ func toobitTicker(ctx context.Context, symbol string, now time.Time) (Price, boo
 	return Price{Symbol: symbol, Px: px, Ts: now.UnixMilli(), Src: "toobit-rest"}, true
 }
 
-// binanceTicker: GET https://api.binance.com/api/v3/ticker/price?symbol=
+// binanceTicker: GET https://fapi.binance.com/fapi/v1/ticker/price?symbol=
 // {symbol, price} with price as a numeric string.
+//
+// FUTURES-ONLY (2026-11-08): fapi is Binance's USDT-M PERPETUAL book, not spot
+// (api.binance.com/api/v3). The platform trades Toobit USDT-M perpetuals (D-06),
+// so a spot quote is a different market: it can carry a basis and it must never
+// be presented as "the price" of the contract we hold. A symbol Binance does not
+// list as a perpetual therefore stays MISSING rather than answering spot.
 func binanceTicker(ctx context.Context, symbol string, now time.Time) (Price, bool) {
-	u := "https://api.binance.com/api/v3/ticker/price?symbol=" + symbol
+	u := "https://fapi.binance.com/fapi/v1/ticker/price?symbol=" + symbol
 	var body struct {
 		Symbol string `json:"symbol"`
 		Price  string `json:"price"`
@@ -246,14 +291,21 @@ func binanceTicker(ctx context.Context, symbol string, now time.Time) (Price, bo
 
 // getJSON is the bounded GET + decode (mirrors strategies.getJSON, with ctx).
 func getJSON(ctx context.Context, url string, v any) error {
-	rctx, cancel := context.WithTimeout(ctx, restTimeout)
+	return getJSONWithin(ctx, url, v, restTimeout)
+}
+
+// getJSONWithin is getJSON with an explicit per-call bound. The batch ticker read
+// needs a longer one than a single filtered quote (it is ~61KB), while the whole
+// request still has to fit inside the caller's deadline.
+func getJSONWithin(ctx context.Context, url string, v any, timeout time.Duration) error {
+	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(rctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -262,6 +314,23 @@ func getJSON(ctx context.Context, url string, v any) error {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(v)
+}
+
+// httpClient is ONE shared client for every venue read on this plane.
+//
+// WHY NOT http.DefaultClient (2026-11-08): the venue's TLS handshake measured up
+// to 6.8s during a bad minute while a REUSED connection answered in 0.7s, and
+// Go's default MaxIdleConnsPerHost is 2 — so an 8-way parallel fill kept
+// re-handshaking and blew the caller's deadline. Keep-alives are the difference
+// between a 1s snapshot and an unusable one here.
+var httpClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        64,
+		MaxIdleConnsPerHost: 32,
+		IdleConnTimeout:     90 * time.Second,
+		ForceAttemptHTTP2:   true,
+	},
 }
 
 // rawDecimal renders a JSON scalar (string or number) as a canonical decimal

@@ -46,6 +46,65 @@ func ValidSymbol(s string) bool { return symbolRE.MatchString(strings.TrimSpace(
 // is the same read from an egress the venue accepts.
 const symbolsPath = "/quote/v1/contract/ticker/price"
 
+// TickerRow is one unfiltered venue ticker row. `p` arrives as a string today
+// and as a number on some endpoints, so it is decoded raw and validated.
+type TickerRow struct {
+	S string          `json:"s"`
+	P json.RawMessage `json:"p"`
+}
+
+// VenueTickers is the ONE unfiltered venue read that answers a whole BATCH.
+//
+// WHY ONE READ FOR A BATCH (2026-11-08): the Worker asks for up to 25 symbols at
+// a time (every symbol a cockpit sidebar draws), and one request per symbol
+// turned out to be both slower and MORE expensive than a single read: the venue
+// allows 50 requests/s but its TLS handshake alone measured 6.8s during a bad
+// minute, so 25 parallel per-symbol reads either timed out or blew the caller's
+// deadline — the desk showed "price UNAVAILABLE ... venue HTTP 403" for symbols
+// the venue was answering. One unfiltered request is ONE weight-1 read (vs 25),
+// ONE handshake, and the same payload the catalog already reads.
+//
+// The venue-form guard still applies: only `-SWAP-` rows are USDT-M
+// perpetuals; a dash-free row is the spot book and is refused.
+func VenueTickers(ctx context.Context) (map[string]string, error) {
+	base := strings.TrimRight(os.Getenv("TOOBIT_BASE"), "/")
+	if base == "" {
+		base = "https://api.toobit.com"
+	}
+	var rows []TickerRow
+	if err := getJSONWithin(ctx, base+symbolsPath, &rows, batchTimeout); err != nil {
+		return nil, fmt.Errorf("venue ticker: %w", err)
+	}
+	out := ParseVenueTickers(rows)
+	if len(out) == 0 {
+		return nil, fmt.Errorf("venue ticker: no USDT-M prices in the answer (%d rows)", len(rows))
+	}
+	return out, nil
+}
+
+// ParseVenueTickers canonicalises an unfiltered ticker answer into
+// symbol → decimal price. Exported so the shape rules are testable offline:
+// spot echoes, USDC-margined contracts and non-positive prices never enter.
+func ParseVenueTickers(rows []TickerRow) map[string]string {
+	out := make(map[string]string, len(rows))
+	for _, r := range rows {
+		up := strings.ToUpper(strings.TrimSpace(r.S))
+		if !strings.Contains(up, "-SWAP-") {
+			continue
+		}
+		sym := normalize.ToCanonical(up)
+		if !symbolRE.MatchString(sym) {
+			continue
+		}
+		px, ok := rawDecimal(r.P)
+		if !ok || px == "" {
+			continue
+		}
+		out[sym] = px
+	}
+	return out
+}
+
 // Symbols returns the venue catalog in canonical form, sorted and deduped.
 // source names the provider ("toobit-rest") so a caller can label it.
 //

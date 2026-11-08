@@ -91,3 +91,13 @@ Related: [ADR-004](../decisions/ADR-004-market-data-fallback.md) · [Contracts �
 3. The catalog keeps the S4 rules through the new egress: only `-SWAP-` rows (853 of them) survive, canonicalised; the ~536-row spot universe and the 10 USDC-margined contracts never enter `symbols`. Symbols the repo's `SYMBOL_RE` refuses (e.g. `1INCHUSDT`, `[A-Z]{2,12}USDT`) stay out on both egresses.
 4. Because the answer is the SAME venue read seconds ago, it is labelled `source: "go-watcher"` with `stale: false` — not CACHED. Only the D1 last-known-price layer is labelled stale, and only it carries an observation age.
 
+**Futures-only, per the venue's own USDT-M section** (`api-docs.toobit.com/api/usdt-m-market-data.html`, fetched 2026-11-08): the USDT-M market-data endpoints are the `/quote/v1/contract/...` family — `ticker/price` (weight 1, `?symbol=` optional, **all symbols in one array when omitted**), `ticker/24hr` (weight 1 filtered / **40 unfiltered**), `ticker/bookTicker`, `index`, plus `/api/v1/futures/*`. The spot book is `/quote/v1/ticker/price` and must never be quoted as our price. Consequences:
+
+- The batch read used by `/api/market/prices` is the **unfiltered** `contract/ticker/price` — documented as all-symbols at weight **1** — so 25 symbols cost one request and one handshake, not 25 of each.
+- The non-Toobit fallbacks were still spot and are now USDT-M perpetuals: Binance `fapi.binance.com/fapi/v1/{ticker/price,klines}` and OKX `…-USDT-SWAP` instruments. A symbol without a perpetual on a fallback stays MISSING there instead of answering its spot book.
+- A venue row with `p:"0"` is a MISSING value, not a price: `AIOT-SWAP-USDT` answered `0` on 2026-11-08 and the desk correctly showed it as missing (the venue's own `?symbol=` filtered read agreed).
+- Weight note for future readers: `ticker/price` is 1 whether filtered or not; `ticker/24hr` costs 40 unfiltered. Batch reads must use `ticker/price`.
+
+**Agent surface (informational):** the venue also ships an MCP server (`toobit-trade-mcp`, `api-docs.toobit.com/agent/mcp-server.html`) whose **market module needs no API key** and whose futures tools require the dash form (`BTC-SWAP-USDT`). It is an agent-facing wrapper over the same REST endpoints above; nothing in the trading plane depends on it, and it does not change the egress asymmetry in S6.
+
+

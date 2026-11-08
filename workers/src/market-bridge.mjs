@@ -23,8 +23,12 @@
 import { DEFAULT_WATCHER_URL } from "./proxy.mjs";
 
 /** Bounded like the dashboard's own ceiling: a tick must never wait on a slow
- *  plane. The Go side bounds itself at 8s, this is the client's own ceiling. */
-export const MARKET_TIMEOUT_MS = 6_000;
+ *  plane. 10s is deliberate — the Go plane reads the SAME venue once per symbol
+ *  with up to 8 in flight (~1-2s for a 25-symbol cockpit tick, verified live),
+ *  and a Render cold start can eat the first few seconds. The previous 6s
+ *  deadline is exactly why a 25-symbol tick came back EMPTY: the Go answer
+ *  arrived after the Worker had stopped listening (2026-11-08). */
+export const MARKET_TIMEOUT_MS = 10_000;
 
 /** watcherMarketBase — the Go-plane origin, or null when the operator
  *  explicitly disabled the handoff (`GO_WATCHER_URL = ""`). Mirrors

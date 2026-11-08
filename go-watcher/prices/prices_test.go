@@ -2,9 +2,11 @@ package prices
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -244,6 +246,59 @@ func TestSnapshotGet(t *testing.T) {
 	}
 	if _, ok := snap.Get("ETHUSDT"); ok {
 		t.Fatal("absent symbol must miss")
+	}
+}
+
+// ── the REST fill is PARALLEL (2026-11-08) ───────────────────────────────────
+//
+// Regression this file exists for: the control plane asks for the symbols a desk
+// RENDERS (up to 25), and a sequential REST fill took ~0.5s per symbol — 12s for
+// 25, longer than the Worker's 6s bridge deadline, so the desk showed
+// "price UNAVAILABLE ... venue HTTP 403" for symbols the venue had answered.
+// The fake venue below only answers once FOUR requests are in flight at the same
+// moment: an in-order implementation can never satisfy it and dies on the
+// snapshot's own deadline, while the bounded pool returns every price.
+func TestFetchFillsTheRESTPassInParallel(t *testing.T) {
+	const want = 4
+	var mu sync.Mutex
+	waiting := 0
+	released := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		waiting++
+		if waiting >= want {
+			select {
+			case <-released: // already closed by an earlier arrival
+			default:
+				close(released)
+			}
+		}
+		mu.Unlock()
+		select {
+		case <-released:
+		case <-time.After(4 * time.Second): // a sequential fill never gets here
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = fmt.Fprintf(w, `[{"s":%q,"p":"100"}]`, r.URL.Query().Get("symbol"))
+	}))
+	defer srv.Close()
+	t.Setenv("TOOBIT_BASE", srv.URL)
+
+	start := time.Now()
+	snap := Fetch(context.Background(), []string{"AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT"})
+	elapsed := time.Since(start)
+
+	if len(snap.Prices) != want {
+		t.Fatalf("priced %d/%d symbols in %s (missing %v) — the REST pass is still sequential",
+			len(snap.Prices), want, elapsed, snap.Missing)
+	}
+	for _, p := range snap.Prices {
+		if p.Src != "toobit-rest" || p.Px != "100" {
+			t.Fatalf("unexpected price row %+v", p)
+		}
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("parallel fill took %s — one snapshot must not serialise 25 symbols", elapsed)
 	}
 }
 

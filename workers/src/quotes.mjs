@@ -26,6 +26,22 @@ import { fetchMarketPrices } from "./market-bridge.mjs";
 
 export const MAX_FILTERED = 25;   // per-call cap on the per-symbol filtered mode
 export const FULL_TTL_MS = 5_000; // in-isolate cache for the whole-venue answer
+/** VENUE_BLOCK_MS — how long a REFUSED venue (401/403/451) is left alone.
+ *
+ *  WHY: when the venue answers 403 to Cloudflare's egress it answers it for
+ *  EVERY symbol, so a 25-symbol cockpit tick spent ~8.5s collecting 25 identical
+ *  refusals before the Go-plane bridge (which does answer) was even asked — most
+ *  of a 15s freshness budget burned on an answer we already know. A blocked venue
+ *  is now skipped for this window, which still means one real attempt per minute:
+ *  recovery is automatic and costs one weight-1 request, while the desk gets its
+ *  numbers in ~1s.
+ *  ONLY an auth/geo refusal trips it — a transport error may be a blip and must
+ *  never freeze the direct path. */
+export const VENUE_BLOCK_MS = 60_000;
+let venueBlockedUntil = 0;
+/** Test hook: forget a tripped breaker (a fresh isolate starts unblocked). */
+export function resetVenueBlock() { venueBlockedUntil = 0; }
+const isBlockStatus = (status) => status === 401 || status === 403 || status === 451;
 /** SNAPSHOT_WRITE_MS throttles the D1 write of the last-known price per symbol:
  *  the cockpit polls every 15s and the venue rarely moves a row's purpose, so
  *  one upsert a minute per symbol keeps the fallback warm without turning a
@@ -137,7 +153,12 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
     const prices = {};
     let missing = [];
     let venueError = null;
+    // A venue that just refused us is not worth asking 25 more times (see
+    // VENUE_BLOCK_MS). Nothing is spent while skipped, because nothing is sent.
+    const venueSkipped = venueBlockedUntil > nowMs;
+    if (venueSkipped) venueError = "venue blocked (recent HTTP 403) — venue skipped";
     for (const symbol of wanted) {
+      if (venueSkipped) { missing.push(symbol); continue; }
       window.spend(nowMs, 1);
       let res = null;
       try {
@@ -147,6 +168,8 @@ export async function listPrices(env, { url, fetchFn = fetch, nowMs = Date.now()
         venueError = venueError ?? `venue unreachable: ${e?.message ?? e}`;
       }
       if (res && res.status !== 200) venueError = venueError ?? `venue HTTP ${res.status}`;
+      if (res?.status === 200) venueBlockedUntil = 0;                 // it answers again
+      else if (isBlockStatus(res?.status)) venueBlockedUntil = nowMs + VENUE_BLOCK_MS;
       const rows = res?.status === 200 ? parseQuotes(res.body, [symbol], { venueForm: true }) : [];
       const row = rows.find((r) => r.symbol === symbol);
       if (row) prices[symbol] = String(row.price);

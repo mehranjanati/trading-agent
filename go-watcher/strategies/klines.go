@@ -122,9 +122,16 @@ func toobitKlines(symbol, interval string) ([]CandleWire, error) {
 }
 
 // okxKlines: GET https://www.okx.com/api/v5/market/candles
-// (instId=CELR-USDT, bar=1H, limit). Rows are [ts_ms, o, h, l, c, vol, ...]
+// (instId=BTC-USDT-SWAP, bar=1H, limit). Rows are [ts_ms, o, h, l, c, vol, ...]
 // but NEWEST FIRST — they are reversed to the oldest-first wire order.
 // code "0" is success, anything else is an error (e.g. unknown instrument).
+//
+// FUTURES-ONLY (2026-11-08): the instId MUST be the SWAP (perpetual) instrument.
+// Requesting `BTC-USDT` answers the SPOT book, which is a different market from
+// the one this platform trades (D-06: Toobit USDT-M perpetuals) — a strategy
+// signalled on spot candles is not a signal about our instrument. An instrument
+// OKX does not list as a swap (e.g. CELR) therefore falls THROUGH to the next
+// provider instead of quietly answering spot.
 func okxKlines(symbol, interval string) ([]CandleWire, error) {
 	bar, ok := map[string]string{"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H"}[interval]
 	if !ok {
@@ -149,20 +156,25 @@ func okxKlines(symbol, interval string) ([]CandleWire, error) {
 	return rowsToWire(body.Data)
 }
 
-// okxInst maps venue symbols (CELRUSDT) to OKX instruments (CELR-USDT).
+// okxInst maps venue symbols (CELRUSDT) to OKX's USDT-M PERPETUAL instrument
+// (CELR-USDT-SWAP) — never to spot (CELR-USDT).
 func okxInst(symbol string) string {
 	if strings.HasSuffix(symbol, "USDT") && len(symbol) > 4 {
-		return symbol[:len(symbol)-4] + "-USDT"
+		return symbol[:len(symbol)-4] + "-USDT-SWAP"
 	}
 	return symbol
 }
 
-// binanceKlines: GET https://api.binance.com/api/v3/klines
+// binanceKlines: GET https://fapi.binance.com/fapi/v1/klines (USDT-M futures)
 // rows are [open_time, open, high, low, close, volume, close_time, ...]
 // with numeric strings.
+//
+// FUTURES-ONLY (2026-11-08): the host is fapi (USDT-M perpetuals), NOT
+// api.binance.com/api/v3 (spot). Same reason as okxKlines: the analysis must see
+// the book the order would actually fill against (D-06).
 func binanceKlines(symbol, interval string) ([]CandleWire, error) {
 	var rows [][]any
-	u := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d", symbol, interval, klinesLimit)
+	u := fmt.Sprintf("https://fapi.binance.com/fapi/v1/klines?symbol=%s&interval=%s&limit=%d", symbol, interval, klinesLimit)
 	if err := getJSON(u, &rows); err != nil {
 		return nil, err
 	}

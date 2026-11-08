@@ -112,3 +112,64 @@ func TestValidSymbolMirrorsTheWorkerRegex(t *testing.T) {
 		}
 	}
 }
+
+// ── the BATCH ticker read (what /api/market/prices uses) ────────────────────
+//
+// Regression this file exists for: the venue's per-request TLS handshake
+// measured up to 6.8s, so 25 per-symbol reads (the cockpit sidebar) either timed
+// out or blew the caller's deadline and the desk showed "price UNAVAILABLE ...
+// venue HTTP 403" for symbols the venue was answering. ONE unfiltered read is
+// weight 1 instead of 25, one handshake instead of 25, and covers every listed
+// market — but it must not let the spot book or a broken price in.
+func TestParseVenueTickersKeepsOnlyPerpetualPrices(t *testing.T) {
+	rows := []TickerRow{
+		{S: "BTC-SWAP-USDT", P: []byte(`"67000.5"`)},
+		{S: "ETH-SWAP-USDT", P: []byte(`3500`)},        // numeric scalar
+		{S: "BTCUSDT", P: []byte(`"67001"`)},           // spot echo: refused
+		{S: "DOGE-SWAP-USDC", P: []byte(`"0.2"`)},      // USDC-margined: refused
+		{S: "SOL-SWAP-USDT", P: []byte(`"0"`)},         // zero is missing, not a price
+		{S: "XRP-SWAP-USDT", P: []byte(`"not-a-num"`)}, // garbage: refused
+		{S: "", P: []byte(`"1"`)},
+	}
+	got := ParseVenueTickers(rows)
+	want := map[string]string{"BTCUSDT": "67000.5", "ETHUSDT": "3500"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tickers = %v, want %v", got, want)
+	}
+}
+
+func TestVenueTickersReadsTheUnfilteredPath(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`[{"s":"BTC-SWAP-USDT","si":"BTC-SWAP-USDT","p":"82440"},{"s":"ACN-SWAP-USDT","p":"258.84"}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("TOOBIT_BASE", srv.URL)
+
+	got, err := VenueTickers(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if query != "" {
+		t.Fatalf("the batch read must be UNFILTERED (one weight-1 read), got ?%s", query)
+	}
+	if got["BTCUSDT"] != "82440" || got["ACNUSDT"] != "258.84" {
+		t.Fatalf("tickers = %v", got)
+	}
+}
+
+func TestVenueTickersNeverAnswersAnEmptyMap(t *testing.T) {
+	// A spot-only answer must be an ERROR: an empty success would be handed to
+	// the Worker as "no price exists for these symbols".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"s":"BTCUSDT","p":"67000"}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("TOOBIT_BASE", srv.URL)
+	if _, err := VenueTickers(context.Background()); err == nil {
+		t.Fatal("a spot-only ticker must be an error, not an empty batch")
+	}
+}
+

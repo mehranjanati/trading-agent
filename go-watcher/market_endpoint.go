@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -34,8 +35,9 @@ import (
 const maxMarketSymbols = 25
 
 // marketTimeout bounds one whole request — a dashboard tick must never wait on
-// a slow venue (the Worker's own ceiling is 6s).
-const marketTimeout = 8 * time.Second
+// a slow venue (the Worker's own ceiling is 10s, so this leaves a margin to reply
+// instead of being cut off from the other side).
+const marketTimeout = 9 * time.Second
 
 func writeMarketJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("content-type", "application/json")
@@ -81,7 +83,13 @@ func serveMarketSymbols(w http.ResponseWriter, r *http.Request) {
 //	200 {"at":<ms>,"prices":[{"symbol","px","ts","src","age_ms","stale"}],"missing":["..."]}
 //	400 {"code":"VALIDATION",...}   502 {"code":"MARKET_UNAVAILABLE",...}
 //
-// Unanswered symbols stay in `missing` — a price is never invented here either.
+// SHAPE OF THE READ (2026-11-08): the batch is answered by ONE unfiltered venue
+// ticker read — weight 1 for up to 25 symbols instead of 25 — because the venue's
+// per-request TLS handshake measured up to 6.8s and made the per-symbol fill both
+// slower than the caller's deadline and more expensive than the list itself. Only
+// symbols that list does not carry fall through to prices.Fetch (Redis last tick
+// → Toobit filtered → Binance), which is where coverage for a venue-less symbol
+// comes from. Unanswered symbols stay in `missing` — a price is never invented.
 func serveMarketPrices(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		writeMarketErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET only")
@@ -99,12 +107,48 @@ func serveMarketPrices(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), marketTimeout)
 	defer cancel()
-	snap := prices.Fetch(ctx, wanted)
+
+	priced := make(map[string]prices.Price, len(wanted))
+	var leftovers []string
+	if tickers, err := prices.VenueTickers(ctx); err == nil {
+		ts := time.Now().UnixMilli()
+		for _, sym := range wanted {
+			px, ok := tickers[sym]
+			if !ok {
+				leftovers = append(leftovers, sym)
+				continue
+			}
+			priced[sym] = prices.Price{Symbol: sym, Px: px, Ts: ts, Src: "toobit-rest"}
+		}
+	} else {
+		leftovers = wanted // the batch read failed: per-symbol fallbacks decide
+	}
+	missing := []string{}
+	if len(leftovers) > 0 {
+		snap := prices.Fetch(ctx, leftovers)
+		for _, p := range snap.Prices {
+			priced[p.Symbol] = p
+		}
+		missing = append(missing, snap.Missing...)
+	}
+	out := make([]prices.Price, 0, len(priced))
+	for _, p := range priced {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Symbol < out[j].Symbol })
+	sort.Strings(missing)
+	if len(out) == 0 && len(missing) > 0 {
+		// Nothing answered at all: a 502 is honest (the Worker then keeps its own
+		// D1 layer), while an empty 200 would read like "no price exists".
+		writeMarketErr(w, http.StatusBadGateway, "MARKET_UNAVAILABLE",
+			"no price for "+strings.Join(missing, ",")+" from the venue ticker or the per-symbol fallbacks")
+		return
+	}
 	writeMarketJSON(w, http.StatusOK, struct {
 		At      int64          `json:"at"`
 		Prices  []prices.Price `json:"prices"`
 		Missing []string       `json:"missing"`
-	}{snap.At, snap.Prices, snap.Missing})
+	}{time.Now().UnixMilli(), out, missing})
 }
 
 // parseSymbolList splits + uppercases + dedupes + validates the query param.

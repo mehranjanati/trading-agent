@@ -9,14 +9,22 @@ import (
 	"testing"
 )
 
-// okxInst mapping: venue symbol → OKX instrument.
+// okxInst mapping: venue symbol → OKX USDT-M PERPETUAL instrument.
+//
+// FUTURES-ONLY (2026-11-08): the mapping must produce `-USDT-SWAP` (perpetual),
+// never `-USDT` (spot). A strategy signalled on spot candles is a signal about a
+// market we do not trade (D-06: Toobit USDT-M perpetuals), and the basis between
+// the two books is exactly the kind of difference the analysis must not invent.
 func TestOkxInst(t *testing.T) {
 	for sym, want := range map[string]string{
-		"CELRUSDT": "CELR-USDT", "BTCUSDT": "BTC-USDT", "SOLUSDT": "SOL-USDT",
+		"CELRUSDT": "CELR-USDT-SWAP", "BTCUSDT": "BTC-USDT-SWAP", "SOLUSDT": "SOL-USDT-SWAP",
 	} {
 		if got := okxInst(sym); got != want {
 			t.Errorf("okxInst(%s) = %s, want %s", sym, got, want)
 		}
+	}
+	if got := okxInst("BTC-USDT"); strings.HasSuffix(got, "-USDT") && !strings.HasSuffix(got, "-SWAP") {
+		t.Errorf("okxInst must never resolve to a SPOT instrument: %s", got)
 	}
 }
 
@@ -71,10 +79,15 @@ func TestToobitKlinesLive(t *testing.T) {
 	}
 }
 
-// OKX: CELR must come back through the new fallback — oldest-first after
-// the in-code reversal. Skips (never fails) when the network is blocked.
-func TestOkxKlinesLiveCELR(t *testing.T) {
-	rows, err := okxKlines("CELRUSDT", "1h")
+// OKX: the PERPETUAL instrument must come back — oldest-first after the in-code
+// reversal. CELR has no OKX swap, so it must FAIL (and fall through) rather than
+// answer spot; BTC does, and is the positive case. Skips (never fails) when the
+// network is blocked.
+func TestOkxKlinesLiveUsesTheSwapInstrument(t *testing.T) {
+	if _, err := okxKlines("CELRUSDT", "1h"); err == nil {
+		t.Fatal("CELR has no OKX perpetual — the spot book (CELR-USDT) must not be used")
+	}
+	rows, err := okxKlines("BTCUSDT", "1h")
 	if err != nil {
 		t.Skipf("okx unreachable from here: %v", err)
 	}

@@ -1,7 +1,7 @@
 // quotes.test.mjs — /api/prices: filtered + full venue reads, budget, fail-soft.
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { listPrices, resetFullCache, resetSnapshotThrottle, MAX_FILTERED, SNAPSHOT_WRITE_MS } from "./quotes.mjs";
+import { listPrices, resetFullCache, resetSnapshotThrottle, resetVenueBlock, MAX_FILTERED, SNAPSHOT_WRITE_MS, VENUE_BLOCK_MS } from "./quotes.mjs";
 import { createWindow, REST_BASE } from "./fallback-poll.mjs";
 
 const url = (q = "") => new URL(`https://worker.dev/api/prices${q}`);
@@ -9,7 +9,7 @@ const freshWindow = () => createWindow({ budget: 3000 });
 const res = (status, list) => ({ status, text: async () => JSON.stringify(list) });
 
 describe("quotes — filtered mode", () => {
-  beforeEach(resetFullCache);
+  beforeEach(() => { resetFullCache(); resetVenueBlock(); });
 
   it("sends the venue (dash) form and canonicalises the answer", async () => {
     const seen = [];
@@ -66,7 +66,7 @@ describe("quotes — filtered mode", () => {
 });
 
 describe("quotes — full mode", () => {
-  beforeEach(resetFullCache);
+  beforeEach(() => { resetFullCache(); resetVenueBlock(); });
 
   it("answers the whole venue from ONE unfiltered weight-1 request, then serves the 5s cache", async () => {
     let calls = 0;
@@ -141,7 +141,7 @@ function snapshotDb(seed = {}) {
 }
 
 describe("quotes — D1 last-known-price fallback", () => {
-  beforeEach(() => { resetFullCache(); resetSnapshotThrottle(); });
+  beforeEach(() => { resetFullCache(); resetSnapshotThrottle(); resetVenueBlock(); });
 
   it("records a live price so the NEXT blocked request can answer", async () => {
     const DB = snapshotDb();
@@ -196,7 +196,7 @@ describe("quotes — D1 last-known-price fallback", () => {
 // price either — so `prices` came back EMPTY and the desk had no number. The
 // venue stays first; only the symbols it refused travel over the bridge.
 describe("quotes — Go-plane gap fill when the venue blocks Cloudflare", () => {
-  beforeEach(() => { resetFullCache(); resetSnapshotThrottle(); });
+  beforeEach(() => { resetFullCache(); resetSnapshotThrottle(); resetVenueBlock(); });
 
   const bridgeEnv = () => ({ GO_WATCHER_URL: "https://go.example" });
 
@@ -266,5 +266,53 @@ describe("quotes — Go-plane gap fill when the venue blocks Cloudflare", () => 
     assert.equal(r.prices.BTCUSDT, "83838");
     assert.equal(r.source, "venue");
     assert.equal(bridged, 0);
+  });
+
+  // A 25-symbol cockpit tick used to spend ~8.5s collecting 25 identical 403s
+  // before the bridge was even asked — most of the desk's 15s budget burned on an
+  // answer we already had. The breaker skips a venue that just refused us, and
+  // still re-tries it once per VENUE_BLOCK_MS so recovery stays automatic.
+  it("stops asking a venue that just refused it — and tries again later", async () => {
+    resetVenueBlock();
+    const venueCalls = () => calls.filter((c) => c.includes("api.toobit.com")).length;
+    const calls = [];
+    const fetchFn = async (u) => {
+      const s = String(u);
+      calls.push(s);
+      if (s.startsWith("https://go.example")) {
+        return { status: 200, text: async () => JSON.stringify({ prices: [{ symbol: "BTCUSDT", px: "1" }] }) };
+      }
+      return res(403, []); // the Toobit → Cloudflare answer
+    };
+    const win = freshWindow();
+    const first = await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT,ETHUSDT"), fetchFn, nowMs: 1_000, window: win });
+    assert.equal(venueCalls(), 2, "the first tick does try the venue, per symbol");
+    assert.equal(first.prices.BTCUSDT, "1");
+
+    // Inside the block window the venue is not asked at all — not once per symbol.
+    const before = venueCalls();
+    const second = await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT,ETHUSDT"), fetchFn, nowMs: 2_000, window: win });
+    assert.equal(venueCalls(), before, "a blocked venue must not be re-asked for every symbol");
+    assert.equal(second.prices.BTCUSDT, "1", "the bridge still answers");
+    assert.equal(win.usage(2_000), 2, "nothing is spent on a venue we did not call");
+
+    // After the window it tries again by itself — no manual reset, ever.
+    await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 2_000 + VENUE_BLOCK_MS, window: win });
+    assert.equal(venueCalls(), before + 1, "the window expires into one fresh attempt");
+  });
+
+  it("a transport error must NOT trip the breaker (it may be a blip)", async () => {
+    resetVenueBlock();
+    let venueCalls = 0;
+    const fetchFn = async (u) => {
+      if (String(u).startsWith("https://go.example")) {
+        return { status: 200, text: async () => JSON.stringify({ prices: [{ symbol: "BTCUSDT", px: "1" }] }) };
+      }
+      venueCalls++;
+      throw new Error("socket hang up");
+    };
+    await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_000, window: freshWindow() });
+    await listPrices(bridgeEnv(), { url: url("?symbols=BTCUSDT"), fetchFn, nowMs: 1_500, window: freshWindow() });
+    assert.equal(venueCalls, 2, "a thrown transport error is retried on the next tick");
   });
 });

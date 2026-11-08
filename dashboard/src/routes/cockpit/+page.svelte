@@ -77,29 +77,20 @@
 
   async function refresh() {
     // ADR-004: quote the symbols this desk RENDERS — the selection plus the
-    // sidebar rows below it — capped at the worker's MAX_PRICE_SYMBOLS. The old
-    // call asked for the WHOLE venue (~1000 rows / 61KB) on every 15s tick just
-    // to paint one number; pricing only the selection instead (the previous fix)
-    // went too far the other way and left every other row a dash.
-    const targets = priceTargets();
-    const [health, symbols, watches, approvals, intents, positions, prices] = await Promise.all([
+    // sidebar rows below it — capped at the worker's MAX_PRICE_SYMBOLS. The price
+    // read is its OWN request (not one of the six) so a slow go-watcher answer
+    // cannot pin the whole desk snapshot, and its result is applied under the
+    // request-generation guard in refreshPrices.
+    const [health, symbols, watches, approvals, intents, positions] = await Promise.all([
       getHealth(),
       getSymbols(),
       getWatchesAll(),
       getApprovals(),
       getIntents(),
       getPositions(),
-      getPrices(targets),
     ]);
-    snap = { health, symbols, watches, approvals, intents, positions, prices };
-    // The selection moved while this tick was in flight: the answer we just got
-    // is for the OLD targets, so price the current ones instead of waiting 15s.
-    // Otherwise record what this tick just priced, so the reactive block below
-    // does not fire a duplicate request for the identical set.
-    const nowKey = priceTargets().join(",");
-    const gotKey = targets.join(",");
-    if (nowKey !== gotKey) void refreshPrices(nowKey.split(","));
-    else pricedKey = gotKey;
+    snap = { health, symbols, watches, approvals, intents, positions, prices: snap?.prices ?? null };
+    void refreshPrices(priceTargets());
   }
 
   async function bootCatalog() {
@@ -154,6 +145,8 @@
   // AND the sidebar rows the trader is looking at (ADR-004: quote what you
   // draw). Guarded by pricedKey so the reactive block cannot re-trigger itself.
   let pricedKey = "";
+  let priceReqId = 0;
+  let priceInFlightKey = "";
 
   /** priceTargets — the symbols this render actually draws a number for:
    *  the selection first, then the visible sidebar rows, capped at the worker's
@@ -163,19 +156,33 @@
     return [...new Set([symbol, ...rows].filter(Boolean))].slice(0, MAX_PRICE_SYMBOLS);
   }
 
-  // Only react once a price answer EXISTS: the first tick (onMount → refresh)
-  // owns the initial quote, so this block cannot fire into an empty snapshot and
-  // throw its answer away (the old `lastPricedSymbol` guard did exactly that).
   $: currentPriceKey = priceTargets().join(",");
-  $: if (snap?.prices && currentPriceKey && currentPriceKey !== pricedKey) {
+  $: if (snap && currentPriceKey && currentPriceKey !== pricedKey) {
     void refreshPrices(currentPriceKey.split(","));
   }
 
+  /** refreshPrices — ONE price read, applied only while it is still the newest.
+   *
+   *  THE RACE THIS CLOSES (2026-11-08, the "DUSKUSDT was not among them" report):
+   *  the go-watcher bridge can take seconds, so a read started BEFORE the
+   *  operator switched symbols lands AFTER the switch — and overwriting the
+   *  snapshot with it showed a 25/25-answered tick whose 25 symbols were the
+   *  PREVIOUS selection's, with the new selection missing. A superseded answer is
+   *  now dropped; the desk waits for the read it actually asked for, and the
+   *  note says "fetching now" while that is in flight. */
   async function refreshPrices(symbols: string[]) {
-    pricedKey = symbols.join(",");
-    const r = await getPrices(symbols);
-    if (!snap) return;
-    snap = { ...snap, prices: r };
+    const key = symbols.join(",");
+    pricedKey = key; // the reactive block stays quiet while this is in flight
+    if (priceInFlightKey === key) return; // this exact set is already being read
+    const myId = ++priceReqId;
+    priceInFlightKey = key;
+    try {
+      const r = await getPrices(symbols);
+      if (!snap || myId !== priceReqId) return; // superseded by a newer request
+      snap = { ...snap, prices: r };
+    } finally {
+      if (priceInFlightKey === key) priceInFlightKey = "";
+    }
   }
 
   $: tradeable = symbolsData ? isTradeable(symbolsData, symbol) : false;
@@ -265,9 +272,11 @@
   // a silent dash (docs/09 §9.4: never a blank that looks like "no data").
   $: pxNote = px
     ? null
-    : snap?.prices && !snap.prices.ok
-      ? snap.prices.error
-      : partialPriceNote((snap?.prices?.data as PricesData | undefined) ?? null, symbol, priceTargets().length) ?? "venue did not answer this symbol";
+    : priceInFlightKey === currentPriceKey
+      ? "fetching now — the go-watcher read for this tick is in flight (the bridge can take a few seconds)"
+      : snap?.prices && !snap.prices.ok
+        ? snap.prices.error
+        : partialPriceNote((snap?.prices?.data as PricesData | undefined) ?? null, symbol, priceTargets().length) ?? "venue did not answer this symbol";
   $: approvalsBadge = badgeForApi(snap?.approvals ?? null);
   $: ordersBadge = badgeForApi(snap?.intents ?? null);
 </script>

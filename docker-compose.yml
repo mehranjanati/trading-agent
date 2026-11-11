@@ -8,6 +8,11 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ta-redis
+    # 2026-11-10: a Docker Desktop restart left ta-redis Exited(255) while
+    # ta-go-watcher auto-restarted — the watcher then reported
+    # redis_reachable=false and the Worker sat in DEGRADED for hours. Same
+    # restart policy as go-watcher so a daemon bounce cannot orphan it.
+    restart: unless-stopped
     # Host 6379 = an existing local redis, 6380 = vibesdk-redis → publish 6381.
     # Inside the compose network the watcher uses redis:6379 regardless.
     ports:

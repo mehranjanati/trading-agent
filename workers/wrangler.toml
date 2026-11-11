@@ -22,17 +22,15 @@ migrations_dir = "../migrations"
 [vars]
 ENV = "paper"
 HUMAN_APPROVAL_REQUIRED = "true"
-# E14-T02 proxy base: the go-watcher origin behind /analyze and
-# /strategies/registry. 2026-11-10 FAILOVER: the Render origin
-# (trading-agent-knpg.onrender.com) began answering 429/challenge to
-# server-to-server fetches (Cloudflare bot mitigation in front of Render), which
-# broke the deep-analysis proxy. The analysis plane moved onto the LOCAL
-# go-watcher (docker ta-go-watcher — already the live heartbeat + trigger-loop
-# plane) behind a cloudflared quick tunnel (scripts/dev-tunnel.sh). The quick
-# tunnel URL is EPHEMERAL: after restarting it, update BOTH wrangler.toml files
-# to the new URL and re-deploy. To move back to Render, restore the old URL.
-# (proxy.mjs DEFAULT_WATCHER_URL mirrors the pre-failover base.)
-GO_WATCHER_URL = "https://math-too-staffing-deal.trycloudflare.com"
+# E14-T02 proxy base: the go-watcher origin (Render) behind /analyze and
+# /strategies/registry. Any per-env GO_WATCHER_URL set in the Cloudflare
+# dashboard overrides this default; the proxy.mjs DEFAULT_WATCHER_URL mirrors
+# it for environments without any vars at all.
+# 2026-11-10: Render briefly answered 429/challenge to server-to-server fetches
+# (Cloudflare bot mitigation in front of it). If that returns, the documented
+# local failover recipe is scripts/dev-tunnel.sh (quick tunnel + GO_WATCHER_URL
+# override); do NOT commit a dead *.trycloudflare.com URL.
+GO_WATCHER_URL = "https://trading-agent-knpg.onrender.com"
 # AI strategy codegen model (override without redeploying code).
 # qwen3-30b-a3b-fp8: MoE 30B with ~3B active params → fast, $0.0509/M in +
 # $0.335/M out (13x cheaper input than qwen2.5-coder-32b, ~3.5x more free-tier

@@ -45,16 +45,15 @@ AI_MODEL_FALLBACK = "@cf/qwen/qwen2.5-coder-32b-instruct"
 AI_VISION_MODEL = "@cf/qwen/qwen3.8-27b"
 # Embedding model for RAG semantic search (Vectorize). No API keys — Workers AI.
 AI_EMBEDDING_MODEL = "@cf/baai/bge-m3"
-# E14-T02 proxy base: the go-watcher origin behind /analyze and
-# /strategies/registry. 2026-11-10 FAILOVER: the Render origin
-# (trading-agent-knpg.onrender.com) began answering 429/challenge to
-# server-to-server fetches (Cloudflare bot mitigation in front of Render), which
-# broke the deep-analysis proxy. The analysis plane moved onto the LOCAL
-# go-watcher (docker ta-go-watcher — already the live heartbeat + trigger-loop
-# plane) behind a cloudflared quick tunnel (scripts/dev-tunnel.sh). The quick
-# tunnel URL is EPHEMERAL: after restarting it, update BOTH wrangler.toml files
-# to the new URL and re-deploy. To move back to Render, restore the old URL.
-GO_WATCHER_URL = "https://math-too-staffing-deal.trycloudflare.com"
+# E14-T02 proxy base: the go-watcher origin (Render) behind /analyze and
+# /strategies/registry. Any per-env GO_WATCHER_URL set in the Cloudflare
+# dashboard overrides this default; the dashboard fallback keeps working when
+# neither side's VITE_* values are baked in.
+# 2026-11-10: Render briefly answered 429/challenge to server-to-server fetches
+# (Cloudflare bot mitigation in front of it). If that returns, the documented
+# local failover recipe is scripts/dev-tunnel.sh (quick tunnel + GO_WATCHER_URL
+# override); do NOT commit a dead *.trycloudflare.com URL.
+GO_WATCHER_URL = "https://trading-agent-knpg.onrender.com"
 
 # AI strategy generation (chat → Go code). Workers AI binding, no API keys.
 [ai]

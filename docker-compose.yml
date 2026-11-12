@@ -23,6 +23,27 @@ services:
       timeout: 2s
       retries: 10
 
+  # 2026-11-12 FAILOVER: Render (GO_WATCHER_URL origin) answers 429/challenge to
+  # server-to-server fetches AND the venue 403s Cloudflare egress — so the only
+  # working Toobit egress is this Mac's watcher (already the live heartbeat +
+  # trigger-loop plane). This quick tunnel exposes it to the Worker for
+  # /analyze, /strategies/registry and /api/market/*. CAVEAT: a quick tunnel
+  # mints a NEW *.trycloudflare.com URL on every start — after any restart read
+  # the URL from `docker logs ta-tunnel`, update GO_WATCHER_URL in BOTH
+  # wrangler.toml files and re-deploy. Durable fix: a NAMED tunnel
+  # (cloudflared tunnel login) or a recovered Render.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: ta-tunnel
+    # --protocol http2: this network throttles UDP (QUIC to the edge times out —
+    # "failed to dial to edge with quic: timeout"), so the tunnel is pinned to
+    # the TCP/HTTP2 transport. Without it the quick tunnel flaps and its
+    # *.trycloudflare.com hostname stops resolving.
+    command: tunnel --no-autoupdate --protocol http2 --url http://go-watcher:8080
+    depends_on:
+      - go-watcher
+    restart: unless-stopped
+
   go-watcher:
     build: ./go-watcher
     container_name: ta-go-watcher

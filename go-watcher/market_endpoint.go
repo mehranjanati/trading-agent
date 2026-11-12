@@ -35,9 +35,12 @@ import (
 const maxMarketSymbols = 25
 
 // marketTimeout bounds one whole request — a dashboard tick must never wait on
-// a slow venue (the Worker's own ceiling is 10s, so this leaves a margin to reply
-// instead of being cut off from the other side).
-const marketTimeout = 9 * time.Second
+// a slow venue forever, but it must also not cut the venue off mid-answer:
+// 2026-11-12 the full ticker list measured 9.2s live (the TLS handshake alone
+// measured 6.8s on a slow minute), so the old 9s budget 502'd exactly when the
+// answer was one second away. 25s keeps the read-only endpoint honest while
+// leaving the Worker's bridge (30s) the larger margin it needs.
+const marketTimeout = 25 * time.Second
 
 func writeMarketJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("content-type", "application/json")

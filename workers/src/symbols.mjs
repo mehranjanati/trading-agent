@@ -32,6 +32,7 @@
 import { fetchMarketSymbols } from "./market-bridge.mjs";
 
 export const SYMBOLS_PATH = "/quote/v1/contract/ticker/price";
+export const OKX_SYMBOLS_PATH = "/api/v5/public/instruments?instType=SWAP";
 export const SYMBOLS_TTL_MS = 3_600_000; // 1h — listings change rarely
 export const SYMBOL_RE = /^[A-Z]{2,12}USDT$/;
 
@@ -65,6 +66,24 @@ export function parseSymbols(body) {
 }
 
 export function symbolsCacheKey() { return "symbols:cache"; }
+
+/** parseOkxSymbols — the second venue's catalog (ADR-004 alternative D,
+ *  activated 2026-11-12): OKX `instruments?instType=SWAP` rows in the form
+ *  `BTC-USDT-SWAP`, live only, USDT-margined. The canonical form falls out of
+ *  the same canonicalSymbol rule the venue path uses (dashes removed, SWAP
+ *  removed), and bridgeCatalog enforces the repo-wide SYMBOL_RE universe so an
+ *  OKX-only listing can never widen the tradeable set. */
+export function parseOkxSymbols(body) {
+  const rows = Array.isArray(body?.data) ? body.data : [];
+  const raws = [];
+  for (const r of rows) {
+    const instId = String(r?.instId ?? "");
+    if (!instId.endsWith("-USDT-SWAP")) continue; // coin-margined (…-USD-SWAP) stays out
+    if (r?.state && r.state !== "live") continue; // pre-open / suspended rows stay out
+    raws.push(instId);
+  }
+  return bridgeCatalog(raws);
+}
 
 /** In-memory fallback when env.SYMBOLS_KV is absent (tests, --local). */
 const memCache = { at: 0, symbols: [], stale: false };
@@ -142,7 +161,7 @@ export async function d1Symbols(env) {
 export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now(), marketSymbols = fetchMarketSymbols } = {}) {
   const cached = await readCache(env);
   if (cached && nowMs - cached.at < SYMBOLS_TTL_MS) {
-    return { symbols: cached.symbols, allowlist: await activeAllowlist(env), stale: false, at: new Date(cached.at).toISOString() };
+    return { symbols: cached.symbols, allowlist: await activeAllowlist(env), stale: false, source: cached.source, at: new Date(cached.at).toISOString() };
   }
   let venueError = null;
   try {
@@ -151,12 +170,37 @@ export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now(), ma
     if (!res.ok) throw new Error(`venue HTTP ${res.status}`);
     const symbols = parseSymbols(await res.json());
     if (!symbols.length) throw new Error("venue returned no symbols");
-    const entry = { at: nowMs, symbols, stale: false };
+    const entry = { at: nowMs, symbols, stale: false, source: "toobit-rest" };
     await writeCache(env, entry);
     return { symbols, allowlist: await activeAllowlist(env), stale: false, at: new Date(nowMs).toISOString() };
   } catch (e) {
     venueError = e;
   }
+  // Second venue (ADR-004 alternative D, activated 2026-11-12): OKX answers
+  // where Toobit refuses Cloudflare egress, and — unlike the Go plane below —
+  // it needs NO other machine to be awake: one direct fetch, cached like a
+  // venue success. The universe rule (bridgeCatalog) is the same, so an
+  // OKX-only listing can never widen the tradeable set beyond SYMBOL_RE.
+  try {
+    const okxBase = (env.OKX_BASE ?? "https://www.okx.com").replace(/\/$/, "");
+    const res = await fetchFn(`${okxBase}${OKX_SYMBOLS_PATH}`);
+    if (!res.ok) throw new Error(`okx HTTP ${res.status}`);
+    const symbols = parseOkxSymbols(await res.json());
+    if (!symbols.length) throw new Error("okx returned no symbols");
+    // OKX's universe misses Toobit-only listings the platform already knows
+    // (EVAAUSDT was watched on the venue but is not on OKX): union the D1 rows
+    // back in so the picker keeps every symbol the venue itself served before.
+    const merged = bridgeCatalog([...symbols, ...(await d1Symbols(env))]);
+    await writeCache(env, { at: nowMs, symbols: merged, stale: false, source: "okx-rest" });
+    return {
+      symbols: merged,
+      allowlist: await activeAllowlist(env),
+      stale: false,
+      source: "okx-rest",
+      at: new Date(nowMs).toISOString(),
+    };
+  } catch (okxError) { /* the Go plane and the D1 fallback below still answer */ }
+
   // Second egress: our own Go plane reads the same venue from an IP the venue
   // does answer. It caches like a venue success (1h), so the fallback costs one
   // round-trip per TTL window, not one per dashboard poll.
@@ -164,7 +208,7 @@ export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now(), ma
   if (bridged?.length) {
     const symbols = bridgeCatalog(bridged);
     if (symbols.length) {
-      await writeCache(env, { at: nowMs, symbols, stale: false });
+      await writeCache(env, { at: nowMs, symbols, stale: false, source: "go-watcher" });
       return {
         symbols,
         allowlist: await activeAllowlist(env),

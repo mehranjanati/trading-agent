@@ -22,15 +22,18 @@ migrations_dir = "../migrations"
 [vars]
 ENV = "paper"
 HUMAN_APPROVAL_REQUIRED = "true"
-# E14-T02 proxy base: the go-watcher origin (Render) behind /analyze and
-# /strategies/registry. Any per-env GO_WATCHER_URL set in the Cloudflare
-# dashboard overrides this default; the proxy.mjs DEFAULT_WATCHER_URL mirrors
-# it for environments without any vars at all.
-# 2026-11-10: Render briefly answered 429/challenge to server-to-server fetches
-# (Cloudflare bot mitigation in front of it). If that returns, the documented
-# local failover recipe is scripts/dev-tunnel.sh (quick tunnel + GO_WATCHER_URL
-# override); do NOT commit a dead *.trycloudflare.com URL.
-GO_WATCHER_URL = "https://trading-agent-knpg.onrender.com"
+# E14-T02 proxy base: the go-watcher origin behind /analyze,
+# /strategies/registry and the market bridge (/api/market/*). 2026-11-12: the
+# venue answers 403 to Cloudflare's egress AND Render answers 429/challenge to
+# server-to-server fetches, so the analysis + market plane is the LOCAL
+# go-watcher (docker ta-go-watcher — the live heartbeat + trigger-loop plane)
+# behind a cloudflared quick tunnel with --protocol http2 (this network
+# throttles QUIC). The tunnel URL is EPHEMERAL: after a tunnel restart read the
+# new URL from `docker logs ta-tunnel`, update BOTH wrangler.toml files and
+# re-deploy (scripts/dev-tunnel.sh prints the same recipe). Restore the Render
+# URL (https://trading-agent-knpg.onrender.com) when Render recovers.
+# (proxy.mjs DEFAULT_WATCHER_URL mirrors the pre-failover base.)
+GO_WATCHER_URL = "https://phillips-county-determination-holds.trycloudflare.com"
 # AI strategy codegen model (override without redeploying code).
 # qwen3-30b-a3b-fp8: MoE 30B with ~3B active params → fast, $0.0509/M in +
 # $0.335/M out (13x cheaper input than qwen2.5-coder-32b, ~3.5x more free-tier
@@ -46,6 +49,14 @@ AI_MODEL_FALLBACK = "@cf/qwen/qwen2.5-coder-32b-instruct"
 AI_VISION_MODEL = "@cf/qwen/qwen3.8-27b"
 # Embedding model for RAG semantic search (Vectorize). No API keys — Workers AI.
 AI_EMBEDDING_MODEL = "@cf/baai/bge-m3"
+
+# Symbols cache (SYMBOLS_KV, workers/src/symbols.mjs layer 1) — the venue list
+# (~773 markets) must survive isolate churn: without this binding a good list
+# lived only in isolate memory and /api/symbols collapsed onto the 6 D1 rows
+# whenever the venue and the Go plane were both unreachable.
+[[kv_namespaces]]
+binding = "SYMBOLS_KV"
+id = "d806a9f68d044ab69bb1295f230bb5c3"
 
 # AI strategy generation (chat → Go code). Workers AI binding, no API keys.
 [ai]

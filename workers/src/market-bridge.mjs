@@ -22,14 +22,12 @@
 // failure it has to handle.
 import { DEFAULT_WATCHER_URL } from "./proxy.mjs";
 
-/** Bounded like the dashboard's own ceiling: a tick must never wait on a slow
- *  plane. 12s is deliberate — the Go plane budgets itself at 9s, and the gap is
- *  the margin that keeps a slow venue minute (its TLS handshake alone measured
- *  6.8s, and a 25-symbol answer measured 8-10s live) from being cut off by the
- *  Worker a second before it would have arrived. The previous 10s deadline sat
- *  exactly ON the Go budget, which is what made the desk flap between "price"
- *  and "UNAVAILABLE" tick by tick (2026-11-08). */
-export const MARKET_TIMEOUT_MS = 12_000;
+/** Bounded so a dead plane can never hang the caller. 30s is deliberate — the
+ *  Go plane budgets itself at 25s (2026-11-12: the full ticker list alone
+ *  measured 9.2s live, and the old 12s bridge deadline sat just above the
+ *  plane's old 9s budget, so a slow venue minute was cut off a second before
+ *  the answer arrived). The gap stays the caller's margin over the plane. */
+export const MARKET_TIMEOUT_MS = 30_000;
 
 /** watcherMarketBase — the Go-plane origin, or null when the operator
  *  explicitly disabled the handoff (`GO_WATCHER_URL = ""`). Mirrors

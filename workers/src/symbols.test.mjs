@@ -121,6 +121,11 @@ describe("symbols", () => {
     const fetchFn = async (u) => {
       const s = String(u);
       seen.push(s);
+      if (s.includes("/api/v5/public/instruments")) {
+        // OKX is asked BEFORE the Go plane (2026-11-12); here it is unreachable
+        // so the flow continues to the plane this test is about.
+        return { ok: false, status: 503, json: async () => ({}), text: async () => "" };
+      }
       if (s.startsWith("https://go.example/api/market/symbols")) {
         // The venue lists 1INCHUSDT; the repo-wide SYMBOL_RE refuses it, so the
         // bridge must not widen the universe just because the egress changed.
@@ -138,9 +143,57 @@ describe("symbols", () => {
     assert.equal(r.source, "go-watcher");
     assert.equal(r.stale, false, "a live venue read is not a stale cache");
     assert.match(seen[0], /^https:\/\/venue\.example/);
-    assert.match(seen[1], /^https:\/\/go\.example\/api\/market\/symbols$/);
+    assert.match(seen[1], /^https:\/\/www\.okx\.com\/api\/v5\/public\/instruments/); // second venue asked first (2026-11-12)
+    assert.match(seen[2], /^https:\/\/go\.example\/api\/market\/symbols$/);
 
     // The bridged catalog caches like a venue success: one round-trip per TTL.
+    const r2 = await listSymbols(env, {
+      fetchFn: async () => { throw new Error("must not fetch inside the TTL"); },
+      nowMs: 5_000 + SYMBOLS_TTL_MS - 1,
+    });
+    assert.deepEqual(r2.symbols, r.symbols);
+    assert.equal(r2.stale, false);
+  });
+
+  // ── second venue (2026-11-12) ───────────────────────────────────────────────
+  // The Go plane needs a machine that is awake; OKX is a DIRECT venue-family
+  // read the Worker can make itself. Same universe rule (bridgeCatalog), so the
+  // tradeable set can only ever shrink to the repo's canonical form.
+  it("venue 403 + OKX answers → the FULL catalog, source okx-rest, no other machine needed", async () => {
+    const env = {
+      DB: memDb(JSON.stringify({ allowlist: ["BTCUSDT"] })),
+      TOOBIT_BASE: "https://venue.example",
+      SYMBOLS_KV: kvStore(),
+      GO_WATCHER_URL: "https://go.example",
+    };
+    const seen = [];
+    const fetchFn = async (u) => {
+      const s = String(u);
+      seen.push(s);
+      if (s.includes("/api/v5/public/instruments")) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({ code: "0", data: [
+            { instId: "BTC-USDT-SWAP", state: "live" },
+            { instId: "ETH-USDT-SWAP", state: "live" },
+            { instId: "BTC-USD-SWAP", state: "live" },     // coin-margined stays out
+            { instId: "XRP-USDT-SWAP", state: "preopen" }, // not live stays out
+            { instId: "1INCH-USDT-SWAP", state: "live" },  // SYMBOL_RE refuses
+            { instId: "BTC-USDT-SWAP", state: "live" },    // dup stays out
+          ] }),
+          text: async () => "",
+        };
+      }
+      return { ok: false, status: 403, json: async () => ({}), text: async () => "" }; // Toobit → Cloudflare
+    };
+    const r = await listSymbols(env, { fetchFn, nowMs: 5_000 });
+    assert.deepEqual(r.symbols, ["BTCUSDT", "ETHUSDT"]);
+    assert.deepEqual(r.allowlist, ["BTCUSDT"]);
+    assert.equal(r.source, "okx-rest");
+    assert.equal(r.stale, false);
+    assert.match(seen[0], /^https:\/\/venue\.example/);
+    assert.match(seen[1], /^https:\/\/www\.okx\.com\/api\/v5\/public\/instruments/);
+    // The OKX catalog caches like a venue success: one round-trip per TTL.
     const r2 = await listSymbols(env, {
       fetchFn: async () => { throw new Error("must not fetch inside the TTL"); },
       nowMs: 5_000 + SYMBOLS_TTL_MS - 1,

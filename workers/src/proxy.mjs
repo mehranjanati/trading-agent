@@ -28,16 +28,31 @@ export function watcherBase(env) {
   return base;
 }
 
+// RETRY_STATUSES are the answers an EDGE produces when it cannot reach the
+// origin host mid-flight (2026-11-12: the quick tunnel re-registers every few
+// minutes; a request straddling the gap came back 502 on the dashboard while
+// the same call answered 200 seconds later). These routes are read-compute —
+// a retry recomputes an analysis, it never submits an order — so one retry is
+// safe and turns a tunnel blip into a normal answer.
+const RETRY_STATUSES = new Set([502, 503, 504]);
+
 async function pass(req, env, path) {
   const base = watcherBase(env);
   const url = `${base}${path}`;
-  const init = { method: req.method, headers: {} };
   const ct = req.headers.get("content-type");
-  if (ct) init.headers["content-type"] = ct;
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    init.body = await req.arrayBuffer();
+  // Buffer the body once: a retried fetch needs the SAME bytes (a consumed
+  // stream cannot be replayed).
+  const reqBody = req.method !== "GET" && req.method !== "HEAD" ? await req.arrayBuffer() : undefined;
+  let upstream;
+  for (let attempt = 1; ; attempt++) {
+    const init = { method: req.method, headers: {} };
+    if (ct) init.headers["content-type"] = ct;
+    if (reqBody !== undefined) init.body = reqBody;
+    upstream = await fetch(url, init);
+    if (!RETRY_STATUSES.has(upstream.status) || attempt >= 2) break;
+    await upstream.arrayBuffer(); // drain the failed response, then back off once
+    await new Promise((r) => setTimeout(r, 400));
   }
-  const upstream = await fetch(url, init);
   const body = await upstream.arrayBuffer();
   const headers = corsFor(req);
   const uctype = upstream.headers.get("content-type");

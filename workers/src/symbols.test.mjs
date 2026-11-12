@@ -143,8 +143,7 @@ describe("symbols", () => {
     assert.equal(r.source, "go-watcher");
     assert.equal(r.stale, false, "a live venue read is not a stale cache");
     assert.match(seen[0], /^https:\/\/venue\.example/);
-    assert.match(seen[1], /^https:\/\/www\.okx\.com\/api\/v5\/public\/instruments/); // second venue asked first (2026-11-12)
-    assert.match(seen[2], /^https:\/\/go\.example\/api\/market\/symbols$/);
+    assert.match(seen[1], /^https:\/\/go\.example\/api\/market\/symbols$/); // the plane answers before OKX (2026-11-12)
 
     // The bridged catalog caches like a venue success: one round-trip per TTL.
     const r2 = await listSymbols(env, {
@@ -192,7 +191,8 @@ describe("symbols", () => {
     assert.equal(r.source, "okx-rest");
     assert.equal(r.stale, false);
     assert.match(seen[0], /^https:\/\/venue\.example/);
-    assert.match(seen[1], /^https:\/\/www\.okx\.com\/api\/v5\/public\/instruments/);
+    assert.match(seen[1], /^https:\/\/go\.example\/api\/market\/symbols$/); // plane unreachable here
+    assert.match(seen[2], /^https:\/\/www\.okx\.com\/api\/v5\/public\/instruments/);
     // The OKX catalog caches like a venue success: one round-trip per TTL.
     const r2 = await listSymbols(env, {
       fetchFn: async () => { throw new Error("must not fetch inside the TTL"); },

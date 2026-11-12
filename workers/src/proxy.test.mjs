@@ -85,4 +85,40 @@ describe("go-plane proxy", () => {
       delete globalThis.fetch;
     }
   });
+
+  // 2026-11-12: the dashboard showed `analyze failed: HTTP 502` while the same
+  // call answered 200 seconds later — the quick tunnel re-registers and a
+  // request straddling the gap gets an EDGE 5xx. One retry inside the proxy
+  // turns that blip into the normal answer; read-compute only, never an order.
+  it("an edge 502 is retried once and the second answer wins", async () => {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      if (calls === 1) return new Response("bad gateway", { status: 502 });
+      return new Response(JSON.stringify({ id: "an_ok", verdicts: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      const proxy = proxyRoutes();
+      const res = await proxy.analyze(req("POST", "/analyze", { symbol: "BTCUSDT" }), { GO_WATCHER_URL: "https://go.test" });
+      assert.equal(calls, 2, "exactly one retry");
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.id, "an_ok");
+    } finally {
+      delete globalThis.fetch;
+    }
+  });
+
+  it("two edge 5xx answers surface as the last 5xx (no infinite retry)", async () => {
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return new Response("down", { status: 503 }); };
+    try {
+      const proxy = proxyRoutes();
+      const res = await proxy.analyze(req("POST", "/analyze", {}), { GO_WATCHER_URL: "https://go.test" });
+      assert.equal(calls, 2, "one retry, then give up");
+      assert.equal(res.status, 503);
+    } finally {
+      delete globalThis.fetch;
+    }
+  });
 });

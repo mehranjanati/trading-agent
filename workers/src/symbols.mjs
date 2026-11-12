@@ -176,8 +176,30 @@ export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now(), ma
   } catch (e) {
     venueError = e;
   }
+  // Second egress (PRIMARY fallback): our own Go plane reads the SAME venue
+  // from an IP the venue does answer. 2026-11-12: with a healthy egress it
+  // returns the true Toobit universe (855 rows) — the venue the orders would
+  // fill on — so it is asked BEFORE the OKX catalog below. It caches like a
+  // venue success (1h), so the fallback costs one round-trip per TTL window,
+  // not one per dashboard poll. A dead plane fails fast and the OKX leg
+  // rescues the picker.
+  const bridged = await marketSymbols(env, { fetchFn }).catch(() => null);
+  if (bridged?.length) {
+    const symbols = bridgeCatalog(bridged);
+    if (symbols.length) {
+      await writeCache(env, { at: nowMs, symbols, stale: false, source: "go-watcher" });
+      return {
+        symbols,
+        allowlist: await activeAllowlist(env),
+        stale: false,
+        source: "go-watcher",
+        at: new Date(nowMs).toISOString(),
+      };
+    }
+  }
+
   // Second venue (ADR-004 alternative D, activated 2026-11-12): OKX answers
-  // where Toobit refuses Cloudflare egress, and — unlike the Go plane below —
+  // where Toobit refuses Cloudflare egress, and — unlike the Go plane above —
   // it needs NO other machine to be awake: one direct fetch, cached like a
   // venue success. The universe rule (bridgeCatalog) is the same, so an
   // OKX-only listing can never widen the tradeable set beyond SYMBOL_RE.
@@ -199,25 +221,7 @@ export async function listSymbols(env, { fetchFn = fetch, nowMs = Date.now(), ma
       source: "okx-rest",
       at: new Date(nowMs).toISOString(),
     };
-  } catch (okxError) { /* the Go plane and the D1 fallback below still answer */ }
-
-  // Second egress: our own Go plane reads the same venue from an IP the venue
-  // does answer. It caches like a venue success (1h), so the fallback costs one
-  // round-trip per TTL window, not one per dashboard poll.
-  const bridged = await marketSymbols(env, { fetchFn }).catch(() => null);
-  if (bridged?.length) {
-    const symbols = bridgeCatalog(bridged);
-    if (symbols.length) {
-      await writeCache(env, { at: nowMs, symbols, stale: false, source: "go-watcher" });
-      return {
-        symbols,
-        allowlist: await activeAllowlist(env),
-        stale: false,
-        source: "go-watcher",
-        at: new Date(nowMs).toISOString(),
-      };
-    }
-  }
+  } catch (okxError) { /* the stale cache and the D1 fallback below still answer */ }
   if (cached?.symbols?.length) {
     return { symbols: cached.symbols, allowlist: await activeAllowlist(env), stale: true, at: new Date(cached.at).toISOString() };
   }

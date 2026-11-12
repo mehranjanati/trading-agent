@@ -96,6 +96,18 @@ export default {
       // the dashboard was built without VITE_ANALYZE_BASE. Advisory, no orders.
       if (req.method === "GET" && p === "/strategies/registry") return proxy.registry(req, env);
       if (req.method === "POST" && p === "/analyze") return proxy.analyze(req, env);
+      // Chat plane (go-watcher): the streaming turn loop is a WebSocket at
+      // /ws/chat/{id}; its REST companions live under /api/chat/*. The Worker is
+      // the ONE stable origin the Pages bundle dials (CHAT_WS_BASE defaults to
+      // it), so both are proxied here. Without these routes the handshake hit
+      // this NOT_IMPLEMENTED fallback, the socket closed instantly and the UI
+      // gave up after six attempts (2026-11-12 "WebSocket Connection Failed
+      // Permanently"). The exact /api/chat:append|delete|history routes above
+      // keep their own handlers — this prefix is /api/chat/ with a slash.
+      if (p.startsWith("/ws/chat/")) return proxy.chatWs(req, env, p);
+      if (p.startsWith("/api/chat/") && (req.method === "GET" || req.method === "POST")) {
+        return proxy.chat(req, env, p);
+      }
       return err("NOT_IMPLEMENTED", `${req.method} ${p} lands in a later task`, {});
     } catch (e) {
       return writeErr(e);

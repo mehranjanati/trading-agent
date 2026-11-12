@@ -61,6 +61,29 @@ async function pass(req, env, path) {
   return new Response(body, { status: upstream.status, headers });
 }
 
+/** wsPass — forward a WebSocket handshake to the Go chat plane and hand the
+ *  origin's socket back to the browser.
+ *
+ *  WHY THIS EXISTS (2026-11-12): the dashboard's streaming turn loop dials
+ *  `CHAT_WS_BASE` (default = this Worker) at /ws/chat/{id}. The Worker had no
+ *  such route, so every handshake was answered by the 404 fallback, the socket
+ *  closed immediately and the UI gave up after six attempts ("WebSocket
+ *  Connection Failed Permanently"). This is the documented Workers
+ *  WebSocket-proxy pattern: forward the handshake headers verbatim, then return
+ *  the upstream 101 with its `webSocket` attached — no polling, no buffering.
+ *  Advisory only: a chat turn can never create an order or an approval (D-08). */
+async function wsPass(req, env, path) {
+  if ((req.headers.get("upgrade") ?? "").toLowerCase() !== "websocket") {
+    return err("VALIDATION", "WebSocket upgrade required", {});
+  }
+  const base = watcherBase(env);
+  const upstream = await fetch(`${base}${path}`, { method: "GET", headers: req.headers });
+  if (upstream.webSocket) {
+    return new Response(null, { status: 101, webSocket: upstream.webSocket });
+  }
+  return upstream; // the origin refused the handshake: surface its answer as-is
+}
+
 export function proxyRoutes() {
   return {
     /** GET /strategies/registry → the pinned-WASM catalog from Go. */
@@ -76,6 +99,28 @@ export function proxyRoutes() {
     analyze: async (req, env) => {
       try {
         return await pass(req, env, "/analyze");
+      } catch (e) {
+        if (e?.code === "NOT_IMPLEMENTED") return err("NOT_IMPLEMENTED", e.message, {});
+        return err("DEGRADED", `go-watcher unreachable: ${e.message}`, { retryable: true });
+      }
+    },
+    /** /api/chat/* → the Go chat service's REST companions (session state,
+     *  principles). The path is forwarded verbatim so the caller's contract is
+     *  the Go service's contract, not a re-typed copy. Advisory only. */
+    chat: async (req, env, path) => {
+      try {
+        // Derive the path from the request when the caller does not pass it:
+        // a missing third argument must never become "<base>undefined".
+        return await pass(req, env, path ?? new URL(req.url).pathname);
+      } catch (e) {
+        if (e?.code === "NOT_IMPLEMENTED") return err("NOT_IMPLEMENTED", e.message, {});
+        return err("DEGRADED", `go-watcher unreachable: ${e.message}`, { retryable: true });
+      }
+    },
+    /** /ws/chat/{id} → the streaming turn loop (WebSocket upgrade). */
+    chatWs: async (req, env, path) => {
+      try {
+        return await wsPass(req, env, path ?? new URL(req.url).pathname);
       } catch (e) {
         if (e?.code === "NOT_IMPLEMENTED") return err("NOT_IMPLEMENTED", e.message, {});
         return err("DEGRADED", `go-watcher unreachable: ${e.message}`, { retryable: true });

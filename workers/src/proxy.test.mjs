@@ -121,4 +121,54 @@ describe("go-plane proxy", () => {
       delete globalThis.fetch;
     }
   });
+
+  // ── chat plane (2026-11-12) ────────────────────────────────────────────────
+  // The dashboard dials CHAT_WS_BASE (default = this Worker) at /ws/chat/{id}
+  // and /api/chat/*; both were unproxied, so the socket closed instantly
+  // ("WebSocket Connection Failed Permanently", six attempts). The path must be
+  // forwarded VERBATIM — the Go service owns the contract.
+  it("POST /api/chat/... forwards the path and body to the chat service", async () => {
+    const seen = [];
+    stubFetch(seen, 200, { ok: true });
+    try {
+      const proxy = proxyRoutes();
+      const res = await proxy.chat(req("POST", "/api/chat/sym_BTCUSDT/principles", { content: "risk first" }), { GO_WATCHER_URL: "https://go.test" });
+      assert.equal(res.status, 200);
+      assert.equal(seen[0].url, "https://go.test/api/chat/sym_BTCUSDT/principles");
+      assert.equal(seen[0].method, "POST");
+    } finally {
+      delete globalThis.fetch;
+    }
+  });
+
+  it("a /ws/chat request without an Upgrade header is refused as VALIDATION", async () => {
+    const proxy = proxyRoutes();
+    const res = await proxy.chatWs(req("GET", "/ws/chat/sym_BTCUSDT"), { GO_WATCHER_URL: "https://go.test" });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, "VALIDATION");
+  });
+
+  it("a /ws/chat upgrade is forwarded with its handshake headers intact", async () => {
+    let seenUrl = "";
+    let seenUpgrade = "";
+    globalThis.fetch = async (url, init) => {
+      seenUrl = String(url);
+      seenUpgrade = new Headers(init.headers).get("upgrade") ?? "";
+      return new Response("upstream refused", { status: 502 });
+    };
+    try {
+      const proxy = proxyRoutes();
+      const wsReq = new Request("https://w.test/ws/chat/sym_BTCUSDT", {
+        method: "GET",
+        headers: { upgrade: "websocket", connection: "Upgrade", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", "sec-websocket-version": "13" },
+      });
+      const res = await proxy.chatWs(wsReq, { GO_WATCHER_URL: "https://go.test" });
+      assert.equal(seenUrl, "https://go.test/ws/chat/sym_BTCUSDT");
+      assert.equal(seenUpgrade.toLowerCase(), "websocket");
+      assert.equal(res.status, 502, "an origin refusal is surfaced unchanged");
+    } finally {
+      delete globalThis.fetch;
+    }
+  });
 });
